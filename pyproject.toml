@@ -1,0 +1,19 @@
+[project]
+name = "ai-remote"
+version = "0.1.0"
+requires-python = ">=3.14"
+# Approved libraries only — see CLAUDE.md §1. New deps require repo-owner sign-off.
+dependencies = [
+    "nats-py",              # NATS client
+    "cryptography>=49.0.0", # Ed25519 sign/verify
+]
+
+[dependency-groups]
+dev = [
+    "pytest",
+]
+
+[tool.uv]
+# Not a distributable package (no build-system, no editable install) — uv treats
+# this as a virtual project and only manages the environment / lockfile.
+package = false
