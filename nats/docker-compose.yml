@@ -1,0 +1,31 @@
+services:
+  nats:
+    image: nats:latest
+    container_name: nats-server
+    ports:
+      - "4222:4222" # Client port
+      - "8222:8222" # Monitoring/HTTP management port
+      - "6222:6222" # Routing port for clustering
+    volumes:
+      - nats_data:/data
+    command: "-js --store_dir=/data -m 8222 --name nats-server" # JetStream (store on the mounted volume) + HTTP monitoring on 8222, human-readable server name
+
+  nats-dashboard:
+    image: mdawar/nats-dashboard
+    container_name: nats-dashboard
+    ports:
+      - "8080:80" # Web UI port (Caddy listens on 80 inside the container)
+    environment:
+      - NATS_URL=nats:4222
+
+  nats-box:
+    image: natsio/nats-box:latest
+    container_name: nats-box
+    environment:
+      - NATS_URL=nats://nats:4222 # default server for the `nats` CLI
+    depends_on:
+      - nats
+    entrypoint: ["sleep", "infinity"] # keep the container running so you can `exec` into it
+
+volumes:
+  nats_data:
