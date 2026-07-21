@@ -100,15 +100,23 @@ py -m pytest -q
 Expected: all tests pass (bus/integration tests run only if NATS is up on
 `127.0.0.1:4222`).
 
-### 2. Run the registration end-to-end check (Windows)
+### 2. Run the end-to-end checks (Windows)
 
-Exercises the full token → register → allowlist path against a **live NATS**,
-using throwaway configs in `%TEMP%` (the repo is left untouched). Exit `0` =
-PASS, `1` = FAIL.
+Both scripts run against a **live NATS**, using throwaway configs in `%TEMP%`
+(the repo is left untouched). Exit `0` = PASS, `1` = FAIL.
 
 ```bat
+REM registration: token -> register -> allowlist matches the responder key
 scripts\e2e-registration.cmd
+
+REM approval loop: responder serve (auto-allow) -> hook.py -> verified `allow`
+scripts\e2e-approval.cmd
 ```
+
+`e2e-approval.cmd` runs the real `responder.py` and `hook.py` as separate
+processes and checks the whole signed loop end to end (the operator's `allow` is
+fed from a file instead of typed). It's the automated version of the manual
+walkthrough below.
 
 ### 3. Smoke-test the full approval loop by hand
 
@@ -173,7 +181,7 @@ settings), adjusting the path:
       {
         "matcher": "*",
         "hooks": [
-          { "type": "command", "command": "py E:\\.....\\approver\\hook.py" }
+          { "type": "command", "command": "py E:\\.....\\hook.py" }
         ]
       }
     ]
@@ -211,6 +219,7 @@ Code would show is instead answered by the remote operator.
 |---------|--------------|
 | `py -m pytest -q` | Run the test suite |
 | `scripts\e2e-registration.cmd` | End-to-end registration check (Windows) |
+| `scripts\e2e-approval.cmd` | End-to-end approval-loop check (Windows) |
 | `py approver/registration_handler.py --get-token <key_id>` | Mint a one-time registration token (TTL 15 min) |
 | `py approver/registration_handler.py [--once]` | Serve the `registrations` subject (allowlist owner) |
 | `py approver/responder.py register <token>` | Generate a key pair and register its public half |
