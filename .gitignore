@@ -11,3 +11,8 @@ __pycache__/
 
 # IDE
 .idea/
+
+# Responder / handler runtime configs — hold secrets (Ed25519 private key,
+# live token secrets in pending_tokens). Never commit.
+approver/responder-config.json
+approver/handler-config.json
