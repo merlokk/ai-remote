@@ -22,7 +22,10 @@
   - `lib/bus.py` — JSON request-reply поверх NATS (тонкая async-обёртка над `nats-py`). `connect()` (async-контекст-менеджер, отдаёт `Bus`, дренит на выходе; по умолчанию `nats://127.0.0.1:4222`); `Bus.request(subject, payload, timeout=)` (ошибки NATS → `RequestTimeout` / `NoResponders`); `Bus.reply(subject, handler, queue=)` (handler sync или async; `queue` — queue-group для нескольких responder'ов, см. §6). Используют обе стороны потока §7.
   - `lib/config.py` — версионированное атомарное JSON-хранилище конфигов (`handler-config.json` / `responder-config.json`, см. §6). `Config.load(path, default=)` (deep-copy дефолта если файла нет; несовпадение/отсутствие `v` → `ConfigVersionError`); `Config.save()` (атомарно: temp + fsync + `os.replace`, создаёт родительские каталоги, штампует `v`); dict-подобный доступ (`[]`, `get`, `setdefault`, `in`).
   - `lib/crypto.py` — Ed25519 (обёртка над `cryptography`): `generate_keypair()` / `KeyPair` (`.generate()`, `.from_private_b64()`, `.private_b64()`, `.public_b64()`, `.sign(bytes)`), `sign(private_b64, bytes)`, `verify(public_b64, bytes, sig_b64) -> bool`. Ключи и подписи — стандартный base64 (raw priv/pub 32 байта, подпись 64). Модуль протокол-агностичен: подписывает/проверяет сырые `bytes`, сборка «signing bytes» §7 — на вызывающем. `verify` fail-safe: любой некорректный вход → `False`, не бросает (под fail-safe хука §7).
-- `approver/` *(в планах)* — Python-хук Claude Code `PermissionRequest` → NATS Request-Reply с Ed25519-подписью ответов (см. ниже).
+- `approver/` — код подтверждения прав (NATS Request-Reply + Ed25519, см. §6/§7):
+  - `approver/protocol.py` — общий контракт wire-формата (§7): `PROTOCOL_VERSION`, `canonical_json` (sort_keys, без пробелов), `canonical_sha256`, `signing_bytes(...)` (фиксированный порядок полей через `\n`, `reason` последним). Одна реализация на обе стороны — responder подписывает, hook перепроверяет.
+  - `approver/responder.py` — ответчик-человек. `register <token>`: генерит новую пару Ed25519, регистрирует публичный ключ через `registrations` по одноразовому токену, сохраняет пару в `responder-config.json` **только при `ok:true`** (отказ не затирает рабочий конфиг). `serve`: подписка на `approvals.*` (queue-group `approvers`), консольный промпт оператору, подписанный ответ (§7). Чистые функции `parse_key_id` / `build_registration_request` / `build_reply` — тестируются без NATS. Запуск: `py approver/responder.py {register|serve}`.
+  - `hook.py`, `registration-handler.py` *(в планах)* — хук `PermissionRequest` и владелец allowlist'а (см. §6/§7).
 - `tests/` — pytest-тесты (`test_*.py`), см. §1. `conftest.py`: маркер `requires_nats` (скипает интеграционные тесты, если NATS недоступен) и `run_async()` (гоняет async-тела через `asyncio.run` — `pytest-asyncio` не подключаем).
 - `pyproject.toml` — метаданные проекта и зависимости (runtime + dev-группа); источник правды по зависимостям. В `[tool.pytest.ini_options]`: `pythonpath=["."]` (импорт `lib.*` в non-package проекте), `testpaths=["tests"]`, `--basetemp=.pytest_tmp` (дефолтный temp-root недоступен в этой песочнице).
 - `uv.lock` — залоченные версии (uv), коммитится в репозиторий.
@@ -32,11 +35,11 @@
 
 Поднять: `cd nats && docker compose up -d`
 
-| Сервис | Контейнер | Порты (host→container) | Назначение |
-|---|---|---|---|
-| `nats` | `nats-server` | 4222→4222, 8222→8222, 6222→6222 | клиент; HTTP-мониторинг (8222 — `/varz`, `/jsz`, `/connz`); кластеризация |
-| `nats-dashboard` | `nats-dashboard` | 8080→**80** | Web UI (http://localhost:8080/) |
-| `nats-box` | `nats-box` | — | `nats` CLI (`docker exec -it nats-box sh`) |
+| Сервис           | Контейнер        | Порты (host→container)          | Назначение                                                                |
+|------------------|------------------|---------------------------------|---------------------------------------------------------------------------|
+| `nats`           | `nats-server`    | 4222→4222, 8222→8222, 6222→6222 | клиент; HTTP-мониторинг (8222 — `/varz`, `/jsz`, `/connz`); кластеризация |
+| `nats-dashboard` | `nats-dashboard` | 8080→**80**                     | Web UI (http://localhost:8080/)                                           |
+| `nats-box`       | `nats-box`       | —                               | `nats` CLI (`docker exec -it nats-box sh`)                                |
 
 
 ## 4. NATS: ключевые понятия
