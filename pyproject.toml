@@ -17,3 +17,12 @@ dev = [
 # Not a distributable package (no build-system, no editable install) — uv treats
 # this as a virtual project and only manages the environment / lockfile.
 package = false
+
+[tool.pytest.ini_options]
+# Non-package project: put the repo root on sys.path so `import lib.*` and
+# `from tests.conftest import ...` resolve without an install.
+pythonpath = ["."]
+testpaths = ["tests"]
+# The default temp root under %LOCALAPPDATA%\Temp is not writable in this
+# sandbox; keep pytest's tmp_path files inside the (git-ignored) repo tree.
+addopts = "--basetemp=.pytest_tmp"
