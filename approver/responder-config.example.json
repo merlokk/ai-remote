@@ -1,0 +1,6 @@
+{
+  "v": 1,
+  "key_id": "approver-1",
+  "private_key": "<base64 Ed25519 private key, 32 bytes — SECRET, never commit>",
+  "public_key": "<base64 Ed25519 public key, 32 bytes>"
+}

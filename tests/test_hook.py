@@ -166,6 +166,41 @@ def test_decision_output_deny_has_no_updated_input():
     assert out["hookSpecificOutput"]["decision"] == {"behavior": "deny"}
 
 
+# --- config-driven settings (servers/timeout live in handler-config.json) ------
+def test_allowlist_from_config():
+    kp = crypto.generate_keypair()
+    data = {"v": protocol.PROTOCOL_VERSION, "clients": _allowlist(kp)}
+    assert hook.allowlist_from_config(data) == _allowlist(kp)
+
+
+def test_allowlist_from_config_defaults_to_empty():
+    assert hook.allowlist_from_config({}) == {}
+    assert hook.allowlist_from_config({"clients": "nope"}) == {}
+
+
+def test_servers_from_config_reads_value():
+    assert hook.servers_from_config({"servers": "nats://example:4222"}) == "nats://example:4222"
+
+
+def test_servers_from_config_defaults_when_absent_or_bad():
+    assert hook.servers_from_config({}) == DEFAULT_SERVERS
+    assert hook.servers_from_config({"servers": ""}) == DEFAULT_SERVERS
+    assert hook.servers_from_config({"servers": 4222}) == DEFAULT_SERVERS
+
+
+def test_timeout_from_config_reads_value():
+    assert hook.timeout_from_config({"timeout": 30}) == 30.0
+    assert hook.timeout_from_config({"timeout": 12.5}) == 12.5
+
+
+def test_timeout_from_config_defaults_when_absent_or_bad():
+    assert hook.timeout_from_config({}) == hook.DEFAULT_TIMEOUT
+    assert hook.timeout_from_config({"timeout": "soon"}) == hook.DEFAULT_TIMEOUT
+    assert hook.timeout_from_config({"timeout": 0}) == hook.DEFAULT_TIMEOUT
+    assert hook.timeout_from_config({"timeout": -5}) == hook.DEFAULT_TIMEOUT
+    assert hook.timeout_from_config({"timeout": True}) == hook.DEFAULT_TIMEOUT
+
+
 # --- main gate (no NATS) -------------------------------------------------------
 def test_main_falls_through_on_non_permission_event(monkeypatch, capsys):
     monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({"hook_event_name": "PreToolUse"})))
@@ -228,6 +263,38 @@ def test_request_decision_allow_with_updated_input(tmp_path):
         _serve_and_decide(tmp_path, behavior="allow", updated_input={"command": "npm ci"})()
     )
     assert out["hookSpecificOutput"]["decision"]["updatedInput"] == {"command": "npm ci"}
+
+
+@requires_nats
+def test_request_decision_reads_servers_and_timeout_from_config(tmp_path):
+    # No explicit servers/timeout — they must come from handler-config.json.
+    kp = crypto.generate_keypair()
+    cfg = tmp_path / "handler-config.json"
+    Config(
+        cfg,
+        {
+            "v": protocol.PROTOCOL_VERSION,
+            "servers": DEFAULT_SERVERS,
+            "timeout": 3,
+            "clients": _allowlist(kp),
+        },
+    ).save()
+    session = uuid.uuid4().hex
+    payload = _payload(session_id=session)
+
+    async def body():
+        async with connect() as b:
+            async def handler(request):
+                return responder.build_reply(
+                    request, behavior="allow", key_id="approver-1",
+                    private_b64=kp.private_b64(), reason="ok",
+                )
+
+            await b.reply(f"approvals.{session}", handler)
+            return await hook.request_decision(payload, config_path=cfg)
+
+    out = run_async(body())
+    assert out["hookSpecificOutput"]["decision"]["behavior"] == "allow"
 
 
 @requires_nats

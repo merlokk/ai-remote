@@ -14,5 +14,6 @@ __pycache__/
 
 # Responder / handler runtime configs — hold secrets (Ed25519 private key,
 # live token secrets in pending_tokens). Never commit.
+# (The *.example.json siblings carry no secrets and ARE committed.)
 approver/responder-config.json
 approver/handler-config.json

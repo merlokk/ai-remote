@@ -1,0 +1,7 @@
+{
+  "v": 1,
+  "servers": "nats://127.0.0.1:4222",
+  "timeout": 60,
+  "pending_tokens": [],
+  "clients": {}
+}

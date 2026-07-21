@@ -66,6 +66,18 @@ uv sync
 cd nats && docker compose up -d && cd ..
 ```
 
+Sample configs are committed as `approver/*.example.json` (the real files hold
+secrets and are git-ignored). To customize the NATS server or approval timeout,
+copy the handler starter and edit it — otherwise the defaults are used and the
+file is created automatically on first `--get-token`:
+
+```bash
+cp approver/handler-config.example.json approver/handler-config.json
+```
+
+`responder-config.example.json` is a format reference only — the real
+`responder-config.json` is generated for you by `responder.py register`.
+
 Once up:
 
 - NATS client port: `nats://127.0.0.1:4222`
@@ -161,7 +173,7 @@ settings), adjusting the path:
       {
         "matcher": "*",
         "hooks": [
-          { "type": "command", "command": "py E:\\projects\\ai-remote\\approver\\hook.py" }
+          { "type": "command", "command": "py E:\\.....\\approver\\hook.py" }
         ]
       }
     ]
@@ -169,13 +181,26 @@ settings), adjusting the path:
 }
 ```
 
-The hook reads its settings from the environment (all optional):
+The NATS server(s) and the approval timeout are read from `handler-config.json`
+itself (optional top-level keys; the registration handler preserves them):
 
-| Env var | Default | Meaning |
-|---------|---------|---------|
-| `AI_REMOTE_NATS` | `nats://127.0.0.1:4222` | NATS server(s) |
-| `AI_REMOTE_HANDLER_CONFIG` | `approver/handler-config.json` | allowlist (`clients`) the hook verifies against |
-| `AI_REMOTE_TIMEOUT` | `60` | seconds to wait for a human decision |
+```json
+{
+  "v": 1,
+  "servers": "nats://127.0.0.1:4222",
+  "timeout": 60,
+  "clients": { "...": "..." }
+}
+```
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `servers` | `nats://127.0.0.1:4222` | NATS server(s) the hook connects to |
+| `timeout` | `60` | seconds to wait for a human decision |
+
+Only the config-file **location** is external — env `AI_REMOTE_HANDLER_CONFIG`
+(or `--config`), defaulting to `approver/handler-config.json`. The same file
+holds the `clients` allowlist the hook verifies replies against.
 
 With the hook wired and a responder `serve`-ing, every permission prompt Claude
 Code would show is instead answered by the remote operator.

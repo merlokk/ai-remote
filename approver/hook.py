@@ -12,7 +12,9 @@ never a silent allow.
 
 Wire it up (settings.json) as a PermissionRequest hook, matcher ``*``:
   py E:\\projects\\ai-remote\\approver\\hook.py
-Overridable via env: AI_REMOTE_NATS, AI_REMOTE_HANDLER_CONFIG, AI_REMOTE_TIMEOUT.
+The config file location comes from AI_REMOTE_HANDLER_CONFIG (or ``--config``); the
+NATS server(s) and approval timeout are read from that config's ``servers`` /
+``timeout`` keys (falling back to the defaults below when absent).
 """
 from __future__ import annotations
 
@@ -127,24 +129,54 @@ def decision_output(reply: dict) -> dict:
     return {"hookSpecificOutput": {"hookEventName": HOOK_EVENT, "decision": decision}}
 
 
-def _load_allowlist(config_path: Path | str) -> dict:
-    data = configlib.Config.load(
+def _load_config_data(config_path: Path | str) -> dict:
+    """Load the handler config (allowlist + optional hook settings), or defaults."""
+    return configlib.Config.load(
         config_path, default={"v": protocol.PROTOCOL_VERSION, "clients": {}}
     ).data
+
+
+def allowlist_from_config(data: dict) -> dict:
+    """The trusted-key allowlist (``clients``) from loaded config data."""
     clients = data.get("clients", {})
     return clients if isinstance(clients, dict) else {}
+
+
+def servers_from_config(data: dict) -> str:
+    """NATS server(s) for the hook — config ``servers`` key, else the default."""
+    servers = data.get("servers")
+    return servers if isinstance(servers, str) and servers else bus.DEFAULT_SERVERS
+
+
+def timeout_from_config(data: dict) -> float:
+    """Approval timeout in seconds — config ``timeout`` key, else the default."""
+    timeout = data.get("timeout")
+    # bool is an int subclass; a stray true/false is not a valid timeout.
+    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
+        return DEFAULT_TIMEOUT
+    return float(timeout) if timeout > 0 else DEFAULT_TIMEOUT
 
 
 async def request_decision(
     payload: dict,
     *,
     config_path: Path | str = DEFAULT_CONFIG,
-    servers: str = bus.DEFAULT_SERVERS,
-    timeout: float = DEFAULT_TIMEOUT,
+    servers: str | None = None,
+    timeout: float | None = None,
 ) -> dict:
-    """Round-trip one approval and return the hook JSON, or raise on any failure."""
+    """Round-trip one approval and return the hook JSON, or raise on any failure.
+
+    ``servers`` / ``timeout`` default to the values in the handler config (the
+    ``servers`` / ``timeout`` keys); pass them explicitly only to override.
+    """
+    data = _load_config_data(config_path)
+    allowlist = allowlist_from_config(data)
+    if servers is None:
+        servers = servers_from_config(data)
+    if timeout is None:
+        timeout = timeout_from_config(data)
+
     request = build_request(payload, nonce=_new_nonce(), ts=int(time.time()))
-    allowlist = _load_allowlist(config_path)
 
     async with bus.connect(servers) as b:
         reply = await b.request(f"approvals.{payload['session_id']}", request, timeout=timeout)
@@ -157,12 +189,10 @@ async def request_decision(
 
 def _parse_args(argv):
     parser = argparse.ArgumentParser(prog="hook.py", description="PermissionRequest → NATS approval")
+    # servers/timeout now live in the handler config (its `servers`/`timeout`
+    # keys); only the config location itself is an argument / env var.
     parser.add_argument(
         "--config", default=os.environ.get("AI_REMOTE_HANDLER_CONFIG", str(DEFAULT_CONFIG))
-    )
-    parser.add_argument("--servers", default=os.environ.get("AI_REMOTE_NATS", bus.DEFAULT_SERVERS))
-    parser.add_argument(
-        "--timeout", type=float, default=float(os.environ.get("AI_REMOTE_TIMEOUT", DEFAULT_TIMEOUT))
     )
     return parser.parse_args(argv)
 
@@ -183,12 +213,7 @@ def main(argv=None) -> int:
 
     try:
         output = asyncio.run(
-            request_decision(
-                payload,
-                config_path=Path(args.config),
-                servers=args.servers,
-                timeout=args.timeout,
-            )
+            request_decision(payload, config_path=Path(args.config))
         )
     except Exception as e:  # noqa: BLE001 — fail-safe: ANY error → interactive prompt
         print(f"hook: falling back to prompt: {e}", file=sys.stderr)
