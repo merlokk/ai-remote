@@ -1,81 +1,81 @@
-# Сlaude permission approver
+# Claude permission approver
 
-Прикладная цель проекта — вынести подтверждение прав Claude Code за пределы терминала. Вместо интерактивного permission-промпта хук `PermissionRequest` отправляет запрос в NATS (request-reply), внешний ответчик-человек подписывает решение ключом Ed25519, а хук проверяет подпись и отдаёт Claude Code вердикт `allow`/`deny`. Доверенные ключи ответчиков заводятся через отдельный процесс регистрации по одноразовым токенам. Полный протокол, контракты сообщений и требования fail-safe описаны в разделах 6–7.
+The applied goal of the project is to move Claude Code's permission confirmation outside the terminal. Instead of the interactive permission prompt, the `PermissionRequest` hook sends a request into NATS (request-reply), an external human responder signs the decision with an Ed25519 key, and the hook verifies the signature and hands Claude Code an `allow`/`deny` verdict. Trusted responder keys are provisioned through a separate registration process using one-time tokens. The full protocol, message contracts, and fail-safe requirements are described in sections 6–7.
 
-Локальная песочница для экспериментов с [NATS](https://nats.io/) на Docker Desktop под Windows. Инфраструктура поднимается одним `docker compose` (раздел 3): сам сервер NATS с включённым JetStream, веб-дашборд для наблюдения за шиной и контейнер `nats-box` с CLI `nats` для ручных проверок публикаций, стримов и подписок.
+A local sandbox for experimenting with [NATS](https://nats.io/) on Docker Desktop under Windows. The infrastructure comes up with a single `docker compose` (section 3): the NATS server itself with JetStream enabled, a web dashboard to observe the bus, and a `nats-box` container with the `nats` CLI for manual checks of publishes, streams, and subscriptions.
 
-## 1. Правила репозитория
+## 1. Repository rules
 
-- **TDD.** Сначала тест, потом код. Цикл red → green → refactor: пишем падающий тест на поведение → минимальный код, чтобы он позеленел → рефакторинг под зелёными тестами. Новая функциональность и багфиксы приходят вместе с тестами; PR без тестов на изменённое поведение не мёржим. Тест-раннер — **pytest**, тесты лежат в `tests/`, файлы `test_*.py`.
-- **Список используемых библиотек** (единственные одобренные):
-  - **Runtime:** `nats-py` (клиент NATS), `cryptography` (Ed25519 — подпись/проверка).
-  - **Dev/тесты:** `pytest`.
-  - Стандартная библиотека Python — без ограничений.
-  - **Где объявлены.** Единственный источник правды — `pyproject.toml`: runtime в `[project.dependencies]`, dev/тесты в `[dependency-groups].dev` (PEP 735). Версии залочены в `uv.lock` (коммитится). Проект — non-package (`[tool.uv] package = false`, без `[build-system]`): дистрибутив не собираем, editable-инсталла нет.
-  - **Установка (uv):** `uv sync` (runtime + dev) или `uv sync --no-dev` (только runtime). Никаких `requirements*.txt` — их нет.
-- **Нельзя тащить новые библиотеки без подтверждения.** Любая зависимость вне списка выше (включая транзитивные, которые тянут за собой заметный вес, и dev-инструменты) добавляется только после явного согласования с владельцем репозитория. Предпочтение — решить задачу стандартной библиотекой. Если новая зависимость действительно нужна — сначала спросить, затем добавить и обновить этот список.
+- **TDD.** Test first, then code. The red → green → refactor cycle: write a failing test for the behavior → the minimal code to make it green → refactor under green tests. New functionality and bugfixes come together with tests; a PR without tests for the changed behavior is not merged. The test runner is **pytest**, tests live in `tests/`, files `test_*.py`.
+- **List of libraries in use** (the only approved ones):
+  - **Runtime:** `nats-py` (NATS client), `cryptography` (Ed25519 — sign/verify).
+  - **Dev/tests:** `pytest`.
+  - The Python standard library — no restrictions.
+  - **Where they are declared.** The single source of truth is `pyproject.toml`: runtime in `[project.dependencies]`, dev/tests in `[dependency-groups].dev` (PEP 735). Versions are locked in `uv.lock` (committed). The project is non-package (`[tool.uv] package = false`, no `[build-system]`): we do not build a distribution, there is no editable install.
+  - **Installation (uv):** `uv sync` (runtime + dev) or `uv sync --no-dev` (runtime only). No `requirements*.txt` — they do not exist.
+- **You may not pull in new libraries without confirmation.** Any dependency outside the list above (including transitive ones that drag in noticeable weight, and dev tools) is added only after explicit sign-off from the repository owner. The preference is to solve the task with the standard library. If a new dependency really is needed — ask first, then add it and update this list.
 
-## 2. Структура
+## 2. Structure
 
-- `nats/` — docker-compose с NATS-сервером, дашбордом и nats-box (CLI).
-- `lib/` — переиспользуемые модули (stdlib + одобренные зависимости, без своих новых):
-  - `lib/bus.py` — JSON request-reply поверх NATS (тонкая async-обёртка над `nats-py`). `connect()` (async-контекст-менеджер, отдаёт `Bus`, дренит на выходе; по умолчанию `nats://127.0.0.1:4222`); `Bus.request(subject, payload, timeout=)` (ошибки NATS → `RequestTimeout` / `NoResponders`); `Bus.reply(subject, handler, queue=)` (handler sync или async; `queue` — queue-group для нескольких responder'ов, см. §6). Используют обе стороны потока §7.
-  - `lib/config.py` — версионированное атомарное JSON-хранилище конфигов (`handler-config.json` / `responder-config.json`, см. §6). `Config.load(path, default=)` (deep-copy дефолта если файла нет; несовпадение/отсутствие `v` → `ConfigVersionError`); `Config.save()` (атомарно: temp + fsync + `os.replace`, создаёт родительские каталоги, штампует `v`); dict-подобный доступ (`[]`, `get`, `setdefault`, `in`).
-  - `lib/crypto.py` — Ed25519 (обёртка над `cryptography`): `generate_keypair()` / `KeyPair` (`.generate()`, `.from_private_b64()`, `.private_b64()`, `.public_b64()`, `.sign(bytes)`), `sign(private_b64, bytes)`, `verify(public_b64, bytes, sig_b64) -> bool`. Ключи и подписи — стандартный base64 (raw priv/pub 32 байта, подпись 64). Модуль протокол-агностичен: подписывает/проверяет сырые `bytes`, сборка «signing bytes» §7 — на вызывающем. `verify` fail-safe: любой некорректный вход → `False`, не бросает (под fail-safe хука §7).
-- `approver/` — код подтверждения прав (NATS Request-Reply + Ed25519, см. §6/§7):
-  - `approver/protocol.py` — общий контракт wire-формата (§7): `PROTOCOL_VERSION`, `canonical_json` (sort_keys, без пробелов), `canonical_sha256`, `signing_bytes(...)` (фиксированный порядок полей через `\n`, `reason` последним). Одна реализация на обе стороны — responder подписывает, hook перепроверяет.
-  - `approver/responder.py` — ответчик-человек. `register <token>`: генерит новую пару Ed25519, регистрирует публичный ключ через `registrations` по одноразовому токену, сохраняет пару в `responder-config.json` **только при `ok:true`** (отказ не затирает рабочий конфиг). `serve`: подписка на `approvals.*` (queue-group `approvers`), консольный промпт оператору, подписанный ответ (§7). Чистые функции `parse_key_id` / `build_registration_request` / `build_reply` — тестируются без NATS. Запуск: `py approver/responder.py {register|serve}`.
-  - `approver/registration_handler.py` (в §6 — `registration-handler.py`; подчёркивание, чтобы модуль импортировался) — владелец allowlist'а. `--get-token <key_id>`: чеканит одноразовый токен `<key_id>.<secret>` (TTL 15 мин), пишет в `pending_tokens`, печатает токен в stdout. Без флага — слушает `registrations`: находит токен, сверяет `key_id`/срок, пишет `clients[key_id]` (ротация), гасит токен (одноразовость, только при успехе). Чистые функции `handle_registration` / `add_pending_token` / `get_token` + `make_handler` (перечитывает конфиг с диска на каждое сообщение + `asyncio.Lock` на read-modify-write). Ошибки: `bad request|token unknown|key_id mismatch|expired`. Запуск: `py approver/registration_handler.py [--get-token <key_id>]`.
-  - `approver/hook.py` — хук Claude Code `PermissionRequest` (см. §7). Читает payload из stdin, проверяет `hook_event_name`, шлёт `nats request approvals.<session_id>` (с nonce/`input_sha256`/ts), проверяет подписанный ответ против allowlist'а (`clients` из `handler-config.json`) и печатает `decision` в stdout. Чистые функции `build_request` / `verify_reply` / `decision_output` + `request_decision` (orchestration). **Fail-safe:** любая ошибка/невалидная подпись/несовпадение/чужой `key_id` → exit ≠0 и ≠2 (обычный промпт), решение только через exit-0 JSON, никогда не «тихий allow». Настройки через env: `AI_REMOTE_NATS`, `AI_REMOTE_HANDLER_CONFIG`, `AI_REMOTE_TIMEOUT` (по умолч. 60с). Подключение в `settings.json` — хук `PermissionRequest`, matcher `*`, команда `py <repo>\approver\hook.py`.
-  - **Рантайм-конфиги с секретами** (`responder-config.json` — приватный ключ; `handler-config.json` — секреты токенов в `pending_tokens`) в git не коммитятся (см. `.gitignore`).
-- `scripts/e2e-registration.cmd` — командный e2e регистрации (§6): чеканит токен → поднимает handler `--once` (сам выходит после первой успешной регистрации) → `responder register` (с ретраями до готовности) → сверяет `clients[key_id].pubkey` с `public_key` responder'а. Временные конфиги в `%TEMP%`, репозиторий не трогает. Требует NATS на localhost и лончер `py`. Exit 0 = PASS, 1 = FAIL. Запуск: `scripts\e2e-registration.cmd`.
-- `tests/` — pytest-тесты (`test_*.py`), см. §1. `conftest.py`: маркер `requires_nats` (скипает интеграционные тесты, если NATS недоступен) и `run_async()` (гоняет async-тела через `asyncio.run` — `pytest-asyncio` не подключаем).
-- `pyproject.toml` — метаданные проекта и зависимости (runtime + dev-группа); источник правды по зависимостям. В `[tool.pytest.ini_options]`: `pythonpath=["."]` (импорт `lib.*` в non-package проекте), `testpaths=["tests"]`, `--basetemp=.pytest_tmp` (дефолтный temp-root недоступен в этой песочнице).
-- `uv.lock` — залоченные версии (uv), коммитится в репозиторий.
+- `nats/` — docker-compose with the NATS server, dashboard, and nats-box (CLI).
+- `lib/` — reusable modules (stdlib + approved dependencies, no new ones of their own):
+  - `lib/bus.py` — JSON request-reply over NATS (a thin async wrapper over `nats-py`). `connect()` (async context manager, yields a `Bus`, drains on exit; defaults to `nats://127.0.0.1:4222`); `Bus.request(subject, payload, timeout=)` (NATS errors → `RequestTimeout` / `NoResponders`); `Bus.reply(subject, handler, queue=)` (handler sync or async; `queue` — queue group for multiple responders, see §6). Used by both sides of the §7 flow.
+  - `lib/config.py` — versioned, atomic JSON config store (`handler-config.json` / `responder-config.json`, see §6). `Config.load(path, default=)` (deep-copies the default if the file is missing; a mismatched/absent `v` → `ConfigVersionError`); `Config.save()` (atomic: temp + fsync + `os.replace`, creates parent directories, stamps `v`); dict-like access (`[]`, `get`, `setdefault`, `in`).
+  - `lib/crypto.py` — Ed25519 (a wrapper over `cryptography`): `generate_keypair()` / `KeyPair` (`.generate()`, `.from_private_b64()`, `.private_b64()`, `.public_b64()`, `.sign(bytes)`), `sign(private_b64, bytes)`, `verify(public_b64, bytes, sig_b64) -> bool`. Keys and signatures are standard base64 (raw priv/pub 32 bytes, signature 64). The module is protocol-agnostic: it signs/verifies raw `bytes`, assembling the §7 "signing bytes" is up to the caller. `verify` is fail-safe: any malformed input → `False`, never raises (matching the hook's fail-safe, §7).
+- `approver/` — the permission-approval code (NATS Request-Reply + Ed25519, see §6/§7):
+  - `approver/protocol.py` — the shared wire-format contract (§7): `PROTOCOL_VERSION`, `canonical_json` (sort_keys, no spaces), `canonical_sha256`, `signing_bytes(...)` (fixed field order joined by `\n`, `reason` last). One implementation for both sides — the responder signs, the hook re-verifies.
+  - `approver/responder.py` — the human responder. `register <token>`: generates a new Ed25519 pair, registers the public key over `registrations` using a one-time token, saves the pair to `responder-config.json` **only on `ok:true`** (a rejection does not clobber a working config). `serve`: subscribes to `approvals.*` (queue group `approvers`), prompts the operator on the console, signs the reply (§7). Pure functions `parse_key_id` / `build_registration_request` / `build_reply` — tested without NATS. Run: `py approver/responder.py {register|serve}`.
+  - `approver/registration_handler.py` (in §6 — `registration-handler.py`; underscore so the module is importable) — the allowlist owner. `--get-token <key_id>`: mints a one-time token `<key_id>.<secret>` (TTL 15 min), writes it to `pending_tokens`, prints the token to stdout. Without the flag — listens on `registrations`: finds the token, checks `key_id`/expiry, writes `clients[key_id]` (rotation), consumes the token (one-time, only on success). Pure functions `handle_registration` / `add_pending_token` / `get_token` + `make_handler` (reloads the config from disk on every message + `asyncio.Lock` around the read-modify-write). Errors: `bad request|token unknown|key_id mismatch|expired`. Run: `py approver/registration_handler.py [--get-token <key_id>]`.
+  - `approver/hook.py` — the Claude Code `PermissionRequest` hook (see §7). Reads the payload from stdin, checks `hook_event_name`, sends `nats request approvals.<session_id>` (with nonce/`input_sha256`/ts), verifies the signed reply against the allowlist (`clients` from `handler-config.json`), and prints the `decision` to stdout. Pure functions `build_request` / `verify_reply` / `decision_output` + `request_decision` (orchestration). **Fail-safe:** any error / invalid signature / mismatch / untrusted `key_id` → exit ≠0 and ≠2 (the normal prompt); the decision is delivered only via exit-0 JSON, never a "silent allow". Configured via env: `AI_REMOTE_NATS`, `AI_REMOTE_HANDLER_CONFIG`, `AI_REMOTE_TIMEOUT` (default 60s). Wired in `settings.json` — a `PermissionRequest` hook, matcher `*`, command `py <repo>\approver\hook.py`.
+  - **Runtime configs with secrets** (`responder-config.json` — the private key; `handler-config.json` — token secrets in `pending_tokens`) are not committed to git (see `.gitignore`).
+- `scripts/e2e-registration.cmd` — a command-file e2e of registration (§6): mints a token → brings up the handler with `--once` (it exits itself after the first successful registration) → `responder register` (with retries until ready) → checks `clients[key_id].pubkey` against the responder's `public_key`. Throwaway configs in `%TEMP%`, does not touch the repository. Requires NATS on localhost and the `py` launcher. Exit 0 = PASS, 1 = FAIL. Run: `scripts\e2e-registration.cmd`.
+- `tests/` — pytest tests (`test_*.py`), see §1. `conftest.py`: the `requires_nats` marker (skips integration tests when NATS is unreachable) and `run_async()` (drives async bodies via `asyncio.run` — we do not add `pytest-asyncio`).
+- `pyproject.toml` — project metadata and dependencies (runtime + dev group); the source of truth for dependencies. In `[tool.pytest.ini_options]`: `pythonpath=["."]` (importing `lib.*` in a non-package project), `testpaths=["tests"]`, `--basetemp=.pytest_tmp` (the default temp root is unavailable in this sandbox).
+- `uv.lock` — locked versions (uv), committed to the repository.
 - `.gitignore` — `.venv/`, `__pycache__/`, `.pytest_cache/`, `.pytest_tmp/`, `.idea/`.
 
-## 3. Инфраструктура (`nats/docker-compose.yml`)
+## 3. Infrastructure (`nats/docker-compose.yml`)
 
-Поднять: `cd nats && docker compose up -d`
+Bring up: `cd nats && docker compose up -d`
 
-| Сервис           | Контейнер        | Порты (host→container)          | Назначение                                                                |
+| Service          | Container        | Ports (host→container)          | Purpose                                                                   |
 |------------------|------------------|---------------------------------|---------------------------------------------------------------------------|
-| `nats`           | `nats-server`    | 4222→4222, 8222→8222, 6222→6222 | клиент; HTTP-мониторинг (8222 — `/varz`, `/jsz`, `/connz`); кластеризация |
+| `nats`           | `nats-server`    | 4222→4222, 8222→8222, 6222→6222 | client; HTTP monitoring (8222 — `/varz`, `/jsz`, `/connz`); clustering    |
 | `nats-dashboard` | `nats-dashboard` | 8080→**80**                     | Web UI (http://localhost:8080/)                                           |
 | `nats-box`       | `nats-box`       | —                               | `nats` CLI (`docker exec -it nats-box sh`)                                |
 
 
-## 4. NATS: ключевые понятия
-- `-js` лишь **разрешает** JetStream, не включает персистентность глобально.
-- Персистентность — точечная: через **stream**, который ловит заданные subjects (`nats stream add ORDERS --subjects "orders.*"`). Subjects без стрима работают как Core NATS (fire-and-forget).
-- `nats pub` печатает «Published» = подтверждение отправки, НЕ доставки/сохранения.
+## 4. NATS: key concepts
+- `-js` only **enables** JetStream, it does not turn on persistence globally.
+- Persistence is targeted: via a **stream** that captures the given subjects (`nats stream add ORDERS --subjects "orders.*"`). Subjects without a stream behave like Core NATS (fire-and-forget).
+- `nats pub` prints "Published" = confirmation of sending, NOT of delivery/storage.
 
-## 5. Python (хост)
-- Запускать через лончер **`py`** (Python 3.14.6): `py script.py`, `py -m pytest`, `py -c "..."`.
-- Реальный интерпретатор, на который указывает `py`: `C:\Users\User\AppData\Local\Python\pythoncore-3.14-64\python.exe`.
-  `C:\...\WindowsApps\python.exe` — это заглушка Microsoft Store, НЕ использовать.
+## 5. Python (host)
+- Run via the **`py`** launcher (Python 3.14.6): `py script.py`, `py -m pytest`, `py -c "..."`.
+- The real interpreter that `py` points to: `C:\Users\User\AppData\Local\Python\pythoncore-3.14-64\python.exe`.
+  `C:\...\WindowsApps\python.exe` is the Microsoft Store stub, do NOT use it.
 
-## 6. Регистрация responder'а (bootstrap доверенных ключей)
+## 6. Responder registration (bootstrapping trusted keys)
 
-Как публичный ключ ответчика попадает в allowlist, который проверяет `hook.py`. Ключи не прописываются руками — responder генерирует свою пару и регистрирует публичную половину по одноразовому токену. Регистрация — предварительный шаг: без доверенного ключа поток подтверждений (раздел 7) работать не будет.
+How the responder's public key gets into the allowlist that `hook.py` checks. Keys are not written by hand — the responder generates its own pair and registers the public half using a one-time token. Registration is a prerequisite step: without a trusted key the approval flow (section 7) will not work.
 
-**Роли и конфиги:**
-- `registration-handler.py` — владелец allowlist'а. Хранит его в своём JSON-конфиге рядом со скриптом (`handler-config.json`); этот же конфиг читает `hook.py` при проверке `key_id`. Выдаёт одноразовые токены и слушает subject `registrations`.
-- `responder.py` — хранит свой `key_id` и **приватный** ключ в собственном JSON-конфиге (`responder-config.json`). Приватный ключ шину не покидает. `key_id` не выбирается responder'ом — он приходит внутри токена (см. ниже).
+**Roles and configs:**
+- `registration-handler.py` — the allowlist owner. Stores it in its own JSON config next to the script (`handler-config.json`); this same config is read by `hook.py` when checking `key_id`. Issues one-time tokens and listens on the `registrations` subject.
+- `responder.py` — stores its `key_id` and **private** key in its own JSON config (`responder-config.json`). The private key never leaves for the bus. The `key_id` is not chosen by the responder — it comes inside the token (see below).
 
 `handler-config.json`:
 ```json
 {
   "v": 1,
   "pending_tokens": [
-    { "key_id": "approver-1", "token": "approver-1.<b64 32 байта>", "expires_ts": 1737346500 }
+    { "key_id": "approver-1", "token": "approver-1.<b64 32 bytes>", "expires_ts": 1737346500 }
   ],
   "clients": {
     "approver-1": { "pubkey": "<b64 Ed25519 public>", "registered_ts": 1737345600 }
   }
 }
 ```
-- `clients` (map `key_id → {pubkey, …}`) и есть allowlist для `hook.py`.
+- `clients` (a map `key_id → {pubkey, …}`) is precisely the allowlist for `hook.py`.
 
 `responder-config.json`:
 ```json
@@ -87,164 +87,127 @@
 }
 ```
 
-**Токен привязан к `key_id`.** Формат токена — `<key_id>.<b64 32 случайных байта>`: слева читаемый `key_id`, справа секрет. `key_id` не может содержать `.` (первая точка — разделитель). Токен авторизует регистрацию **только** этого `key_id` — им нельзя занять или перехватить чужой слот.
+**The token is bound to a `key_id`.** The token format is `<key_id>.<b64 32 random bytes>`: a readable `key_id` on the left, the secret on the right. A `key_id` cannot contain `.` (the first dot is the separator). The token authorizes registration of **only** that `key_id` — it cannot be used to claim or hijack someone else's slot.
 
-**Поток:**
-1. `registration-handler.py --get-token <key_id>` — генерит секрет (32 байта b64), собирает токен `<key_id>.<секрет>`, кладёт запись `{key_id, token, expires_ts}` в `pending_tokens` (`expires_ts` по умолчанию now+15 мин) и печатает токен в stdout. Токен передаётся оператору вне шины.
-2. `responder.py register <token>` — парсит `key_id` из префикса токена, генерит новую пару Ed25519, сохраняет её (`key_id` + приватный + публичный) в свой конфиг и шлёт `nats request registrations` с сообщением (см. ниже).
-3. `registration-handler` слушает `registrations`. По каждому сообщению: находит токен в `pending_tokens`, проверяет, что он не истёк **и что `key_id` из сообщения совпадает с `key_id`, к которому привязан токен** → записывает `clients[key_id] = {pubkey, registered_ts}`, **перезаписывая** ключ клиента с этим `key_id` (ротация) → удаляет токен из `pending_tokens` (одноразовость) → отвечает ack в reply-inbox. С этого момента `hook.py` доверяет новому ключу для этого `key_id`.
+**Flow:**
+1. `registration-handler.py --get-token <key_id>` — generates a secret (32 bytes b64), assembles the token `<key_id>.<secret>`, puts a record `{key_id, token, expires_ts}` into `pending_tokens` (`expires_ts` defaults to now+15 min), and prints the token to stdout. The token is handed to the operator off the bus.
+2. `responder.py register <token>` — parses `key_id` from the token prefix, generates a new Ed25519 pair, saves it (`key_id` + private + public) to its config, and sends `nats request registrations` with the message (see below).
+3. `registration-handler` listens on `registrations`. For each message: it finds the token in `pending_tokens`, checks that it has not expired **and that the `key_id` in the message matches the `key_id` the token is bound to** → writes `clients[key_id] = {pubkey, registered_ts}`, **overwriting** the client key with this `key_id` (rotation) → removes the token from `pending_tokens` (one-time use) → replies with an ack in the reply-inbox. From this moment `hook.py` trusts the new key for this `key_id`.
 
 Request (`responder.py` → `registrations`):
 ```json
 {
   "v": 1,
-  "token": "approver-1.<b64 из --get-token>",
+  "token": "approver-1.<b64 from --get-token>",
   "key_id": "approver-1",
   "pubkey": "<b64 Ed25519 public>",
   "ts": 1737346000
 }
 ```
-- `key_id` обязан совпадать с префиксом `token` — handler это сверяет (несовпадение → `ok:false`).
+- `key_id` must match the prefix of `token` — the handler verifies this (mismatch → `ok:false`).
 
 Reply (`registration-handler` → reply-inbox):
 ```json
 { "v": 1, "ok": true, "key_id": "approver-1" }
 ```
-- При ошибке — `{ "v": 1, "ok": false, "error": "<token unknown|expired|already used|key_id mismatch|bad request>" }`. Токен считается израсходованным только при успехе.
+- On error — `{ "v": 1, "ok": false, "error": "<token unknown|expired|key_id mismatch|bad request>" }`. A token is considered spent only on success; a spent (or otherwise unrecognized) token comes back as `token unknown`.
 
-**Несколько клиентов.** В `clients` может лежать несколько `key_id`. Но `approvals.<session_id>` — обычный subject: если параллельно поднято несколько responder'ов, запрос долетит до **всех**, и каждый сможет ответить (hook берёт первый валидный ответ). Поэтому правило: одновременно держать **один** responder, либо подписывать responder'ов на `approvals.*` через **queue group** (тогда каждое сообщение получает ровно один экземпляр). Subject `registrations` — fan-out, но токен одноразовый, так что дубли регистрации безопасны.
+**Multiple clients.** `clients` may hold several `key_id`s. But `approvals.<session_id>` is a regular subject: if several responders are running in parallel, the request reaches **all** of them, and each can reply (the hook takes the first valid reply). Hence the rule: keep **one** responder running at a time, or subscribe responders to `approvals.*` via a **queue group** (then each message goes to exactly one instance). The `registrations` subject is fan-out, but the token is one-time, so duplicate registrations are safe.
 
-**Модель доверия токена.** Токен = авторизация регистрации, привязанная к своему `key_id`. Владелец валидного неистёкшего токена может зарегистрировать/ротировать ключ **только** этого `key_id` — занять или перехватить чужой слот нельзя. Ротация ключа того же `key_id` (перезапись `clients[key_id]`) осознанна. Токены короткоживущие, выдаются вне шины и не логируются. `key_id` секретом не является (виден в токене) — секрет только правая часть.
+**Token trust model.** A token = authorization to register, bound to its `key_id`. The holder of a valid, unexpired token can register/rotate the key of **only** that `key_id` — claiming or hijacking someone else's slot is impossible. Rotating the key of the same `key_id` (overwriting `clients[key_id]`) is intentional. Tokens are short-lived, issued off the bus, and not logged. The `key_id` is not a secret (it is visible in the token) — only the right-hand part is the secret.
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant O as Оператор
+    participant O as Operator
     participant RH as registration-handler.py
     participant N as NATS
     participant R as responder.py
     participant HK as hook.py
 
     O->>RH: --get-token <key_id>
-    RH->>RH: token = key_id.секрет + expires_ts → pending_tokens
-    RH-->>O: печатает токен (вне шины)
+    RH->>RH: token = key_id.secret + expires_ts → pending_tokens
+    RH-->>O: prints the token (off the bus)
     O->>R: register <token>
-    R->>R: key_id из префикса токена + новая пара Ed25519 → свой конфиг
+    R->>R: key_id from token prefix + new Ed25519 pair → its config
     R->>N: request registrations {token, key_id, pubkey}
-    N->>RH: доставка
-    alt токен валиден, не истёк и key_id совпал с привязкой
-        RH->>RH: clients[key_id] = pubkey (перезапись) + израсходовать токен
+    N->>RH: delivery
+    alt token valid, not expired, and key_id matches the binding
+        RH->>RH: clients[key_id] = pubkey (overwrite) + spend the token
         RH-->>R: ack {ok:true}
-    else токен неизвестен/истёк/использован/key_id mismatch
+    else token unknown/expired/key_id mismatch
         RH-->>R: ack {ok:false, error}
     end
-    Note over RH,HK: hook.py читает clients как allowlist при проверке key_id
+    Note over RH,HK: hook.py reads clients as the allowlist when checking key_id
 ```
 
-## 7. Планируемая фича: хук PermissionRequest → NATS Request-Reply (подписанный)
+## 7. Feature: PermissionRequest hook → NATS Request-Reply (signed)
 
-Замена интерактивного permission-промпта Claude Code на внешнее подтверждение через NATS.
+Replacing Claude Code's interactive permission prompt with external confirmation over NATS.
 
-- **Событие хука:** `PermissionRequest` (не `PreToolUse`). Срабатывает только когда Claude реально дошёл бы до промпта; авто-allow по правилам в шину не летит.
-- **Матчер:** `*` (все инструменты).
-- **Поток:** `hook.py` (на хосте) читает stdin JSON, **проверяет `hook_event_name == "PermissionRequest"`** (иначе payload не наш → выходим в обычный промпт) → шлёт `nats request approvals.<session_id>` с nonce → `responder.py` (ручной ввод человека) подписывает решение Ed25519 и отвечает в reply-inbox запроса → hook проверяет подпись → печатает в stdout `hookSpecificOutput.decision.behavior` (`allow`/`deny`). Отдельного `.decision`-subject нет: ответ идёт по каналу request-reply.
-- **Подписываем всё содержимое ответа** — конкатенацию `v + session_id + nonce + tool_name + input_sha256 + behavior + updated_input_sha256 + ts + reason` (nonce = anti-replay; `input_sha256` = хеш `tool_input`, решение нельзя переиграть на другую команду; `updated_input_sha256` под подписью, иначе можно подменить то, что реально выполнится; `reason`/`v`/`ts` тоже под подписью). Точный формат — в разделе «Signing bytes» ниже.
-- **Fail-safe:** любая ошибка (NATS недоступен, таймаут, плохая/отсутствующая подпись, чужой nonce/key_id) → exit ≠ 0 и ≠ 2 → падаем в **обычный промпт**. Никогда не «тихий allow». (Exit 2 — блокирующая ошибка: stdout игнорируется, stderr уходит Claude; для `PermissionRequest` это, вероятно, deny, но точная семантика в доках не зафиксирована — поэтому на ошибках его НЕ использовать, решение отдаём только через exit-0 JSON.)
-- **Клиент:** `nats-py`; **криптография:** `cryptography` (Ed25519).
+- **Hook event:** `PermissionRequest` (not `PreToolUse`). It fires only when Claude would actually reach the prompt; a rule-based auto-allow does not go onto the bus.
+- **Matcher:** `*` (all tools).
+- **Flow:** `hook.py` (on the host) reads stdin JSON, **checks `hook_event_name == "PermissionRequest"`** (otherwise the payload is not ours → fall through to the normal prompt) → sends `nats request approvals.<session_id>` with a nonce → `responder.py` (manual human input) signs the decision with Ed25519 and replies to the request's reply-inbox → the hook verifies the signature → prints `hookSpecificOutput.decision.behavior` (`allow`/`deny`) to stdout. There is no separate `.decision` subject: the reply travels over the request-reply channel.
+- **We sign the entire content of the reply** — the concatenation `v + session_id + nonce + tool_name + input_sha256 + behavior + updated_input_sha256 + ts + reason` (nonce = anti-replay; `input_sha256` = the hash of `tool_input`, so the decision cannot be replayed onto a different command; `updated_input_sha256` is under the signature, otherwise what actually gets executed could be swapped; `reason`/`v`/`ts` are under the signature too). The exact format is in the "Signing bytes" section below.
+- **Fail-safe:** any error (NATS unavailable, timeout, a bad/absent signature, a foreign nonce/key_id) → exit ≠ 0 and ≠ 2 → fall through to the **normal prompt**. Never a "silent allow". (Exit 2 is a blocking error: stdout is ignored, stderr goes to Claude; for `PermissionRequest` this is probably deny, but the exact semantics are not pinned down in the docs — so do NOT use it on errors, the decision is delivered only via exit-0 JSON.)
+- **Client:** `nats-py`; **cryptography:** `cryptography` (Ed25519).
 
-### 7.1 Диаграмма потока
-
-```mermaid
-flowchart TD
-    A["Claude Code: дошёл бы до permission-промпта"] -->|stdin JSON| B["hook.py на хосте"]
-    B --> C{"hook_event_name<br/>== PermissionRequest?"}
-    C -->|нет| P["обычный промпт<br/>exit ≠ 0 и ≠ 2"]
-    C -->|да| D["Собрать request:<br/>+ nonce, input_sha256, ts"]
-    D -->|"nats request<br/>approvals.session_id"| E["NATS"]
-    E --> F["responder.py<br/>ручное решение оператора"]
-    F --> G["Подписать ответ Ed25519<br/>signing bytes"]
-    G -->|reply в inbox| E
-    E -->|reply| H["hook.py: проверки"]
-
-    H --> I{"v, nonce, session_id,<br/>tool_name, input_sha256, ts<br/>совпадают с отправленными?"}
-    I -->|нет| P
-    I -->|да| J{"key_id в allowlist?"}
-    J -->|нет| P
-    J -->|да| L{"sig валидна для pubkey?<br/>(updated_input_sha256<br/>пересчитан в signing bytes)"}
-    L -->|нет| P
-    L -->|да| M{"behavior?"}
-
-    M -->|allow| N["stdout: decision.behavior=allow<br/>+ updatedInput опц.<br/>exit 0"]
-    M -->|deny| O["stdout: decision.behavior=deny<br/>exit 0"]
-
-    T["Таймаут / NATS недоступен /<br/>любая ошибка"] --> P
-
-    N --> Z["Claude Code исполняет решение"]
-    O --> Z
-    P --> Z
-
-    classDef fail fill:#fde,stroke:#c33;
-    classDef ok fill:#dfe,stroke:#3a3;
-    class P fail;
-    class N,O ok;
-```
-
-### 7.2 Sequence diagram
+### 7.1 Sequence diagram
 
 ```mermaid
 sequenceDiagram
     autonumber
     participant CC as Claude Code
-    participant H as hook.py (хост)
+    participant H as hook.py (host)
     participant N as NATS
-    participant R as responder.py (оператор)
+    participant R as responder.py (operator)
 
     CC->>H: stdin JSON (PermissionRequest)
-    Note over H: check hook_event_name<br/>иначе → обычный промпт (exit ≠ 0,2)
+    Note over H: check hook_event_name<br/>otherwise → normal prompt (exit ≠ 0,2)
     H->>H: nonce, input_sha256, ts
     H->>N: request approvals.session_id
-    N->>R: доставка запроса
-    Note over R: человек решает allow/deny
-    R->>R: подпись Ed25519 (signing bytes)
+    N->>R: request delivery
+    Note over R: a human decides allow/deny
+    R->>R: Ed25519 signature (signing bytes)
     R-->>N: reply (behavior, sig, key_id, ...)
-    N-->>H: reply в inbox
+    N-->>H: reply to the inbox
 
-    alt эхо-поля + key_id + updated_input_sha256 + sig валидны
+    alt echo fields + key_id + updated_input_sha256 + sig valid
         alt behavior == allow
             H-->>CC: stdout allow (+updatedInput), exit 0
         else behavior == deny
             H-->>CC: stdout deny, exit 0
         end
-    else любая проверка не прошла / таймаут / ошибка
-        H-->>CC: exit ≠ 0 и ≠ 2 → обычный промпт
+    else any check failed / timeout / error
+        H-->>CC: exit ≠ 0 and ≠ 2 → normal prompt
     end
 ```
 
-Контракт хука `PermissionRequest`:
-- stdin: `{ hook_event_name, session_id, prompt_id, transcript_path, tool_name, tool_input, permission_mode, cwd }` — хук обязан проверить `hook_event_name == "PermissionRequest"`. (`prompt_id` добавлен в Claude Code v2.1.196+; хуку не нужен, но приходит в payload.)
+`PermissionRequest` hook contract:
+- stdin: `{ hook_event_name, session_id, prompt_id, transcript_path, tool_name, tool_input, permission_mode, cwd }` — the hook must check `hook_event_name == "PermissionRequest"`. (`prompt_id` was added in Claude Code v2.1.196+; the hook does not need it, but it arrives in the payload.)
 - stdout (exit 0): `{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"|"deny","updatedInput"?:{…}}}}`
-- exit codes: `0` — stdout парсится как JSON (JSON обрабатывается только на exit 0); `2` — блокирующая ошибка (stdout игнорируется, stderr уходит Claude; эффект зависит от события, для `PermissionRequest` — вероятно deny, но точная семантика в доках не зафиксирована); иное (в т.ч. `1`) — non-blocking error, обычный промпт. Решение allow/deny всегда отдаём через exit-0 JSON, а не через exit 2.
+- exit codes: `0` — stdout is parsed as JSON (JSON is processed only on exit 0); `2` — a blocking error (stdout is ignored, stderr goes to Claude; the effect depends on the event, for `PermissionRequest` — probably deny, but the exact semantics are not pinned down in the docs); anything else (including `1`) — a non-blocking error, the normal prompt. The allow/deny decision is always delivered via exit-0 JSON, not via exit 2.
 
-Контракт NATS-сообщений:
+NATS message contract:
 
-Subject запроса: `approvals.<session_id>`. Ответ — в reply-inbox (request-reply).
+Request subject: `approvals.<session_id>`. The reply goes to the reply-inbox (request-reply).
 
-Request (`hook.py` → шина):
+Request (`hook.py` → the bus):
 ```json
 {
   "v": 1,
   "session_id": "abc123",
   "tool_name": "Bash",
   "tool_input": { "command": "rm -rf build" },
-  "input_sha256": "<hex sha256 каноничного JSON tool_input: sort_keys=True, separators=(',',':')>",
+  "input_sha256": "<hex sha256 of canonical JSON of tool_input: sort_keys=True, separators=(',',':')>",
   "permission_mode": "default",
   "cwd": "E:\\projects\\ai-remote\\nats",
-  "nonce": "<b64, 32 случайных байта>",
+  "nonce": "<b64, 32 random bytes>",
   "ts": 1737345600
 }
 ```
 
-Reply (`responder.py` → reply-inbox). Поля `v/session_id/tool_name/input_sha256/nonce/ts` — эхо из request; `behavior/reason/updated_input` — от ответчика:
+Reply (`responder.py` → reply-inbox). The fields `v/session_id/tool_name/input_sha256/nonce/ts` are echoed from the request; `behavior/reason/updated_input` come from the responder:
 ```json
 {
   "v": 1,
@@ -252,32 +215,32 @@ Reply (`responder.py` → reply-inbox). Поля `v/session_id/tool_name/input_s
   "reason": "approved by operator",
   "session_id": "abc123",
   "tool_name": "Bash",
-  "input_sha256": "<эхо из request>",
-  "nonce": "<эхо из request>",
+  "input_sha256": "<echo from request>",
+  "nonce": "<echo from request>",
   "ts": 1737345600,
   "updated_input": { "command": "npm ci" },
   "key_id": "approver-1",
-  "sig": "<b64 Ed25519-подпись над signing bytes>"
+  "sig": "<b64 Ed25519 signature over the signing bytes>"
 }
 ```
-- `updated_input` (опц., объект) — подменяет аргументы инструмента; если задан, hook печатает его в `decision.updatedInput`. В подпись входит как `updated_input_sha256` (см. ниже).
-- Поле опционально и применяется только при `behavior == "allow"`. Если его нет — в подписи на месте `updated_input_sha256` пустая строка `""`.
+- `updated_input` (optional, object) — overrides the tool arguments; if set, the hook prints it in `decision.updatedInput`. It enters the signature as `updated_input_sha256` (see below).
+- The field is optional and applied only when `behavior == "allow"`. If it is absent — the signing bytes use an empty string `""` in the `updated_input_sha256` position.
 
-**Signing bytes** (подписывает responder, проверяет hook) — сырая конкатенация полей в **фиксированном порядке** через разделитель `\n`, utf-8:
+**Signing bytes** (signed by the responder, verified by the hook) — a raw concatenation of the fields in a **fixed order** with the `\n` separator, utf-8:
 ```
 str(v) + "\n" + session_id + "\n" + nonce + "\n" + tool_name + "\n" + input_sha256 + "\n" + behavior + "\n" + updated_input_sha256 + "\n" + str(ts) + "\n" + reason
 ```
-- `updated_input_sha256` = hex sha256 каноничного JSON `updated_input`, либо `""` если поля нет. Hook пересчитывает хеш из полученного `updated_input` и сверяет — как с `input_sha256`. Канонизация JSON для обоих хешей одинаковая: `json.dumps(..., sort_keys=True, separators=(',',':'))`, utf-8 → sha256.
-- `reason` идёт **последним** намеренно: это единственное свободнотекстовое поле и в нём может встретиться `\n`; будучи хвостом строки, он остаётся однозначным. Во всех остальных полях перевода строки нет.
+- `updated_input_sha256` = hex sha256 of the canonical JSON of `updated_input`, or `""` if the field is absent. The hook recomputes the hash from the received `updated_input` and compares — just like with `input_sha256`. The JSON canonicalization for both hashes is the same: `json.dumps(..., sort_keys=True, separators=(',',':'))`, utf-8 → sha256.
+- `reason` comes **last** on purpose: it is the only free-text field and may contain `\n`; being the tail of the string, it stays unambiguous. None of the other fields contain a newline.
 
-Порядок и разделитель менять нельзя — обе стороны собирают строку идентично.
+The order and separator must not be changed — both sides assemble the string identically.
 
-Проверки в `hook.py` перед доверием ответу (любая непройденная → выход в обычный промпт):
-- `v` совпадает с ожидаемой версией протокола;
-- `nonce`, `session_id`, `tool_name`, `input_sha256`, `ts` совпадают с отправленными (anti-replay + привязка к команде);
-- `key_id` есть в allowlist доверенных публичных ключей (allowlist наполняется через регистрацию — см. раздел 6 «Регистрация responder'а» выше; сам `key_id` в signing bytes не входит — он привязан к подписи косвенно: по нему выбирается публичный ключ, и подпись, сделанная другим ключом, проверку не пройдёт);
-- если есть `updated_input` — hook пересчитывает `sha256(canonical(updated_input))` и подставляет его в signing bytes на место `updated_input_sha256` (отдельным полем этот хеш в ответе **не передаётся**, в отличие от `input_sha256`, который эхом приходит в reply). Согласованность обеспечивается самой проверкой `sig`: если responder подписал другой `updated_input_sha256`, подпись не сойдётся. Если поля нет — на его месте в signing bytes пустая строка (`""`);
-- `sig` валидна для signing bytes соответствующим публичным ключом (после этого `behavior`/`reason`/`updated_input` можно доверять);
-- `behavior ∈ {allow, deny}`; `updated_input` учитывается только при `allow`.
+Checks in `hook.py` before trusting a reply (any that fails → fall through to the normal prompt):
+- `v` matches the expected protocol version;
+- `nonce`, `session_id`, `tool_name`, `input_sha256`, `ts` match what was sent (anti-replay + binding to the command);
+- `key_id` is present in the allowlist of trusted public keys (the allowlist is populated through registration — see section 6 "Responder registration" above; `key_id` itself is not part of the signing bytes — it is bound to the signature indirectly: it selects the public key, and a signature made by a different key will not pass verification);
+- if `updated_input` is present — the hook recomputes `sha256(canonical(updated_input))` and substitutes it into the signing bytes in the `updated_input_sha256` position (this hash is **not** transmitted as a separate field in the reply, unlike `input_sha256`, which is echoed back in the reply). Consistency is guaranteed by the `sig` check itself: if the responder signed a different `updated_input_sha256`, the signature will not match. If the field is absent — an empty string (`""`) takes its place in the signing bytes;
+- `sig` is valid for the signing bytes under the corresponding public key (after this `behavior`/`reason`/`updated_input` can be trusted);
+- `behavior ∈ {allow, deny}`; `updated_input` is honored only on `allow`.
 
-**Приватность:** `tool_input` уходит в шину как есть — для Bash это полная команда, для Write — содержимое файла. Subject `approvals.<session_id>` и доступ к NATS должны быть ограничены; не подключать недоверенных подписчиков.
+**Privacy:** `tool_input` goes onto the bus as-is — for Bash that is the full command, for Write the file contents. The `approvals.<session_id>` subject and access to NATS must be restricted; do not connect untrusted subscribers.
