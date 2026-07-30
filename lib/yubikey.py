@@ -83,6 +83,11 @@ MIN_IKM_BYTES = 32
 #: Yubico FIDO/U2F attestation roots, shipped next to this module.
 YUBICO_ROOTS_PEM = Path(__file__).resolve().with_name("yubico-fido-ca.pem")
 
+#: Yubico FIDO attestation *intermediates*, shipped next to this module. Not trust
+#: anchors - a YubiKey ships only its end-entity certificate in x5c, so these are
+#: needed to bridge it to a root in :data:`YUBICO_ROOTS_PEM`.
+YUBICO_INTERMEDIATES_PEM = Path(__file__).resolve().with_name("yubico-fido-intermediates.pem")
+
 _EXTRA_HINT = "uv sync --extra yubikey"
 
 
@@ -394,17 +399,36 @@ def parse_seed_public_key(seed_cbor: bytes) -> Any:
 
 
 # --- step 4: attestation -------------------------------------------------------
+def _load_pem_bundle(pem: Path, *, what: str) -> list[bytes]:
+    try:
+        certs = x509.load_pem_x509_certificates(pem.read_bytes())
+    except (OSError, ValueError) as e:
+        raise AttestationError(f"cannot load {what} from {pem}: {e}") from e
+    return [c.public_bytes(Encoding.DER) for c in certs]
+
+
 def load_yubico_roots(path: str | os.PathLike[str] | None = None) -> list[bytes]:
     """Load the bundled Yubico FIDO attestation roots as DER blobs.
 
     Needs only ``cryptography``, so it works without the ``fido2`` extra.
     """
     pem = Path(path) if path is not None else YUBICO_ROOTS_PEM
-    try:
-        certs = x509.load_pem_x509_certificates(pem.read_bytes())
-    except (OSError, ValueError) as e:
-        raise AttestationError(f"cannot load Yubico trust anchors from {pem}: {e}") from e
-    return [c.public_bytes(Encoding.DER) for c in certs]
+    return _load_pem_bundle(pem, what="Yubico trust anchors")
+
+
+def load_yubico_intermediates(path: str | os.PathLike[str] | None = None) -> list[bytes]:
+    """Load the bundled Yubico FIDO attestation intermediates as DER blobs.
+
+    These are **not** trust anchors: they only bridge an attestation certificate up
+    to a root from :func:`load_yubico_roots`. A YubiKey's packed attestation ships
+    only its end-entity certificate in ``x5c`` (confirmed on firmware 5.8.0), while
+    that certificate sits two tiers below the root, so without these the chain
+    cannot be pinned at all.
+
+    Needs only ``cryptography``, so it works without the ``fido2`` extra.
+    """
+    pem = Path(path) if path is not None else YUBICO_INTERMEDIATES_PEM
+    return _load_pem_bundle(pem, what="Yubico intermediate certificates")
 
 
 def _load_der(der: bytes, *, what: str = "certificate") -> x509.Certificate:
@@ -415,17 +439,29 @@ def _load_der(der: bytes, *, what: str = "certificate") -> x509.Certificate:
 
 
 def verify_certificate_chain(
-    chain: Sequence[bytes], roots: Sequence[bytes]
+    chain: Sequence[bytes],
+    roots: Sequence[bytes],
+    intermediates: Sequence[bytes] = (),
 ) -> x509.Certificate:
     """Verify ``chain`` (leaf first, DER) terminates at one of ``roots``.
 
     Checks each certificate is directly issued by the next, then that the top of the
     chain is issued by (or *is*) a trusted root. Returns the matching root.
 
+    ``intermediates`` is an optional pool of CA certificates used to *bridge* a chain
+    that stops short of a root — necessary because a YubiKey's attestation ships only
+    its end-entity certificate while that certificate sits two tiers below the root.
+    Each bridging certificate's signature is verified exactly like a supplied link, so
+    this widens the set of *paths* that can be built, never the set of trust anchors:
+    the top of the built path must still be issued by a member of ``roots``. Handing
+    over an intermediate therefore confers no trust by itself. Certificates already
+    present in ``chain`` are used from there; the pool only fills what is missing.
+
     Raises :class:`AttestationError` on an empty chain, an empty root set, a broken
-    link, or no matching root. Note this deliberately does **not** do full RFC 5280
-    path validation (no revocation, no name constraints) — it pins the chain to a
-    known root, which is what device attestation needs.
+    link, or no matching root — the message naming the issuer that could not be
+    bridged. Note this deliberately does **not** do full RFC 5280 path validation (no
+    revocation, no name constraints) — it pins the chain to a known root, which is
+    what device attestation needs.
     """
     if not chain:
         raise AttestationError("attestation carries no certificate chain")
@@ -442,20 +478,44 @@ def verify_certificate_chain(
                 f"issued by {parent.subject.rfc4514_string()} ({e})"
             ) from e
 
-    top = certs[-1]
-    for root_der in roots:
-        root = _load_der(root_der, what="trusted root")
-        if top == root:
-            return root  # the chain already includes the root itself
-        try:
-            top.verify_directly_issued_by(root)
-        except Exception:  # noqa: BLE001 — wrong root, keep looking
-            continue
-        return root
+    root_certs = [_load_der(der, what="trusted root") for der in roots]
+    pool = [_load_der(der, what="intermediate certificate") for der in intermediates]
+
+    def _anchor_for(top: x509.Certificate) -> x509.Certificate | None:
+        for root in root_certs:
+            if top == root:
+                return root  # the chain already includes the root itself
+            try:
+                top.verify_directly_issued_by(root)
+            except Exception:  # noqa: BLE001 — wrong root, keep looking
+                continue
+            return root
+        return None
+
+    # Walk upward: anchor if we can, otherwise splice in one intermediate and retry.
+    # Each pass either returns, breaks, or consumes a pool entry, so this terminates.
+    while True:
+        anchor = _anchor_for(certs[-1])
+        if anchor is not None:
+            return anchor
+
+        bridge = None
+        for i, candidate in enumerate(pool):
+            if candidate.subject != certs[-1].issuer:
+                continue  # cheap filter: an issuer's subject is the child's issuer
+            try:
+                certs[-1].verify_directly_issued_by(candidate)
+            except Exception:  # noqa: BLE001 — not the real issuer, keep looking
+                continue
+            bridge = i
+            break
+        if bridge is None:
+            break
+        certs.append(pool.pop(bridge))
 
     raise AttestationError(
         f"certificate chain does not terminate at a trusted root "
-        f"(top issuer: {top.issuer.rfc4514_string()})"
+        f"(top issuer: {certs[-1].issuer.rfc4514_string()})"
     )
 
 
@@ -482,6 +542,7 @@ def verify_attestation_object(
     roots: Sequence[bytes] | None = None,
     require_root: bool = True,
     allowed_aaguids: Iterable[bytes] | None = None,
+    intermediates: Sequence[bytes] | None = None,
 ) -> AttestationCheck:
     """Check an attestation object and decide whether it came from a YubiKey.
 
@@ -492,6 +553,10 @@ def verify_attestation_object(
     * the certificate chain pins to a Yubico root (``roots``, defaulting to the
       bundled anchors; set ``require_root=False`` to skip — e.g. for a dev key);
     * the attestation certificate names Yubico.
+
+    ``intermediates`` bridges the chain to a root and defaults to the bundled Yubico
+    intermediates, which is required in practice: the device ships only its end-entity
+    certificate. It adds no trust of its own (see :func:`verify_certificate_chain`).
 
     ``allowed_aaguids`` optionally narrows it further to specific models. It is
     deliberately not defaulted to a hardcoded list: Yubico ships new AAGUIDs with
@@ -534,7 +599,11 @@ def verify_attestation_object(
         if require_root:
             try:
                 root = verify_certificate_chain(
-                    trust_path, list(roots) if roots is not None else load_yubico_roots()
+                    trust_path,
+                    list(roots) if roots is not None else load_yubico_roots(),
+                    list(intermediates)
+                    if intermediates is not None
+                    else load_yubico_intermediates(),
                 )
                 trusted_root_subject = root.subject.rfc4514_string()
             except AttestationError as e:
@@ -569,6 +638,7 @@ def verify_yubikey_attestation(
     require_root: bool = True,
     allowed_aaguids: Iterable[bytes] | None = None,
     use_seed_attestation: bool = False,
+    intermediates: Sequence[bytes] | None = None,
 ) -> AttestationCheck:
     """Is the device behind ``result`` a genuine YubiKey?
 
@@ -589,6 +659,7 @@ def verify_yubikey_attestation(
         roots=roots,
         require_root=require_root,
         allowed_aaguids=allowed_aaguids,
+        intermediates=intermediates,
     )
 
 

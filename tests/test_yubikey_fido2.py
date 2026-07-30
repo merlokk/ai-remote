@@ -191,6 +191,73 @@ def test_bundled_roots_are_self_signed():
         assert c.subject == c.issuer
 
 
+# --- bundled Yubico intermediates (NOT trust anchors) --------------------------
+def test_load_yubico_intermediates_returns_the_fido_subset():
+    inters = yubikey.load_yubico_intermediates()
+    subjects = {x509.load_der_x509_certificate(d).subject.rfc4514_string() for d in inters}
+    assert subjects == {
+        "CN=Yubico FIDO Attestation A 1",
+        "CN=Yubico FIDO Attestation B 1",
+        "CN=Yubico FIDO Attestation B2 1",
+        "CN=Yubico Attestation Intermediate A 1",
+        "CN=Yubico Attestation Intermediate B 1",
+    }
+
+
+def test_bundled_intermediate_fingerprints_are_pinned():
+    # Guards against a silent swap of lib/yubico-fido-intermediates.pem.
+    expected = {
+        "4ebabc9cbc964f722c985f3784d057e9ef5dcf454dcb4f767fccca58cf16a4e8",  # FIDO Attestation A 1
+        "4eadda86ff62cff987e111a07910d8554de42f71d5d6da7744610e09012dd319",  # FIDO Attestation B 1
+        "3c6fe819adbd80afe75dc90af7bba34c95b2b7ac64384816e033f63b7c93848b",  # FIDO Attestation B2 1
+        "4698a1d3389c3ec60016c216250f1d0439922832d65142327436376dc2942b55",  # Intermediate A 1
+        "d4cc3f456fdaf4e7812a21aab1dfe9d8e27d24e2fd2d6f21c9940109f0daa754",  # Intermediate B 1
+    }
+    got = {
+        x509.load_der_x509_certificate(d).fingerprint(hashes.SHA256()).hex()
+        for d in yubikey.load_yubico_intermediates()
+    }
+    assert got == expected
+
+
+def test_bundled_intermediates_are_not_self_signed():
+    # A self-signed cert here would be a root smuggled into the intermediates file.
+    for der in yubikey.load_yubico_intermediates():
+        c = x509.load_der_x509_certificate(der)
+        assert c.subject != c.issuer
+
+
+def test_bundled_intermediates_are_cas():
+    for der in yubikey.load_yubico_intermediates():
+        c = x509.load_der_x509_certificate(der)
+        basic = c.extensions.get_extension_for_class(x509.BasicConstraints).value
+        assert basic.ca is True
+
+
+def test_every_bundled_fido_attestation_ca_pins_to_a_bundled_root():
+    # The regression that matters: a real YubiKey ships only its EE cert, so the
+    # issuing "FIDO Attestation X" CA must reach a pinned root through the bundle.
+    # Proven here with committed data only - no device, no captured EE cert.
+    inters = yubikey.load_yubico_intermediates()
+    fido_cas = [
+        d
+        for d in inters
+        if "FIDO Attestation"
+        in x509.load_der_x509_certificate(d).subject.rfc4514_string()
+    ]
+    assert fido_cas, "expected at least one FIDO Attestation CA in the bundle"
+    for der in fido_cas:
+        root = yubikey.verify_certificate_chain(
+            [der], yubikey.load_yubico_roots(), intermediates=inters
+        )
+        assert "Yubico" in root.subject.rfc4514_string()
+
+
+def test_load_yubico_intermediates_reports_a_missing_file(tmp_path):
+    with pytest.raises(yubikey.AttestationError):
+        yubikey.load_yubico_intermediates(tmp_path / "nope.pem")
+
+
 # --- synthetic CA + packed attestation ----------------------------------------
 def _name(cn, org="Yubico AB", country="SE", ou=None):
     parts = [
@@ -229,23 +296,45 @@ def _der(cert):
 
 
 class Chain:
-    """A throwaway root -> attestation-EE chain plus a signed packed attestation."""
+    """A throwaway root -> [intermediates ->] attestation-EE chain plus an attestation.
 
-    def __init__(self, *, org="Yubico AB", root_cn="Test Yubico Root", aaguid=AAGUID):
+    ``intermediate_cns`` is ordered leaf-first (nearest the EE first), mirroring both
+    x5c order and the real Yubico shape: EE <- "FIDO Attestation B2 1" <-
+    "Attestation Intermediate B 1" <- root. Default is the 1-deep root->EE chain.
+    """
+
+    def __init__(
+        self, *, org="Yubico AB", root_cn="Test Yubico Root", aaguid=AAGUID, intermediate_cns=()
+    ):
         self.aaguid = aaguid
         root_name = _name(root_cn, org=org)
         self.root_key = ec.generate_private_key(ec.SECP256R1())
         self.root = _mkcert(root_name, root_name, self.root_key, self.root_key, ca=True)
 
+        # Build downward from the root, then flip to leaf-first.
+        self.intermediates = []
+        self.intermediate_keys = []
+        issuer_name, issuer_key = self.root.subject, self.root_key
+        for cn in reversed(intermediate_cns):
+            key = ec.generate_private_key(ec.SECP256R1())
+            cert = _mkcert(_name(cn, org=org), issuer_name, issuer_key, key, ca=True)
+            self.intermediates.insert(0, cert)
+            self.intermediate_keys.insert(0, key)
+            issuer_name, issuer_key = cert.subject, key
+
         self.ee_key = ec.generate_private_key(ec.SECP256R1())
         self.ee = _mkcert(
             _name("Test Authenticator EE", org=org, ou="Authenticator Attestation"),
-            self.root.subject,
-            self.root_key,
+            issuer_name,
+            issuer_key,
             self.ee_key,
             ca=False,
             aaguid=aaguid,
         )
+
+    @property
+    def intermediate_ders(self):
+        return [_der(c) for c in self.intermediates]
 
     def attestation(self, *, client_data_hash=b"\x11" * 32, credential_id=b"cred-id"):
         """A `packed` AttestationObject signed by the EE key, plus its clientDataHash."""
@@ -288,6 +377,74 @@ def test_verify_certificate_chain_rejects_empty_root_set():
     ch = Chain()
     with pytest.raises(yubikey.AttestationError):
         yubikey.verify_certificate_chain([_der(ch.ee)], [])
+
+
+# --- chain verification through supplied intermediates -------------------------
+#: The real firmware-5.8.0 shape: EE two tiers below the root, x5c carrying only the EE.
+DEEP = ("Test FIDO Attestation B2", "Test Attestation Intermediate B")
+
+
+def test_verify_certificate_chain_bridges_a_deep_chain_with_intermediates():
+    ch = Chain(intermediate_cns=DEEP)
+    root = yubikey.verify_certificate_chain(
+        [_der(ch.ee)], [_der(ch.root)], intermediates=ch.intermediate_ders
+    )
+    assert root.subject == ch.root.subject
+
+
+def test_verify_certificate_chain_deep_chain_fails_without_intermediates():
+    # This is exactly the false negative seen on real hardware.
+    ch = Chain(intermediate_cns=DEEP)
+    with pytest.raises(yubikey.AttestationError):
+        yubikey.verify_certificate_chain([_der(ch.ee)], [_der(ch.root)])
+
+
+def test_verify_certificate_chain_ignores_unrelated_intermediates():
+    ch = Chain(intermediate_cns=DEEP)
+    other = Chain(intermediate_cns=DEEP, root_cn="Someone Else Root")
+    with pytest.raises(yubikey.AttestationError):
+        yubikey.verify_certificate_chain(
+            [_der(ch.ee)], [_der(ch.root)], intermediates=other.intermediate_ders
+        )
+
+
+def test_intermediates_are_not_trust_anchors():
+    # Security-critical: handing over an intermediate must NOT confer trust by itself.
+    # Same chain, but the only pinned root belongs to someone else.
+    ch = Chain(intermediate_cns=DEEP)
+    other = Chain(root_cn="Someone Else Root")
+    with pytest.raises(yubikey.AttestationError):
+        yubikey.verify_certificate_chain(
+            [_der(ch.ee)], [_der(other.root)], intermediates=ch.intermediate_ders
+        )
+
+
+def test_verify_certificate_chain_accepts_intermediates_already_in_the_chain():
+    # A device that *does* ship the full x5c must keep working; the pool is then unused.
+    ch = Chain(intermediate_cns=DEEP)
+    root = yubikey.verify_certificate_chain(
+        [_der(ch.ee)] + ch.intermediate_ders, [_der(ch.root)]
+    )
+    assert root.subject == ch.root.subject
+
+
+def test_verify_certificate_chain_tolerates_a_partially_supplied_chain():
+    # x5c carries the first intermediate, the pool supplies the rest.
+    ch = Chain(intermediate_cns=DEEP)
+    root = yubikey.verify_certificate_chain(
+        [_der(ch.ee), ch.intermediate_ders[0]],
+        [_der(ch.root)],
+        intermediates=ch.intermediate_ders,
+    )
+    assert root.subject == ch.root.subject
+
+
+def test_verify_certificate_chain_reports_the_unbridged_issuer():
+    ch = Chain(intermediate_cns=DEEP)
+    with pytest.raises(yubikey.AttestationError) as ei:
+        yubikey.verify_certificate_chain([_der(ch.ee)], [_der(ch.root)])
+    # The message must name what was missing, not just "untrusted".
+    assert "Test FIDO Attestation B2" in str(ei.value)
 
 
 # --- Yubico identity in the certificate ---------------------------------------
@@ -369,6 +526,50 @@ def test_verify_attestation_object_honours_aaguid_allowlist():
     )
     assert bad.is_yubikey is False
     assert any("aaguid" in r.lower() for r in bad.reasons)
+
+
+def test_verify_attestation_object_accepts_a_deep_chain_with_intermediates():
+    # The hardware case: x5c holds only the EE cert, two tiers below the root.
+    ch = Chain(intermediate_cns=DEEP)
+    att_obj, cdh = ch.attestation()
+    check = yubikey.verify_attestation_object(
+        att_obj, cdh, roots=[_der(ch.root)], intermediates=ch.intermediate_ders
+    )
+    assert check.is_yubikey is True
+    assert check.reasons == ()
+    assert check.trusted_root_subject == ch.root.subject.rfc4514_string()
+    # chain_length stays what the *device* sent, not the length of the built path.
+    assert check.chain_length == 1
+
+
+def test_verify_attestation_object_deep_chain_without_intermediates_is_rejected():
+    ch = Chain(intermediate_cns=DEEP)
+    att_obj, cdh = ch.attestation()
+    check = yubikey.verify_attestation_object(
+        att_obj, cdh, roots=[_der(ch.root)], intermediates=[]
+    )
+    assert check.is_yubikey is False
+    assert any("chain" in r.lower() for r in check.reasons)
+
+
+def test_verify_attestation_object_deep_chain_still_needs_a_trusted_root():
+    ch = Chain(intermediate_cns=DEEP)
+    other = Chain(root_cn="Someone Else Root")
+    att_obj, cdh = ch.attestation()
+    check = yubikey.verify_attestation_object(
+        att_obj, cdh, roots=[_der(other.root)], intermediates=ch.intermediate_ders
+    )
+    assert check.is_yubikey is False
+
+
+def test_verify_yubikey_attestation_passes_intermediates_through():
+    ch = Chain(intermediate_cns=DEEP)
+    att_obj, cdh = ch.attestation()
+    result = make_result(att_obj=att_obj, client_data_hash=cdh)
+    check = yubikey.verify_yubikey_attestation(
+        result, roots=[_der(ch.root)], intermediates=ch.intermediate_ders
+    )
+    assert check.is_yubikey is True
 
 
 def test_verify_attestation_object_can_skip_root_pinning():

@@ -209,3 +209,13 @@ def test_yubico_root_bundle_file_exists():
     # Shipped as data next to the module; readable without fido2.
     assert yubikey.YUBICO_ROOTS_PEM.is_file()
     assert b"BEGIN CERTIFICATE" in yubikey.YUBICO_ROOTS_PEM.read_bytes()
+
+
+def test_yubico_intermediate_bundle_file_exists():
+    # Also data next to the module; needed because a YubiKey ships only its EE cert.
+    assert yubikey.YUBICO_INTERMEDIATES_PEM.is_file()
+    assert b"BEGIN CERTIFICATE" in yubikey.YUBICO_INTERMEDIATES_PEM.read_bytes()
+
+
+def test_root_and_intermediate_bundles_are_separate_files():
+    assert yubikey.YUBICO_ROOTS_PEM != yubikey.YUBICO_INTERMEDIATES_PEM

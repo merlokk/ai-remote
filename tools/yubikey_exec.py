@@ -221,11 +221,15 @@ def _maybe_attest(result, args, out: dict) -> int:
         return EXIT_OK
 
     roots = yubikey.load_yubico_roots(args.roots) if args.roots else None
+    inters = (
+        yubikey.load_yubico_intermediates(args.intermediates) if args.intermediates else None
+    )
     check = yubikey.verify_yubikey_attestation(
         result,
         roots=roots,
         require_root=not args.no_require_root,
         use_seed_attestation=args.seed_attestation,
+        intermediates=inters,
     )
     report = attestation_report(check)
     out["attestation"] = report
@@ -417,6 +421,11 @@ def _add_attest_flags(parser: argparse.ArgumentParser) -> None:
     )
     group.add_argument(
         "--roots", metavar="PEM", help="trust anchors to pin against (default: bundled Yubico roots)"
+    )
+    group.add_argument(
+        "--intermediates",
+        metavar="PEM",
+        help="intermediate CAs used to bridge to a root (default: bundled Yubico ones)",
     )
     group.add_argument(
         "--no-require-root",

@@ -106,6 +106,19 @@ def test_require_yubikey_flag_parses():
     assert args.require_yubikey is True
 
 
+def test_intermediates_flag_defaults_to_none():
+    # None means "use the bundled Yubico intermediates".
+    args = yubikey_exec._build_parser().parse_args(["run", "--attest"])
+    assert args.intermediates is None
+
+
+def test_intermediates_flag_parses():
+    args = yubikey_exec._build_parser().parse_args(
+        ["derive", "--in", "cred.json", "--intermediates", "custom.pem"]
+    )
+    assert args.intermediates == "custom.pem"
+
+
 def test_derive_requires_input():
     with pytest.raises(SystemExit):
         yubikey_exec._build_parser().parse_args(["derive"])
