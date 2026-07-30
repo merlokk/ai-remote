@@ -17,3 +17,9 @@ __pycache__/
 # (The *.example.json siblings carry no secrets and ARE committed.)
 approver/responder-config.json
 approver/handler-config.json
+
+# Saved yubikey-exec credentials (`make-credential --out`). No private key material
+# — the ARKG private halves never leave the device — but they identify a credential,
+# and the docs use these names as examples, so keep them out of commits by default.
+/cred.json
+*-cred.json

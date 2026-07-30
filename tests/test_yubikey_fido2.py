@@ -418,3 +418,201 @@ def test_verify_yubikey_attestation_without_attestation_object():
     result = make_result(att_obj=None)
     with pytest.raises(yubikey.AttestationError):
         yubikey.verify_yubikey_attestation(result)
+
+
+# --- signing: the digest handed to the authenticator (pure) --------------------
+def test_signing_digest_hashes_data():
+    import hashlib
+
+    assert yubikey.signing_digest(data=b"hello") == hashlib.sha256(b"hello").digest()
+
+
+def test_signing_digest_passes_a_digest_through():
+    digest = b"\x03" * 32
+    assert yubikey.signing_digest(digest=digest) == digest
+
+
+def test_signing_digest_requires_exactly_one_input():
+    with pytest.raises(ValueError):
+        yubikey.signing_digest()
+    with pytest.raises(ValueError):
+        yubikey.signing_digest(data=b"x", digest=b"\x00" * 32)
+
+
+@pytest.mark.parametrize("bad", [b"", b"\x00" * 31, b"\x00" * 33])
+def test_signing_digest_rejects_wrong_digest_length(bad):
+    with pytest.raises(ValueError):
+        yubikey.signing_digest(digest=bad)
+
+
+def test_signing_digest_rejects_non_bytes():
+    with pytest.raises(TypeError):
+        yubikey.signing_digest(data="not bytes")
+
+
+def test_build_sign_extension_input_shape():
+    from fido2.utils import websafe_encode
+
+    inputs = yubikey.build_sign_extension_input(
+        credential_id=b"cred", key_handle=b"kh", tbs=b"\x01" * 32, arkg_args_cbor=b"args"
+    )
+    by_cred = inputs[yubikey.PREVIEW_SIGN_NAME]["signByCredential"]
+    entry = by_cred[websafe_encode(b"cred")]
+    assert entry["keyHandle"] == b"kh"
+    assert entry["tbs"] == b"\x01" * 32
+    assert entry["additionalArgs"] == b"args"
+
+
+# --- verifying a signature with the derived key -------------------------------
+def _esp256_pair():
+    """A P-256 pair whose public half is wrapped as an ESP256 CoseKey (alg -9).
+
+    Stands in for a derived ARKG key: we cannot obtain a *real* derived private key
+    (only the authenticator can), but the verification path is identical.
+    """
+    priv = ec.generate_private_key(ec.SECP256R1())
+    return priv, ESP256.from_cryptography_key(priv.public_key())
+
+
+def _raw_sign(priv, message):
+    return priv.sign(message, ec.ECDSA(hashes.SHA256()))
+
+
+def test_verify_signature_accepts_a_valid_signature_over_data():
+    priv, pub = _esp256_pair()
+    assert yubikey.verify_signature(pub, _raw_sign(priv, b"payload"), data=b"payload") is True
+
+
+def test_verify_signature_accepts_the_same_signature_via_its_digest():
+    import hashlib
+
+    priv, pub = _esp256_pair()
+    sig = _raw_sign(priv, b"payload")
+    digest = hashlib.sha256(b"payload").digest()
+    # The digest path must agree with the data path — this is exactly where a double
+    # hash would silently break things (the authenticator signs the digest itself).
+    assert yubikey.verify_signature(pub, sig, digest=digest) is True
+
+
+def test_verify_signature_rejects_a_different_message():
+    priv, pub = _esp256_pair()
+    assert yubikey.verify_signature(pub, _raw_sign(priv, b"payload"), data=b"other") is False
+
+
+def test_verify_signature_rejects_a_foreign_key():
+    priv, _ = _esp256_pair()
+    _, other_pub = _esp256_pair()
+    assert yubikey.verify_signature(other_pub, _raw_sign(priv, b"payload"), data=b"payload") is False
+
+
+@pytest.mark.parametrize("sig", [b"", b"garbage", b"\x00" * 70])
+def test_verify_signature_is_fail_safe_on_bad_signatures(sig):
+    _, pub = _esp256_pair()
+    assert yubikey.verify_signature(pub, sig, data=b"payload") is False
+
+
+def test_verify_signature_is_fail_safe_on_a_broken_key():
+    assert yubikey.verify_signature({1: 2, 3: -9}, b"sig", data=b"payload") is False
+
+
+def test_verify_signature_requires_exactly_one_of_data_or_digest():
+    _, pub = _esp256_pair()
+    with pytest.raises(ValueError):
+        yubikey.verify_signature(pub, b"sig")
+
+
+def test_verify_signature_works_through_a_derived_key_object():
+    """The signature-verification entry point takes a DerivedKey directly too."""
+    derived = yubikey.seed_public_key(make_result(), ctx=b"ctx")
+    # No private half exists for a real derived key, so only the negative path is
+    # assertable here — what matters is that it accepts the object and stays fail-safe.
+    assert yubikey.verify_signature(derived, b"nope", data=b"payload") is False
+
+
+# --- persisting a MakeCredentialResult between runs ----------------------------
+def test_result_to_dict_is_json_serialisable():
+    import json
+
+    ch = Chain()
+    att_obj, cdh = ch.attestation()
+    data = yubikey.result_to_dict(make_result(att_obj=att_obj, client_data_hash=cdh))
+    json.dumps(data)  # raises if any bytes leaked through
+    assert data["v"] == yubikey.RESULT_FORMAT_VERSION
+
+
+def test_result_round_trips_through_dict():
+    ch = Chain()
+    att_obj, cdh = ch.attestation()
+    original = make_result(att_obj=att_obj, client_data_hash=cdh)
+
+    restored = yubikey.result_from_dict(yubikey.result_to_dict(original))
+
+    assert restored.key_handle == original.key_handle
+    assert restored.seed_public_key_cbor == original.seed_public_key_cbor
+    assert restored.algorithm == original.algorithm
+    assert restored.credential_id == original.credential_id
+    assert restored.aaguid == original.aaguid
+    assert restored.client_data_hash == original.client_data_hash
+    assert bytes(restored.attestation_object) == bytes(original.attestation_object)
+
+
+def test_restored_result_still_derives_the_same_key():
+    original = make_result()
+    ikm = b"\x05" * 32
+    before = yubikey.seed_public_key(original, ctx=b"ctx", ikm=ikm)
+
+    restored = yubikey.result_from_dict(yubikey.result_to_dict(original))
+    after = yubikey.seed_public_key(restored, ctx=b"ctx", ikm=ikm)
+
+    assert before.derived_public_key == after.derived_public_key
+    assert before.arkg_args[-1] == after.arkg_args[-1]
+
+
+def test_restored_result_still_verifies_attestation():
+    ch = Chain()
+    att_obj, cdh = ch.attestation()
+    restored = yubikey.result_from_dict(
+        yubikey.result_to_dict(make_result(att_obj=att_obj, client_data_hash=cdh))
+    )
+    assert yubikey.verify_yubikey_attestation(restored, roots=[_der(ch.root)]).is_yubikey
+
+
+def test_result_round_trips_without_attestation_object():
+    restored = yubikey.result_from_dict(yubikey.result_to_dict(make_result(att_obj=None)))
+    assert restored.attestation_object is None
+
+
+def test_save_and_load_result(tmp_path):
+    ch = Chain()
+    att_obj, cdh = ch.attestation()
+    original = make_result(att_obj=att_obj, client_data_hash=cdh)
+
+    path = tmp_path / "cred.json"
+    yubikey.save_result(original, path)
+    restored = yubikey.load_result(path)
+
+    assert restored.key_handle == original.key_handle
+    assert bytes(restored.attestation_object) == bytes(original.attestation_object)
+
+
+def test_load_result_rejects_unknown_format_version(tmp_path):
+    import json
+
+    path = tmp_path / "cred.json"
+    data = yubikey.result_to_dict(make_result())
+    data["v"] = yubikey.RESULT_FORMAT_VERSION + 1
+    path.write_text(json.dumps(data), encoding="utf-8")
+    with pytest.raises(yubikey.YubiKeyError):
+        yubikey.load_result(path)
+
+
+def test_load_result_rejects_garbage(tmp_path):
+    path = tmp_path / "cred.json"
+    path.write_text("not json", encoding="utf-8")
+    with pytest.raises(yubikey.YubiKeyError):
+        yubikey.load_result(path)
+
+
+def test_load_result_rejects_missing_file(tmp_path):
+    with pytest.raises(yubikey.YubiKeyError):
+        yubikey.load_result(tmp_path / "nope.json")

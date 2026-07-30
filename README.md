@@ -243,11 +243,25 @@ ARKG in one line: the key holds one *seed* pair; anyone with the seed **public**
 can derive unlimited fresh, mutually unlinkable public keys **offline**, while only
 the authenticator can produce the matching private keys.
 
-Requires `uv sync --extra yubikey`, a YubiKey on firmware **5.8.0+** advertising
-`previewSign`, and — **on Windows — an administrator terminal** (otherwise the native
-WebAuthn path drops the extension output).
+Requires `uv sync --extra yubikey` and a YubiKey on firmware **5.8.0+** advertising
+`previewSign`.
+
+> **On Windows, run everything below from an administrator terminal.** Unelevated
+> processes cannot enumerate FIDO HID devices at all — Windows reserves them for the
+> WebAuthn API — so the device list comes back empty *even with the key plugged in*,
+> and you get `no FIDO authenticator found`. Elevation is also what makes the
+> `previewSign` extension output come back instead of being silently dropped.
+>
+> Elevating drops `VIRTUAL_ENV`, so `py` would pick the *global* interpreter and fail
+> with `ModuleNotFoundError: cryptography`. Name the venv interpreter explicitly:
+>
+> ```
+> sudo .venv\Scripts\python.exe tools\yubikey_exec.py version
+> ```
 
 ```python
+import hashlib
+
 from lib import yubikey
 
 # 0. which key is this?
@@ -262,15 +276,102 @@ derived = yubikey.seed_public_key(result, ctx=b"my-purpose")   # ikm: 32 random 
 print(derived.derived_public_key)   # verify signatures with this
 print(derived.arkg_args)            # send back with result.key_handle to have it sign
 
-# 3. separately: is this really a YubiKey?
+# 3. optional, separate step: is this really a YubiKey?
 check = yubikey.verify_yubikey_attestation(result)
 print(check.is_yubikey, check.trusted_root_subject, check.reasons)
+
+# 4. sign with the derived key (a second touch) and verify offline
+signature = yubikey.sign_with_derived_key(result, derived, data=b"payload")
+assert yubikey.verify_signature(derived, signature, data=b"payload")
+
+# ... or when only the hash is at hand, on either side:
+digest = hashlib.sha256(b"payload").digest()
+signature = yubikey.sign_with_derived_key(result, derived, digest=digest)
+assert yubikey.verify_signature(derived, signature, digest=digest)
 ```
+
+> **The hashing rule.** What the authenticator signs is the **SHA-256 digest**, as-is —
+> it does not hash again. So `data=` means "hash this for me", `digest=` means "this is
+> already the hash" (32 bytes). Both accept the same signature; internally the digest
+> path uses `Prehashed`, because hashing a digest a second time would never verify.
 
 `is_yubikey` requires all three of: the attestation statement verifying, the
 certificate chain pinning to a bundled Yubico root (`lib/yubico-fido-ca.pem`), and the
-certificate naming Yubico. `reasons` says what failed. Run
-`py -m lib.yubikey --arkg` to exercise the whole thing against real hardware.
+certificate naming Yubico. `reasons` says what failed.
+
+### The `yubikey-exec` utility
+
+`tools/yubikey_exec.py` is the command line over that library:
+
+```bash
+py tools/yubikey_exec.py version                                # no touch
+py tools/yubikey_exec.py make-credential --out cred.json        # touch
+py tools/yubikey_exec.py derive --in cred.json --ctx my-purpose # no device at all
+py tools/yubikey_exec.py run --ctx my-purpose                   # both in one go
+
+# sign a string with the derived key (touch), verified on the spot:
+py tools/yubikey_exec.py sign --in cred.json --message "hello"
+# ... or sign a ready-made hash:
+py tools/yubikey_exec.py sign --in cred.json --digest <64 hex chars>
+
+# check a signature later, with no device — note the ikm that `sign` printed:
+py tools/yubikey_exec.py verify --in cred.json --ikm <hex> \
+    --message "hello" --signature <hex>
+```
+
+`sign` derives, signs and verifies in one go, and prints the `ikm` it used — you need
+that to reproduce the same key in `verify` (a fresh random one would give a different
+key, so `--ikm` is required there). `run --message "..."` does the whole chain from
+`make-credential` through sign+verify. Exit `3` means the signature did not verify,
+kept distinct from `1` (error) so scripts can tell the two apart.
+
+`make-credential --out` saves the result, so `derive` can run **later, in another
+process, with the key unplugged** — that split is the whole point. Add `--json` for a
+single machine-readable document, `--ikm <hex>` to reproduce a derivation.
+
+All three hardware steps in one command file (elevate first, it does not elevate
+itself — and it resolves `.venv\Scripts\python.exe` by path, since elevation drops
+`VIRTUAL_ENV`):
+
+```bat
+REM in an elevated console:  sudo cmd   then:
+scripts\yubikey-arkg.cmd --ctx my-purpose
+scripts\yubikey-arkg.cmd --ctx my-purpose --out cred.json --attest
+
+REM with a string to sign: step 3 becomes derive + sign + verify (second touch)
+scripts\yubikey-arkg.cmd --ctx my-purpose --message "hello signed world"
+```
+
+It prints the version, asks for a touch, derives the public key, and keeps the
+credential so `derive --in` can re-run without the key. Exit `0` = all steps OK.
+
+**The "is it a YubiKey?" check is optional and off by default.** Turn it on per
+invocation:
+
+| Flag | Effect |
+|------|--------|
+| `--attest` | run the check and print the verdict; exit code unchanged |
+| `--require-yubikey` | implies `--attest`, and exits `2` unless it verifies |
+| `--roots PEM` | pin against your own trust anchors instead of the bundled ones |
+| `--no-require-root` | skip chain pinning (statement + Yubico name only) |
+| `--seed-attestation` | check the seed key's attestation instead of the credential's |
+
+Exit codes: `0` ok, `1` error (no key, no `fido2`, bad input), `2` not a YubiKey while
+`--require-yubikey`.
+
+### Integration tests with a real key
+
+Optional — skipped unless the hardware is actually there, so a plain `py -m pytest`
+stays green on any machine. Touch-requiring tests are additionally env-gated so an
+unattended run never blocks waiting for a finger:
+
+```powershell
+# Windows: administrator terminal. -s is required, or the touch prompt is swallowed.
+$env:AI_REMOTE_YUBIKEY_TOUCH="1"; py -m pytest tests/test_yubikey_integration.py -v -s
+```
+
+A full pass asks for **two** button presses. Without the env var you still get the
+read-only tier (enumeration, firmware, `getInfo`) if a key is plugged in.
 
 ## Command reference
 
@@ -278,8 +379,13 @@ certificate naming Yubico. `reasons` says what failed. Run
 |---------|--------------|
 | `py -m pytest -q` | Run the test suite |
 | `uv sync --extra yubikey` | Install the optional `fido2` dependency |
-| `py -m lib.yubikey` | Show the connected YubiKey's firmware / AAGUID / `previewSign` support |
-| `py -m lib.yubikey --arkg` | Full ARKG smoke test on real hardware (touch + attestation check) |
+| `py tools/yubikey_exec.py version` | YubiKey firmware / AAGUID / `previewSign` support (no touch) |
+| `py tools/yubikey_exec.py make-credential --out cred.json` | ARKG seed key on the device (touch), saved for later |
+| `py tools/yubikey_exec.py derive --in cred.json` | Derive a public key + `arkg_args` offline (no device) |
+| `py tools/yubikey_exec.py run [--attest]` | make-credential + derive, optionally with the YubiKey check |
+| `py tools/yubikey_exec.py sign --in cred.json --message "..."` | Sign a string with the derived key (touch), verify it on the spot |
+| `py tools/yubikey_exec.py verify --in cred.json --ikm <hex> ...` | Check a signature offline (no device) |
+| `scripts\yubikey-arkg.cmd [--message "..."]` | All hardware steps in one file (run from an elevated console) |
 | `scripts\e2e-registration.cmd` | End-to-end registration check (Windows) |
 | `scripts\e2e-approval.cmd` | End-to-end approval-loop check (Windows) |
 | `py approver/registration_handler.py --get-token <key_id>` | Mint a one-time registration token (TTL 15 min) |

@@ -33,9 +33,14 @@ which is what this module speaks.
 Hardware requirement: a YubiKey on firmware 5.8.0+ advertising ``previewSign``.
 On Windows, run from an **administrator** terminal — otherwise the native WebAuthn
 path is used and the extension output never comes back (see :func:`make_credential`).
+
+This module is a library only — the command-line front end is
+``tools/yubikey_exec.py`` (the ``yubikey-exec`` utility).
 """
 from __future__ import annotations
 
+import base64
+import json
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -100,6 +105,43 @@ class ExtensionUnsupported(YubiKeyError):
 
 class AttestationError(YubiKeyError):
     """An attestation object could not be checked, or is not a YubiKey's."""
+
+
+def _is_admin() -> bool:
+    """True if this process is elevated (Windows only; False elsewhere/on error)."""
+    if os.name != "nt":
+        return False
+    try:
+        import ctypes
+
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001 - diagnostics must never raise
+        return False
+
+
+def no_authenticator_hint(*, is_windows: bool, is_admin: bool) -> str:
+    """Message for "no device found", naming the usual Windows cause when it applies.
+
+    Windows routes FIDO authenticators through the WebAuthn API and denies raw HID
+    access to unelevated processes, so ``CtapHidDevice.list_devices()`` comes back
+    empty even with a key plugged in. Reporting only "is it plugged in?" sends people
+    hunting for a hardware fault that isn't there.
+    """
+    if is_windows and not is_admin:
+        return (
+            "no FIDO authenticator found. This process is not elevated, and Windows "
+            "only exposes FIDO devices to the WebAuthn API for unelevated processes - "
+            "so the device list is empty even with a YubiKey plugged in. Re-run from an "
+            "administrator terminal (also required for previewSign output)."
+        )
+    return "no FIDO authenticator found (is the YubiKey plugged in?)"
+
+
+def no_authenticator_error() -> "NoAuthenticator":
+    """Build a :class:`NoAuthenticator` carrying the platform-aware hint."""
+    return NoAuthenticator(
+        no_authenticator_hint(is_windows=os.name == "nt", is_admin=_is_admin())
+    )
 
 
 def require_fido2() -> None:
@@ -346,7 +388,7 @@ def parse_seed_public_key(seed_cbor: bytes) -> Any:
     if not isinstance(parsed, _ARKG_P256):
         raise ExtensionUnsupported(
             f"seed public key is {type(parsed).__name__} (alg {parsed.get(3)}), not an "
-            f"ARKG-P256 key — the credential was not created with previewSign/ARKG"
+            f"ARKG-P256 key - the credential was not created with previewSign/ARKG"
         )
     return parsed
 
@@ -538,7 +580,7 @@ def verify_yubikey_attestation(
     if att_obj is None:
         which = "seed" if use_seed_attestation else "credential"
         raise AttestationError(
-            f"result carries no {which} attestation object — was make_credential() "
+            f"result carries no {which} attestation object - was make_credential() "
             f"run with attestation='none'?"
         )
     return verify_attestation_object(
@@ -548,6 +590,311 @@ def verify_yubikey_attestation(
         require_root=require_root,
         allowed_aaguids=allowed_aaguids,
     )
+
+
+# --- step 5: sign with a derived key, and verify ---------------------------------
+#: Signatures are ECDSA P-256 over SHA-256, so the digest handed to the device is 32B.
+DIGEST_BYTES = 32
+
+
+def signing_digest(*, data: bytes | None = None, digest: bytes | None = None) -> bytes:
+    """The ``tbs`` ("to be signed") value the authenticator expects — a SHA-256 digest.
+
+    Pass exactly one of ``data`` (hashed here) or ``digest`` (already hashed, e.g. you
+    only ever had the hash). The extension signs this digest *as-is*: it does not hash
+    again. That is why :func:`verify_signature` must use a pre-hashed verification when
+    given a digest — hashing twice would silently never verify.
+    """
+    if (data is None) == (digest is None):
+        raise ValueError("pass exactly one of data= or digest=")
+
+    if digest is not None:
+        if not isinstance(digest, (bytes, bytearray, memoryview)):
+            raise TypeError(f"digest must be bytes, got {type(digest).__name__}")
+        if len(digest) != DIGEST_BYTES:
+            raise ValueError(
+                f"digest must be a {DIGEST_BYTES}-byte SHA-256 hash, got {len(digest)} bytes"
+            )
+        return bytes(digest)
+
+    if not isinstance(data, (bytes, bytearray, memoryview)):
+        raise TypeError(f"data must be bytes, got {type(data).__name__}")
+    import hashlib
+
+    return hashlib.sha256(bytes(data)).digest()
+
+
+def build_sign_extension_input(
+    *, credential_id: bytes, key_handle: bytes, tbs: bytes, arkg_args_cbor: bytes
+) -> dict:
+    """The ``previewSign.signByCredential`` extension input for ``get_assertion``.
+
+    Split out as a pure function so the wire shape is testable without a device.
+    """
+    require_fido2()
+    from fido2.utils import websafe_encode
+
+    return {
+        PREVIEW_SIGN_NAME: {
+            "signByCredential": {
+                websafe_encode(bytes(credential_id)): {
+                    "keyHandle": bytes(key_handle),
+                    "tbs": bytes(tbs),
+                    "additionalArgs": bytes(arkg_args_cbor),
+                }
+            }
+        }
+    }
+
+
+def _public_key_of(key: Any) -> Any:
+    """Accept a :class:`DerivedKey` or a bare COSE key and return the COSE key."""
+    return key.derived_public_key if isinstance(key, DerivedKey) else key
+
+
+def verify_signature(
+    public_key: Any,
+    signature: bytes,
+    *,
+    data: bytes | None = None,
+    digest: bytes | None = None,
+) -> bool:
+    """Verify ``signature`` under a derived ARKG public key. Never raises.
+
+    ``public_key`` may be a :class:`DerivedKey` or the COSE key itself. Pass exactly
+    one of ``data`` (the original bytes) or ``digest`` (its SHA-256, when the original
+    is not at hand); both paths accept the same signature.
+
+    Fail-safe like :func:`lib.crypto.verify`: any malformed key, signature or input
+    returns False rather than raising, so a caller can treat "did not verify" and
+    "could not be verified" identically.
+    """
+    if (data is None) == (digest is None):
+        raise ValueError("pass exactly one of data= or digest=")
+
+    require_fido2()
+    from cryptography.exceptions import InvalidSignature
+    from cryptography.hazmat.primitives import hashes as _hashes
+    from cryptography.hazmat.primitives.asymmetric import ec as _ec
+    from cryptography.hazmat.primitives.asymmetric.utils import Prehashed
+
+    # One verification call for both paths. With a digest we must say Prehashed,
+    # otherwise cryptography would hash the digest again and nothing would ever verify
+    # (the extension signs the digest as-is — see signing_digest).
+    if data is not None:
+        payload, algorithm = data, _ec.ECDSA(_hashes.SHA256())
+    else:
+        payload, algorithm = digest, _ec.ECDSA(Prehashed(_hashes.SHA256()))
+
+    cose = _public_key_of(public_key)
+    try:
+        # Rebuild the point ourselves rather than using CoseKey.verify, which always
+        # hashes and so cannot serve the digest path.
+        crypto_key = _ec.EllipticCurvePublicNumbers(
+            int.from_bytes(bytes(cose[-2]), "big"),
+            int.from_bytes(bytes(cose[-3]), "big"),
+            _ec.SECP256R1(),
+        ).public_key()
+        crypto_key.verify(bytes(signature), bytes(payload), algorithm)
+        return True
+    except (InvalidSignature, ValueError, TypeError, KeyError, IndexError):
+        return False
+
+
+def credential_data_from_result(result: MakeCredentialResult) -> Any:
+    """The credential's ``AttestedCredentialData``, needed to build allowCredentials.
+
+    Read out of the attestation object — which is present even for
+    ``attestation="none"`` (only the statement is empty, ``authData`` is not).
+    """
+    require_fido2()
+    att_obj = result.attestation_object
+    if att_obj is None:
+        raise ExtensionUnsupported(
+            "signing needs the credential's authenticator data, which travels in the "
+            "attestation object — this result has none"
+        )
+    credential_data = att_obj.auth_data.credential_data
+    if credential_data is None:
+        raise ExtensionUnsupported("attestation object carries no credential data")
+    return credential_data
+
+
+def sign_with_derived_key(
+    result: MakeCredentialResult,
+    derived: DerivedKey,
+    *,
+    data: bytes | None = None,
+    digest: bytes | None = None,
+    rp_id: str = "example.com",
+    rp_name: str = "ai-remote",
+    origin: str | None = None,
+    user_verification: str = "discouraged",
+    device: Any = None,
+    user_interaction: Any = None,
+) -> bytes:
+    """Have the authenticator sign with the ARKG private key matching ``derived``.
+
+    Touches hardware: this is a ``getAssertion`` and the operator has to tap the key.
+    The device is handed the ``key_handle`` and the ``arkg_args`` from the derivation —
+    that pair is what lets it reconstruct the private half; nothing secret is stored
+    off-device.
+
+    Pass exactly one of ``data`` or ``digest`` (see :func:`signing_digest`). Returns the
+    raw signature bytes, verifiable with :func:`verify_signature` against
+    ``derived.derived_public_key``.
+    """
+    require_fido2()
+    from fido2.ctap2.extensions import PreviewSignExtension
+    from fido2.server import Fido2Server
+
+    tbs = signing_digest(data=data, digest=digest)
+    credential_data = credential_data_from_result(result)
+
+    client, _info = _get_client(
+        origin=origin or f"https://{rp_id}", device=device, user_interaction=user_interaction
+    )
+    server = Fido2Server({"id": rp_id, "name": rp_name})
+    request_options, _state = server.authenticate_begin(
+        [credential_data], user_verification=user_verification
+    )
+
+    response = client.get_assertion(
+        {
+            **request_options["publicKey"],
+            "extensions": build_sign_extension_input(
+                credential_id=result.credential_id,
+                key_handle=derived.key_handle,
+                tbs=tbs,
+                arkg_args_cbor=derived.arkg_args_cbor,
+            ),
+        }
+    )
+
+    assertion = response.get_response(0)
+    outputs = assertion.client_extension_results
+    sign_output = getattr(outputs, PREVIEW_SIGN_NAME, None)
+    if sign_output is None and isinstance(outputs, Mapping):
+        sign_output = outputs.get(PreviewSignExtension.NAME)
+    signature = getattr(sign_output, "signature", None)
+    if signature is None and isinstance(sign_output, Mapping):
+        signature = sign_output.get("signature")
+    if not signature:
+        raise ExtensionUnsupported(
+            f"the authenticator returned no {PREVIEW_SIGN_NAME} signature "
+            f"(extension outputs: {outputs!r}). On Windows this usually means the "
+            f"native WebAuthn path was used - retry from an administrator terminal."
+        )
+    return bytes(signature)
+
+
+# --- persisting a result between runs ------------------------------------------
+#: Schema version of the JSON written by :func:`save_result`.
+RESULT_FORMAT_VERSION = 1
+
+# Fields of MakeCredentialResult that are raw bytes and travel as base64.
+_RESULT_BYTES_FIELDS = (
+    "key_handle",
+    "seed_public_key_cbor",
+    "credential_id",
+    "aaguid",
+    "client_data_hash",
+)
+
+
+def _b64(raw: bytes) -> str:
+    return base64.b64encode(bytes(raw)).decode("ascii")
+
+
+def _unb64(text: str, *, what: str) -> bytes:
+    try:
+        return base64.b64decode(text, validate=True)
+    except Exception as e:  # noqa: BLE001
+        raise YubiKeyError(f"{what} is not valid base64: {e}") from e
+
+
+def result_to_dict(result: MakeCredentialResult) -> dict:
+    """Serialise a :class:`MakeCredentialResult` to JSON-safe primitives.
+
+    Lets ``make_credential`` (which needs the hardware and a touch) and
+    ``seed_public_key`` (which needs neither) run as separate invocations — the
+    whole point of the ``yubikey-exec make-credential`` / ``derive`` split.
+
+    ``registration_response`` is intentionally dropped: it is a live fido2 object,
+    not data, and nothing downstream needs it.
+    """
+    data: dict[str, Any] = {"v": RESULT_FORMAT_VERSION, "algorithm": result.algorithm}
+    for name in _RESULT_BYTES_FIELDS:
+        data[name] = _b64(getattr(result, name))
+    for name in ("attestation_object", "seed_attestation_object"):
+        obj = getattr(result, name)
+        # AttestationObject is a bytes subclass, so this keeps the exact CBOR.
+        data[name] = _b64(bytes(obj)) if obj is not None else None
+    return data
+
+
+def result_from_dict(data: Mapping[str, Any]) -> MakeCredentialResult:
+    """Rebuild a :class:`MakeCredentialResult` from :func:`result_to_dict` output."""
+    require_fido2()
+    from fido2.webauthn import AttestationObject
+
+    if not isinstance(data, Mapping):
+        raise YubiKeyError("saved credential must be a JSON object")
+    version = data.get("v")
+    if version != RESULT_FORMAT_VERSION:
+        raise YubiKeyError(
+            f"saved credential has format version {version!r}, expected {RESULT_FORMAT_VERSION}"
+        )
+
+    fields: dict[str, Any] = {}
+    for name in _RESULT_BYTES_FIELDS:
+        value = data.get(name)
+        if not isinstance(value, str):
+            raise YubiKeyError(f"saved credential is missing {name!r}")
+        fields[name] = _unb64(value, what=name)
+
+    algorithm = data.get("algorithm")
+    if not isinstance(algorithm, int) or isinstance(algorithm, bool):
+        raise YubiKeyError("saved credential is missing a numeric 'algorithm'")
+
+    att: dict[str, Any] = {}
+    for name in ("attestation_object", "seed_attestation_object"):
+        value = data.get(name)
+        if value is None:
+            att[name] = None
+        elif isinstance(value, str):
+            try:
+                att[name] = AttestationObject(_unb64(value, what=name))
+            except YubiKeyError:
+                raise
+            except Exception as e:  # noqa: BLE001
+                raise YubiKeyError(f"saved {name} is not a readable attestation object: {e}") from e
+        else:
+            raise YubiKeyError(f"saved {name!r} must be a base64 string or null")
+
+    return MakeCredentialResult(algorithm=algorithm, **fields, **att)
+
+
+def save_result(result: MakeCredentialResult, path: str | os.PathLike[str]) -> None:
+    """Write ``result`` to ``path`` as JSON (see :func:`result_to_dict`).
+
+    Contains no private key material — the ARKG private halves never leave the
+    authenticator — but it does identify the credential, so treat it as you would
+    any credential handle.
+    """
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(result_to_dict(result), indent=2, sort_keys=True), encoding="utf-8")
+
+
+def load_result(path: str | os.PathLike[str]) -> MakeCredentialResult:
+    """Read back a :func:`save_result` file."""
+    p = Path(path)
+    try:
+        raw = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        raise YubiKeyError(f"cannot read saved credential {p}: {e}") from e
+    return result_from_dict(raw)
 
 
 # --- device access -------------------------------------------------------------
@@ -573,7 +920,7 @@ def get_device_info(*, device: Any = None) -> DeviceInfo:
     if dev is None:
         dev = next(enumerate_devices(), None)
     if dev is None:
-        raise NoAuthenticator("no FIDO authenticator found (is the YubiKey plugged in?)")
+        raise no_authenticator_error()
     return device_info_from_info(Ctap2(dev).get_info())
 
 
@@ -595,7 +942,7 @@ def _get_client(*, origin: str, device: Any = None, user_interaction: Any = None
     collector = DefaultClientDataCollector(origin)
     devices = [device] if device is not None else list(enumerate_devices())
     if not devices:
-        raise NoAuthenticator("no FIDO authenticator found (is the YubiKey plugged in?)")
+        raise no_authenticator_error()
 
     for dev in devices:
         client = Fido2Client(
@@ -608,7 +955,7 @@ def _get_client(*, origin: str, device: Any = None, user_interaction: Any = None
             return client, client.info
 
     raise ExtensionUnsupported(
-        f"no connected authenticator advertises the {PREVIEW_SIGN_NAME!r} extension — "
+        f"no connected authenticator advertises the {PREVIEW_SIGN_NAME!r} extension - "
         f"ARKG needs YubiKey firmware {MIN_ARKG_FIRMWARE}+. On Windows, also make sure "
         f"you are running from an administrator terminal, otherwise the native WebAuthn "
         f"path is used and the extension output is dropped."
@@ -678,7 +1025,7 @@ def make_credential(
         raise ExtensionUnsupported(
             f"the authenticator returned no {PREVIEW_SIGN_NAME} generated key "
             f"(extension outputs: {outputs!r}). On Windows this usually means the "
-            f"native WebAuthn path was used — retry from an administrator terminal."
+            f"native WebAuthn path was used - retry from an administrator terminal."
         )
 
     att_obj = response.response.attestation_object
@@ -695,86 +1042,3 @@ def make_credential(
         seed_attestation_object=getattr(generated, "attestation_object", None),
     )
 
-
-# --- CLI demo ------------------------------------------------------------------
-def _main(argv: Sequence[str] | None = None) -> int:
-    """Smoke-test against real hardware: py -m lib.yubikey [--arkg]"""
-    import argparse
-
-    parser = argparse.ArgumentParser(
-        prog="py -m lib.yubikey", description="Inspect a YubiKey; optionally run the ARKG flow."
-    )
-    parser.add_argument(
-        "--arkg",
-        action="store_true",
-        help="also run makeCredential(previewSign) + derive a key (needs a touch)",
-    )
-    parser.add_argument("--ctx", default="ai-remote", help="derivation context label")
-    parser.add_argument("--rp-id", default="example.com")
-    args = parser.parse_args(argv)
-
-    try:
-        require_fido2()
-    except Fido2NotInstalled as e:
-        print(f"error: {e}")
-        return 1
-
-    try:
-        info = get_device_info()
-    except YubiKeyError as e:
-        print(f"error: {e}")
-        return 1
-
-    print(f"firmware      : {info.firmware_version}" + ("" if info.firmware_version.is_known else " (not reported)"))
-    print(f"aaguid        : {info.aaguid_hex}")
-    print(f"ctap versions : {', '.join(info.versions)}")
-    print(f"previewSign   : {info.supports_preview_sign}")
-    print(f"arkg firmware : {info.meets_arkg_firmware} (needs {MIN_ARKG_FIRMWARE}+)")
-
-    if not args.arkg:
-        return 0
-    if not info.supports_preview_sign:
-        print("error: this device does not advertise previewSign — cannot do ARKG")
-        return 1
-
-    from fido2.client import UserInteraction
-
-    class _Cli(UserInteraction):
-        def prompt_up(self):
-            print("\ntouch your YubiKey now...\n")
-
-        def request_pin(self, permissions, rd_id):
-            from getpass import getpass
-
-            return getpass("enter PIN: ")
-
-        def request_uv(self, permissions, rd_id):
-            print("user verification required")
-            return True
-
-    try:
-        result = make_credential(rp_id=args.rp_id, user_interaction=_Cli())
-    except YubiKeyError as e:
-        print(f"error: {e}")
-        return 1
-
-    print(f"\nkey_handle    : {result.key_handle.hex()}")
-    print(f"seed key alg  : {result.algorithm}")
-
-    derived = seed_public_key(result, ctx=args.ctx.encode())
-    print(f"ikm           : {derived.ikm.hex()}")
-    print(f"derived pubkey: {derived.derived_public_key}")
-    print(f"arkg_args     : {dict(derived.arkg_args)}")
-
-    check = verify_yubikey_attestation(result)
-    print(f"\nis_yubikey    : {check.is_yubikey}")
-    print(f"  cert subject: {check.certificate_subject}")
-    print(f"  trusted root: {check.trusted_root_subject}")
-    print(f"  attestation : {check.attestation_type} (fmt {check.fmt})")
-    for reason in check.reasons:
-        print(f"  ! {reason}")
-    return 0 if check.is_yubikey else 1
-
-
-if __name__ == "__main__":
-    raise SystemExit(_main())

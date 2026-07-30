@@ -179,6 +179,32 @@ def test_require_fido2_message_names_the_extra(monkeypatch):
     assert "yubikey" in str(e.value)  # the extra's name, so the hint is actionable
 
 
+# --- "no authenticator" diagnostics -------------------------------------------
+def test_no_authenticator_hint_mentions_elevation_on_unelevated_windows():
+    # Windows hands FIDO HID devices to the WebAuthn API only; an unelevated process
+    # sees an empty device list even with a key plugged in. Say so.
+    hint = yubikey.no_authenticator_hint(is_windows=True, is_admin=False)
+    assert "administrator" in hint.lower()
+
+
+def test_no_authenticator_hint_on_elevated_windows_does_not_blame_elevation():
+    hint = yubikey.no_authenticator_hint(is_windows=True, is_admin=True)
+    assert "administrator" not in hint.lower()
+    assert "plugged in" in hint.lower()
+
+
+def test_no_authenticator_hint_off_windows_is_plain():
+    hint = yubikey.no_authenticator_hint(is_windows=False, is_admin=False)
+    assert "administrator" not in hint.lower()
+    assert "plugged in" in hint.lower()
+
+
+def test_no_authenticator_error_is_the_right_type():
+    err = yubikey.no_authenticator_error()
+    assert isinstance(err, yubikey.NoAuthenticator)
+    assert str(err)
+
+
 def test_yubico_root_bundle_file_exists():
     # Shipped as data next to the module; readable without fido2.
     assert yubikey.YUBICO_ROOTS_PEM.is_file()

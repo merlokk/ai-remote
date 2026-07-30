@@ -23,7 +23,7 @@ A local sandbox for experimenting with [NATS](https://nats.io/) on Docker Deskto
 - `lib/` — reusable modules (stdlib + approved dependencies, no new ones of their own). Has an `__init__.py` (as does `approver/`) so `import lib.bus` / `from approver import protocol` resolve; the scripts additionally prepend the repo root to `sys.path` so they also work when run directly by path:
   - `lib/bus.py` — JSON request-reply over NATS (a thin async wrapper over `nats-py`). `connect()` (async context manager, yields a `Bus`, drains on exit; defaults to `nats://127.0.0.1:4222`); `Bus.request(subject, payload, timeout=)` (NATS errors → `RequestTimeout` / `NoResponders`); `Bus.reply(subject, handler, queue=)` (handler sync or async; returning `None` publishes no reply; `queue` — queue group for multiple responders, see §6); `Bus.publish(subject, payload)` (fire-and-forget); `Bus.flush()` (push buffered messages to the server — needed before draining, see `--once` below). Used by both sides of the §7 flow.
   - `lib/config.py` — versioned, atomic JSON config store (`handler-config.json` / `responder-config.json`, see §6). `Config.load(path, default=)` (deep-copies the default if the file is missing; **missing file and no `default` → `ConfigError`** — that is how `responder.py serve` fails fast on an unregistered key; a mismatched/absent `v` → `ConfigVersionError`); `Config.save()` (atomic: temp + fsync + `os.replace`, creates parent directories, stamps `v`); dict-like access (`[]`, `[]=`, `get`, `setdefault`, `in`, iteration).
-  - `lib/yubikey.py` — YubiKey / ARKG helpers over the **optional** `fido2` extra (see §8). Pure, always available: `parse_firmware_version` / `FirmwareVersion` / `MIN_ARKG_FIRMWARE`, `supports_preview_sign`, `device_info_from_info` / `DeviceInfo`, `validate_ikm` / `validate_ctx`, `load_yubico_roots`, `verify_certificate_chain`, `identify_yubico_certificate`. Needs `fido2`: `get_device_info` / `get_version`, `make_credential`, `parse_seed_public_key` / `seed_public_key`, `verify_attestation_object` / `verify_yubikey_attestation`, `enumerate_devices`. Errors: `YubiKeyError` ← `Fido2NotInstalled` / `NoAuthenticator` / `ExtensionUnsupported` / `AttestationError`. Hardware smoke test: `py -m lib.yubikey [--arkg]`.
+  - `lib/yubikey.py` — YubiKey / ARKG helpers over the **optional** `fido2` extra (see §8). Pure, always available: `parse_firmware_version` / `FirmwareVersion` / `MIN_ARKG_FIRMWARE`, `supports_preview_sign`, `device_info_from_info` / `DeviceInfo`, `validate_ikm` / `validate_ctx`, `load_yubico_roots`, `verify_certificate_chain`, `identify_yubico_certificate`. Needs `fido2`: `get_device_info` / `get_version`, `make_credential`, `parse_seed_public_key` / `seed_public_key`, `verify_attestation_object` / `verify_yubikey_attestation`, `enumerate_devices`. Persistence (so `make_credential` and derivation can be separate processes): `result_to_dict` / `result_from_dict` / `save_result` / `load_result` (`RESULT_FORMAT_VERSION`). Errors: `YubiKeyError` ← `Fido2NotInstalled` / `NoAuthenticator` / `ExtensionUnsupported` / `AttestationError`. **Library only — no CLI**; the command line lives in `tools/yubikey_exec.py`.
   - `lib/yubico-fido-ca.pem` — the three Yubico **FIDO** attestation roots (U2F Root CA 457200631, FIDO Root CA 450203556, Attestation Root 1) from `developers.yubico.com/PKI`; the trust anchors `verify_yubikey_attestation` pins to. Their sha256 fingerprints are asserted in tests, so replacing this file fails the suite.
   - `lib/crypto.py` — signatures over `cryptography`, two schemes selected by a `key_type` tag: `"ed25519"` (default) and `"p256"` (ECDSA P-256 / secp256r1 with SHA-256). Constants `ED25519` / `P256` / `KEY_TYPES` / `DEFAULT_KEY_TYPE`. API: `generate_keypair(key_type=ED25519)` / `KeyPair` (`.generate(key_type)`, `.from_private_b64(b64, key_type)`, `.private_b64()`, `.public_b64()`, `.sign(bytes)`, attr `.key_type`), `sign(private_b64, bytes, key_type=ED25519)`, `verify(public_b64, bytes, sig_b64, key_type=ED25519) -> bool`. Keys/signatures are standard base64 — ed25519: priv/pub 32B, sig 64B, deterministic; p256: priv 32B scalar, pub 33B compressed point, sig DER (variable length), randomized. The `key_type` is **not** part of the signed bytes: it is pinned by the trusted allowlist entry (bound to `key_id`), so the verifier always uses the registered scheme, never one chosen by the reply. The module is protocol-agnostic: it signs/verifies raw `bytes`, assembling the §7 "signing bytes" is up to the caller. `verify` is fail-safe: any malformed input / unknown `key_type` → `False`, never raises (matching the hook's fail-safe, §7).
 - `approver/` — the permission-approval code (NATS Request-Reply + Ed25519/ECDSA P-256, see §6/§7):
@@ -32,12 +32,15 @@ A local sandbox for experimenting with [NATS](https://nats.io/) on Docker Deskto
   - `approver/registration_handler.py` (in §6 — `registration-handler.py`; underscore so the module is importable) — the allowlist owner. `--get-token <key_id>`: mints a one-time token `<key_id>.<secret>` (TTL 15 min), writes it to `pending_tokens`, prints the token to stdout. Without the flag — listens on `registrations`: finds the token, checks `key_id`/expiry/`key_type`, writes `clients[key_id]` (with the pinned `key_type`; rotation), consumes the token (one-time, only on success). `--once` (serve mode): exit after the first **successful** registration (`flush()` first, so the ack is on the wire before draining) — used by the e2e scripts instead of a background process that must be killed. Pure functions `validate_key_id` / `add_pending_token` / `sweep_expired` (expired tokens are dropped on every mint) / `get_token` / `handle_registration` + `make_handler` (reloads the config from disk on every message + `asyncio.Lock` around the read-modify-write). Errors: `bad request|token unknown|key_id mismatch|expired`. Run: `py approver/registration_handler.py [--get-token <key_id>] [--once] [--config <path>] [--servers <url>] [--ttl <sec>]`.
   - `approver/hook.py` — the Claude Code `PermissionRequest` hook (see §7). Reads the payload from stdin, checks `hook_event_name`, sends `nats request approvals.<session_id>` (with nonce/`input_sha256`/ts), verifies the signed reply against the allowlist (`clients` from `handler-config.json`), and prints the `decision` to stdout. Pure functions `build_request` / `verify_reply` / `decision_output` + `allowlist_from_config` / `servers_from_config` / `timeout_from_config` + `request_decision` (orchestration). **Fail-safe:** any error / invalid signature / mismatch / untrusted `key_id` → exit ≠0 and ≠2 (the normal prompt); the decision is delivered only via exit-0 JSON, never a "silent allow". The NATS server(s) and the approval timeout (default 60s) are read from `handler-config.json` (`servers` / `timeout` keys); only the config-file location is external — env `AI_REMOTE_HANDLER_CONFIG` or `--config`. To activate it, wire it up **yourself** in Claude Code's `settings.json` (the repo ships no such hook entry — `.claude/settings.local.json` only holds `permissions`): a `PermissionRequest` hook, matcher `*`, command `py <repo>\approver\hook.py` (see the README for the exact snippet).
   - **Runtime configs with secrets** (`responder-config.json` — the private key; `handler-config.json` — token secrets in `pending_tokens`) are not committed to git (see `.gitignore`). Committed alongside them are `handler-config.example.json` (a usable starter: `servers`/`timeout` set, empty `clients`/`pending_tokens`) and `responder-config.example.json` (format reference — the real file is generated by `responder.py register`).
+- `tools/` — command-line utilities over `lib/` (has an `__init__.py` so they are importable / unit-testable):
+  - `tools/yubikey_exec.py` — the **`yubikey-exec`** utility (§8.5). Subcommands `version` (no touch) / `make-credential` (touch; `--out` saves the result) / `derive` (no device — derives from a saved result) / `run` (both at once). The "is it a YubiKey?" check is **opt-in**: `--attest` reports it, `--require-yubikey` also makes a negative verdict exit 2. `--json` emits one document. Pure helpers `parse_ikm` / `device_report` / `credential_report` / `derived_report` / `attestation_report` are tested without hardware. Run: `py tools/yubikey_exec.py <cmd>`.
 - `scripts/e2e-registration.cmd` — a command-file e2e of registration (§6): mints a token → brings up the handler with `--once` (it exits itself after the first successful registration) → `responder register` (with retries until ready) → checks `clients[key_id].pubkey` against the responder's `public_key`. Throwaway configs in `%TEMP%`, does not touch the repository. Requires NATS on localhost and the `py` launcher. Exit 0 = PASS, 1 = FAIL. Run: `scripts\e2e-registration.cmd`.
 - `scripts/e2e-approval.cmd` — a command-file e2e of the approval loop (§7): registers a responder → starts real `responder.py serve` in the background (the operator's `allow` is fed from a redirected answers file instead of typed) → pipes a `PermissionRequest` into real `hook.py` (retries until the responder is subscribed) → verifies the hook emits a signed `allow` decision. Exercises the actual processes / stdin-stdout / exit codes, not just in-process calls. Throwaway configs in `%TEMP%`, does not touch the repository. Requires NATS on localhost and the `py` launcher. Exit 0 = PASS, 1 = FAIL. Run: `scripts\e2e-approval.cmd`.
+- `scripts/yubikey-arkg.cmd` — a command-file run of the §8 hardware flow: `version` → `make-credential --out` (**needs a touch**) → `derive`. Not a self-checking test (a human finger is in the loop) — it drives the real `tools/yubikey_exec.py` and reports what the key returned. Args: `[--ctx LABEL] [--out FILE] [--attest]`. **Must be launched from an already-elevated console** (`sudo cmd`, then the script) — it does not elevate itself; and because elevation drops `VIRTUAL_ENV` it calls `.venv\Scripts\python.exe` **by path** rather than trusting the `py` launcher, falling back to `py` only if the venv is missing. The credential file is kept (default in `%TEMP%`) so `derive --in` can re-run later with the key unplugged. Exit 0 = all three steps OK, 1 = a step failed (each failure prints the specific likely cause). Run: `scripts\yubikey-arkg.cmd`.
 - `tests/` — pytest tests (`test_*.py`), see §1. `conftest.py`: the `requires_nats` marker (skips integration tests when NATS is unreachable) and `run_async()` (drives async bodies via `asyncio.run` — we do not add `pytest-asyncio`). `test_yubikey.py` holds the YubiKey tests that need nothing external; `test_yubikey_fido2.py` guards the rest with `pytest.importorskip("fido2")` and fakes the hardware (synthetic ARKG seed key + throwaway attestation CA), so no YubiKey is required to run the suite.
 - `pyproject.toml` — project metadata and dependencies (runtime + dev group); the source of truth for dependencies. In `[tool.pytest.ini_options]`: `pythonpath=["."]` (importing `lib.*` in a non-package project), `testpaths=["tests"]`, `--basetemp=.pytest_tmp` (the default temp root is unavailable in this sandbox).
 - `uv.lock` — locked versions (uv), committed to the repository.
-- `.gitignore` — `__pycache__/` + `*.py[cod]`, `.venv/`, `.pytest_cache/`, `.pytest_tmp/`, `.idea/`, and the two secret-bearing runtime configs `approver/responder-config.json` / `approver/handler-config.json` (their `*.example.json` siblings carry no secrets and **are** committed).
+- `.gitignore` — `__pycache__/` + `*.py[cod]`, `.venv/`, `.pytest_cache/`, `.pytest_tmp/`, `.idea/`, the two secret-bearing runtime configs `approver/responder-config.json` / `approver/handler-config.json` (their `*.example.json` siblings carry no secrets and **are** committed), and saved `yubikey-exec` credentials (`/cred.json`, `*-cred.json` — the filenames the §8.5 examples use).
 
 ## 3. Infrastructure (`nats/docker-compose.yml`)
 
@@ -268,7 +271,22 @@ A standalone library around a YubiKey's **ARKG** (Asynchronous Remote Key Genera
 
 **Why ARKG.** The authenticator holds one *seed* key pair. Whoever has the seed **public** key can derive unlimited fresh public keys **offline** — mutually unlinkable, and unlinkable to the seed — by choosing a random `ikm` plus a purpose label `ctx`. Only the authenticator can produce the matching private key, and only when handed the `key_handle` that came out of the derivation. Hence step 2 below needs no hardware and no touch.
 
-**Install:** `uv sync --extra yubikey`. **Hardware:** a YubiKey on firmware **5.8.0+** advertising `previewSign`. **On Windows: run from an administrator terminal** — otherwise `fido2` uses the native Windows WebAuthn API, which silently drops the `previewSign` output; `make_credential` raises `ExtensionUnsupported` instead of returning a half-built result.
+**Install:** `uv sync --extra yubikey`. **Hardware:** a YubiKey on firmware **5.8.0+** advertising `previewSign`.
+
+**On Windows: everything here needs an administrator terminal.** Two separate reasons, both confirmed on this machine:
+
+1. Windows hands FIDO authenticators to the WebAuthn API and denies raw HID access to unelevated processes, so `CtapHidDevice.list_devices()` returns an **empty list even with a key plugged in**. `get_device_info` / `get_version` / `yubikey-exec version` therefore fail with `NoAuthenticator` before any ARKG work starts. The message says so explicitly: `no_authenticator_hint` checks `IsUserAnAdmin()` and names elevation as the likely cause instead of asking "is it plugged in?".
+2. Even where a client can be built, the native WebAuthn path silently drops the `previewSign` output; `make_credential` raises `ExtensionUnsupported` rather than returning a half-built result.
+
+**Elevating loses the virtualenv.** `py` picks the project `.venv` only because `VIRTUAL_ENV` is set in the shell; `sudo` (and "Run as administrator") starts with a fresh environment, so `py` falls back to the global interpreter and the run dies with `ModuleNotFoundError: No module named 'cryptography'`. Under elevation, name the venv interpreter explicitly:
+
+```
+sudo E:\projects\ai-remote\.venv\Scripts\python.exe E:\projects\ai-remote\tools\yubikey_exec.py version
+```
+
+The same applies to elevated pytest runs (§8.6) — use `.venv\Scripts\python.exe -m pytest`, not `py -m pytest`.
+
+**Console output stays ASCII** in printed strings (error messages, argparse help) — the Windows console codepage renders `—` as `?`. Docstrings and these docs keep normal typography.
 
 ### 8.1 The four entry points
 
@@ -278,11 +296,22 @@ A standalone library around a YubiKey's **ARKG** (Asynchronous Remote Key Genera
 | 1 | `make_credential(...)` | touch (maybe PIN) | `MakeCredentialResult` — `key_handle`, `seed_public_key_cbor`, `credential_id`, `aaguid`, `client_data_hash`, `attestation_object`, `seed_attestation_object` |
 | 2 | `seed_public_key(result, ctx=..., ikm=None)` | **no** | `DerivedKey` — `derived_public_key` (+`_cbor`), `arkg_args` (+`_cbor`), `ikm`, `ctx`, `key_handle` |
 | 3 | `verify_yubikey_attestation(result)` | **no** | `AttestationCheck` — `is_yubikey` plus `reasons` explaining a False |
+| 4 | `sign_with_derived_key(result, derived, data=/digest=)` | second touch | raw signature `bytes` |
+| 5 | `verify_signature(derived, sig, data=/digest=)` | **no** | `bool`, fail-safe |
 
 - **Versions.** CTAP2 reports `firmwareVersion` packed as `major<<16 | minor<<8 | patch` (5.8.0 = `0x050800`). `parse_firmware_version` decodes it; `raw == 0` means the device did not report one → `is_known is False`. `FirmwareVersion` orders by major/minor/patch (`raw` is excluded from comparison), so `v >= MIN_ARKG_FIRMWARE` is the ARKG floor check.
 - **`make_credential`** asks for `algorithms: [ESP256_SPLIT_ARKG_PLACEHOLDER]` under `previewSign.generateKey`, and defaults to `attestation="direct"` so step 3 has a certificate chain to check.
 - **`seed_public_key`** is the offline half: it parses the seed key (must be an ARKG-P256 key, else `ExtensionUnsupported`) and returns the derived public key together with the COSE_Sign_Args (`{3: ESP256_SPLIT_ARKG_PLACEHOLDER, -1: key_handle_blob, -2: ctx}`) that the authenticator needs later. `ikm` defaults to 32 fresh random bytes and **must** be ≥ 32 bytes (`MIN_IKM_BYTES`) — the ARKG draft's 256-bit entropy recommendation is enforced, not suggested, because a predictable `ikm` destroys unlinkability. Same `(ikm, ctx)` reproduces the same key; either differing gives a different one.
-- **To sign later** (not wrapped by this module — see the Yubico example): `get_assertion` with `previewSign.signByCredential[<cred>] = {keyHandle, tbs: sha256(msg), additionalArgs: cbor(arkg_args)}`, then verify the returned signature with `derived_public_key`.
+- **Signing** (`sign_with_derived_key`) is a `getAssertion` with `previewSign.signByCredential[<cred>] = {keyHandle, tbs, additionalArgs: cbor(arkg_args)}` — a second touch. The device reconstructs the private half from `key_handle` + `arkg_args`; nothing secret is stored off-device. Verify with `verify_signature` against `derived_public_key`.
+
+**The `tbs` hashing rule — easy to get wrong.** `tbs` is the **SHA-256 digest**, and the authenticator signs that digest **as-is** (it does not hash again). Meanwhile `ESP256.verify(message, sig)` hashes `message` internally. So:
+
+| You have | `signing_digest(...)` | `verify_signature(...)` | Under the hood |
+|----------|----------------------|-------------------------|----------------|
+| the data | `data=msg` → `sha256(msg)` | `data=msg` | `ECDSA(SHA256)` |
+| only its hash | `digest=h` (must be 32 B) | `digest=h` | `ECDSA(Prehashed(SHA256))` |
+
+Both accept the *same* signature — a test asserts that agreement. Verifying a digest with plain `ECDSA(SHA256)` would hash it a second time and never match, which is why `verify_signature` rebuilds the EC point itself instead of calling `CoseKey.verify` (that one always hashes). `verify_signature` is fail-safe like `lib/crypto.verify`: malformed key/signature/input → `False`, never raises.
 
 ### 8.2 "Is it a YubiKey?"
 
@@ -304,4 +333,49 @@ Yubico's [`example_arkg.py`](https://github.com/YubicoLabs/build-with-us/blob/ma
 
 ### 8.4 Testing without hardware
 
-`tests/test_yubikey_fido2.py` needs no YubiKey: the ARKG seed key is assembled synthetically from two P-256 pairs in exactly the COSE shape the authenticator returns (real derivation, real curve math), and attestation runs against a throwaway root→EE CA generated in the test. What *cannot* be covered without hardware: `make_credential` itself and a full sign/verify round-trip (`fido2` exposes only ARKG `derive_public_key` — the private half lives in the authenticator). Use `py -m lib.yubikey --arkg` for that against a real key.
+`tests/test_yubikey_fido2.py` needs no YubiKey: the ARKG seed key is assembled synthetically from two P-256 pairs in exactly the COSE shape the authenticator returns (real derivation, real curve math), and attestation runs against a throwaway root→EE CA generated in the test. `tests/test_yubikey_exec.py` covers the utility, including the whole `derive` subcommand (it needs no device by design). What *cannot* be covered this way: `make_credential` itself and a full sign/verify round-trip (`fido2` exposes only ARKG `derive_public_key` — the private half lives in the authenticator) — that is what §8.6 is for.
+
+### 8.5 The `yubikey-exec` utility (`tools/yubikey_exec.py`)
+
+```
+py tools/yubikey_exec.py version                                   # no touch
+py tools/yubikey_exec.py make-credential --out cred.json           # touch
+py tools/yubikey_exec.py derive --in cred.json --ctx my-purpose    # no device
+py tools/yubikey_exec.py run --ctx my-purpose --attest             # both, + the check
+py tools/yubikey_exec.py sign --in cred.json --message "text"      # derive + sign + verify
+py tools/yubikey_exec.py verify --in cred.json --ikm <hex> \
+    --message "text" --signature <hex>                             # no device
+```
+
+- `version` prints firmware / AAGUID / CTAP versions / `previewSign` / `meets_arkg_firmware`.
+- `make-credential --out FILE` writes the result as JSON (`save_result`) so `derive` can run **later, in another process, with the key unplugged** — that is the point of splitting them. The file holds no private key material (the ARKG private halves never leave the device) but it does identify the credential.
+- `derive` is the offline half: `--ctx` labels the purpose, `--ikm <hex>` reproduces a specific derivation (otherwise 32 random bytes). It prints the derived public key (x/y + COSE CBOR) and the `arkg_args` (alg / key-handle blob / ctx + CBOR).
+- `sign` derives (same `--ctx`/`--ikm` flags) then signs with the derived key and **verifies immediately** — a signature the derived public key cannot check is useless, and this is the only moment both halves are in hand. What gets signed is a mutually exclusive, required pair: `--message STRING` (UTF-8, hashed here) or `--digest <hex>` (a ready-made 32-byte SHA-256). Prints the signature hex; **note the `ikm` it prints** — you need it to verify later.
+- `verify` is fully offline: it re-derives the public key from the saved credential plus `--ctx`/`--ikm` and checks `--signature <hex>`. `--ikm` is **required** here (a random one would produce a different key), and the error says so.
+- `run` is `make-credential` followed by `derive`, plus signing when `--message`/`--digest` is given (optional there, unlike on `sign`).
+- Exit code `3` = the signature did not verify. That is distinct from `1` (error) so a script can tell "the run broke" from "the key produced a bad signature".
+- `scripts\yubikey-arkg.cmd` wraps `version` → `make-credential --out` → `derive` as a single command file for hardware runs, resolving the venv interpreter itself (see §2). With `--message STRING` the third step becomes `sign` instead (derive + sign + verify), costing a **second touch**; it maps exit 3 to its own failure label so a bad signature is not reported as a missed touch.
+- **The YubiKey check is optional and off by default** on every subcommand that could do it: `--attest` runs and reports it, `--require-yubikey` additionally turns a negative verdict into exit 2. `--roots PEM` overrides the trust anchors, `--no-require-root` drops chain pinning (dev keys), `--seed-attestation` checks the seed key's own attestation instead of the credential's. On `derive`, the check is silently skipped when the saved credential carries no attestation object.
+- Exit codes: `0` ok, `1` error (no key / no `fido2` / bad input — including a `--ikm` shorter than 32 bytes), `2` "not a YubiKey" while `--require-yubikey`, `3` signature did not verify.
+
+### 8.6 Integration tests with a real key (`tests/test_yubikey_integration.py`)
+
+Optional and skipped by default, in three independent tiers (markers in `tests/conftest.py`):
+
+| Marker | Skips unless | Covers |
+|--------|--------------|--------|
+| `requires_yubikey` | a key is plugged in and `getInfo` works | enumeration, `get_version`, `DeviceInfo` coherence |
+| `requires_preview_sign` | that key advertises `previewSign` | gate for everything ARKG |
+| `requires_yubikey_touch` | `AI_REMOTE_YUBIKEY_TOUCH=1` | `make_credential`, real derivation, save/load, attestation, real sign/verify (data **and** digest paths), `yubikey-exec run` / `sign` → offline `verify` |
+
+The touch tier is env-gated **on purpose**: an unattended `py -m pytest` must never block waiting for a finger. The device probe itself (`_probe_yubikey` in `conftest.py`) needs no PIN and no touch, runs once at collection, and turns any failure into a skip reason rather than a collection error.
+
+Run them (Windows: **administrator** terminal):
+
+```powershell
+$env:AI_REMOTE_YUBIKEY_TOUCH="1"; py -m pytest tests/test_yubikey_integration.py -v -s
+```
+
+`-s` is required, otherwise pytest captures the "touch your YubiKey now" prompt and the run looks hung. Most touch-tier tests share one module-scoped `live_credential` fixture, but each signature costs its own press, so a full pass asks for **several** — the prompts say which step is asking.
+
+**What still cannot be tested without hardware:** a *positive* sign→verify round trip. `fido2` exposes only ARKG `derive_public_key`; the private half exists solely inside the authenticator, so no derived-key signature can be manufactured offline. The unit tests therefore cover `verify_signature` with a stand-in ESP256 pair whose private half we do hold (identical verification path), and assert the negative cases for real derived keys. The positive round trip lives in §8.6.
