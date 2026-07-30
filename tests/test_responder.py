@@ -159,6 +159,89 @@ def test_build_reply_rejects_bad_behavior():
         )
 
 
+def test_build_signed_reply_hands_the_exact_signing_bytes_to_the_signer():
+    """The seam the YubiKey responder plugs into: a signer over the §7 bytes."""
+    seen = {}
+
+    def sign(message: bytes) -> str:
+        seen["message"] = message
+        return "c2lnbmF0dXJl"
+
+    req = _request()
+    reply = responder.build_signed_reply(
+        req, behavior="allow", key_id="approver-1", sign=sign, reason="ok"
+    )
+
+    assert reply["sig"] == "c2lnbmF0dXJl"
+    assert seen["message"] == protocol.signing_bytes(
+        v=req["v"],
+        session_id=req["session_id"],
+        nonce=req["nonce"],
+        tool_name=req["tool_name"],
+        input_sha256=req["input_sha256"],
+        behavior="allow",
+        updated_input_sha256="",
+        ts=req["ts"],
+        reason="ok",
+    )
+
+
+def test_build_signed_reply_covers_updated_input():
+    seen = {}
+
+    def sign(message: bytes) -> str:
+        seen["message"] = message
+        return ""
+
+    responder.build_signed_reply(
+        _request(),
+        behavior="allow",
+        key_id="k",
+        sign=sign,
+        updated_input={"command": "npm ci"},
+    )
+    # The hash of updated_input sits in the signed bytes, not on the wire (§7).
+    assert protocol.canonical_sha256({"command": "npm ci"}).encode() in seen["message"]
+
+
+# --- approval handler ----------------------------------------------------------
+def test_make_approval_handler_signs_the_operator_decision():
+    kp = crypto.generate_keypair()
+    req = _request()
+    handler = responder.make_approval_handler(
+        key_id="approver-1",
+        sign=lambda sb: crypto.sign(kp.private_b64(), sb),
+        prompt=lambda request: ("allow", "ok", None),
+    )
+
+    reply = run_async(handler(req))
+
+    assert reply["behavior"] == "allow"
+    assert _hook_verifies(req, reply, kp.public_b64())
+
+
+def test_make_approval_handler_returns_none_when_the_operator_skips():
+    handler = responder.make_approval_handler(
+        key_id="k", sign=lambda sb: "unused", prompt=lambda request: None
+    )
+    # No reply published — the hook times out and falls back to the prompt (§7).
+    assert run_async(handler(_request())) is None
+
+
+def test_make_approval_handler_returns_none_when_signing_fails(capsys):
+    def sign(sb):
+        raise RuntimeError("device unplugged")
+
+    handler = responder.make_approval_handler(
+        key_id="k", sign=sign, prompt=lambda request: ("allow", "", None)
+    )
+
+    # Fail-safe: a signer that cannot sign must not crash the responder loop, and
+    # must not answer either — silence sends the hook back to the normal prompt.
+    assert run_async(handler(_request())) is None
+    assert "device unplugged" in capsys.readouterr().err
+
+
 def test_build_reply_tamper_breaks_verification():
     kp = crypto.generate_keypair()
     req = _request()

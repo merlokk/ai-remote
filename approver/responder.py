@@ -23,6 +23,7 @@ import asyncio
 import json
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 # Non-package project: make repo-root imports (`lib`, `approver`) work when this
@@ -69,24 +70,28 @@ def build_registration_request(
     }
 
 
-def build_reply(
+def build_signed_reply(
     request: dict,
     *,
     behavior: str,
     key_id: str,
-    private_b64: str,
-    key_type: str = crypto.DEFAULT_KEY_TYPE,
+    sign: Callable[[bytes], str],
     reason: str = "",
     updated_input: dict | None = None,
 ) -> dict:
-    """Build a signed reply for ``request`` (§7).
+    """Assemble a reply for ``request`` and have ``sign`` sign it (§7).
 
     Echoes ``v/session_id/tool_name/input_sha256/nonce/ts`` from the request; the
     responder contributes ``behavior/reason/updated_input``. ``updated_input`` is
     honored only on ``allow``. The signature covers the recomputed
-    ``updated_input_sha256`` — the hash itself is not sent on the wire. ``key_type``
-    selects the signing scheme; the hook picks it up from the allowlist by ``key_id``
-    (it is not carried in the reply), so it is not part of the signed bytes.
+    ``updated_input_sha256`` — the hash itself is not sent on the wire.
+
+    ``sign`` receives the §7 signing bytes and returns the base64 signature. That
+    indirection is the seam between key custodians: a local software key signs via
+    :func:`lib.crypto.sign` (see :func:`build_reply`), while
+    ``approver/responder_yubikey.py`` hands the same bytes to a YubiKey. The wire
+    format is identical either way, so ``hook.py`` needs no knowledge of which one
+    answered.
     """
     if behavior not in _BEHAVIORS:
         raise ValueError(f"behavior must be one of {_BEHAVIORS}, got {behavior!r}")
@@ -94,18 +99,19 @@ def build_reply(
     apply_update = behavior == "allow" and updated_input is not None
     updated_input_sha256 = protocol.canonical_sha256(updated_input) if apply_update else ""
 
-    sb = protocol.signing_bytes(
-        v=request["v"],
-        session_id=request["session_id"],
-        nonce=request["nonce"],
-        tool_name=request["tool_name"],
-        input_sha256=request["input_sha256"],
-        behavior=behavior,
-        updated_input_sha256=updated_input_sha256,
-        ts=request["ts"],
-        reason=reason,
+    sig = sign(
+        protocol.signing_bytes(
+            v=request["v"],
+            session_id=request["session_id"],
+            nonce=request["nonce"],
+            tool_name=request["tool_name"],
+            input_sha256=request["input_sha256"],
+            behavior=behavior,
+            updated_input_sha256=updated_input_sha256,
+            ts=request["ts"],
+            reason=reason,
+        )
     )
-    sig = crypto.sign(private_b64, sb, key_type)
 
     reply = {
         "v": request["v"],
@@ -122,6 +128,33 @@ def build_reply(
     if apply_update:
         reply["updated_input"] = updated_input
     return reply
+
+
+def build_reply(
+    request: dict,
+    *,
+    behavior: str,
+    key_id: str,
+    private_b64: str,
+    key_type: str = crypto.DEFAULT_KEY_TYPE,
+    reason: str = "",
+    updated_input: dict | None = None,
+) -> dict:
+    """Build a reply signed with a local software key (§7).
+
+    Thin wrapper over :func:`build_signed_reply` whose signer is
+    :func:`lib.crypto.sign`. ``key_type`` selects the scheme; the hook picks it up
+    from the allowlist by ``key_id`` (it is not carried in the reply), so it is not
+    part of the signed bytes.
+    """
+    return build_signed_reply(
+        request,
+        behavior=behavior,
+        key_id=key_id,
+        sign=lambda sb: crypto.sign(private_b64, sb, key_type),
+        reason=reason,
+        updated_input=updated_input,
+    )
 
 
 # --- commands ------------------------------------------------------------------
@@ -187,6 +220,47 @@ def prompt_operator(request: dict):
     return None
 
 
+def make_approval_handler(
+    *, key_id: str, sign: Callable[[bytes], str], prompt=prompt_operator
+):
+    """Build the ``approvals.*`` handler: ask the operator, sign the decision, reply.
+
+    Prompting and signing both happen in a worker thread — they block for as long
+    as a human takes (and, for a YubiKey, for as long as the touch takes), and the
+    event loop has to stay free for NATS heartbeats.
+
+    Returns ``None`` (no reply published) when the operator skips **and** when
+    signing fails: a signer that cannot sign — key unplugged, touch timed out — must
+    neither crash the responder loop nor answer, so the hook falls back to the
+    interactive prompt (§7 fail-safe).
+    """
+
+    def decide(request: dict):
+        decision = prompt(request)
+        if not decision:
+            return None
+        behavior, reason, updated_input = decision
+        try:
+            return build_signed_reply(
+                request,
+                behavior=behavior,
+                key_id=key_id,
+                sign=sign,
+                reason=reason,
+                updated_input=updated_input,
+            )
+        except Exception as e:  # noqa: BLE001 — any signing failure → stay silent
+            # ASCII only: this can surface on a Windows console with a legacy codepage.
+            print(f"could not sign the decision: {e}", file=sys.stderr)
+            print("no reply sent - Claude Code falls back to its own prompt", file=sys.stderr)
+            return None
+
+    async def handler(request: dict):
+        return await asyncio.to_thread(decide, request)
+
+    return handler
+
+
 async def serve(
     *,
     config_path: Path | str = DEFAULT_CONFIG,
@@ -206,21 +280,11 @@ async def serve(
     # Older configs predate key_type; default to Ed25519 to stay backward compatible.
     key_type = cfg.get("key_type", crypto.DEFAULT_KEY_TYPE)
 
-    async def handler(request: dict):
-        # Run the blocking prompt off the event loop so NATS keeps its heartbeats.
-        decision = await asyncio.to_thread(prompt, request)
-        if not decision:
-            return None
-        behavior, reason, updated_input = decision
-        return build_reply(
-            request,
-            behavior=behavior,
-            key_id=key_id,
-            private_b64=private_b64,
-            key_type=key_type,
-            reason=reason,
-            updated_input=updated_input,
-        )
+    handler = make_approval_handler(
+        key_id=key_id,
+        sign=lambda sb: crypto.sign(private_b64, sb, key_type),
+        prompt=prompt,
+    )
 
     async with bus.connect(servers) as b:
         await b.reply(subject, handler, queue=queue)
