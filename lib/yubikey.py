@@ -42,6 +42,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Mapping, Sequence
@@ -723,6 +724,36 @@ def _public_key_of(key: Any) -> Any:
     return key.derived_public_key if isinstance(key, DerivedKey) else key
 
 
+def p256_public_b64(public_key: Any) -> str:
+    """A derived ARKG public key as the base64 point ``lib.crypto``'s ``p256`` speaks.
+
+    Takes a :class:`DerivedKey` or the COSE key itself and returns the 33-byte
+    compressed SEC1 point, base64-encoded — exactly the encoding
+    :func:`lib.crypto.verify` expects for ``key_type="p256"``. That makes a derived
+    key registrable through the §6 allowlist and verifiable by ``hook.py`` with no
+    YubiKey-specific code on the verifying side: the authenticator's signature is
+    ECDSA-P256 over SHA-256 in DER, which is the same scheme.
+
+    Needs only ``cryptography`` (COSE coordinates in, base64 out), so it works
+    without the ``fido2`` extra. Raises :class:`YubiKeyError` for anything that is
+    not a usable P-256 public key — registration must fail loudly rather than
+    publish a key no verifier could ever match.
+    """
+    from cryptography.hazmat.primitives.asymmetric import ec as _ec
+    from cryptography.hazmat.primitives.serialization import PublicFormat
+
+    cose = _public_key_of(public_key)
+    try:
+        point = _ec.EllipticCurvePublicNumbers(
+            int.from_bytes(bytes(cose[-2]), "big"),
+            int.from_bytes(bytes(cose[-3]), "big"),
+            _ec.SECP256R1(),
+        ).public_key()
+    except (KeyError, IndexError, TypeError, ValueError) as e:
+        raise YubiKeyError(f"not a usable P-256 public key: {e}") from e
+    return _b64(point.public_bytes(Encoding.X962, PublicFormat.CompressedPoint))
+
+
 def verify_signature(
     public_key: Any,
     signature: bytes,
@@ -966,6 +997,33 @@ def load_result(path: str | os.PathLike[str]) -> MakeCredentialResult:
     except (OSError, json.JSONDecodeError) as e:
         raise YubiKeyError(f"cannot read saved credential {p}: {e}") from e
     return result_from_dict(raw)
+
+
+# --- talking to the human in front of the key ----------------------------------
+def console_user_interaction(*, touch_message: str = "\n>>> touch your YubiKey now <<<\n"):
+    """A ``fido2.client.UserInteraction`` that prompts for touch / PIN on the console.
+
+    Shared by both front ends (``tools/yubikey_exec.py`` and
+    ``approver/responder_yubikey.py``) so a touch is announced the same way
+    everywhere. Prompts go to stderr, leaving stdout free for machine-readable output.
+    """
+    require_fido2()
+    from fido2.client import UserInteraction
+
+    class _Console(UserInteraction):
+        def prompt_up(self):
+            print(touch_message, file=sys.stderr)
+
+        def request_pin(self, permissions, rd_id):
+            from getpass import getpass
+
+            return getpass("enter YubiKey PIN: ")
+
+        def request_uv(self, permissions, rd_id):
+            print("user verification required", file=sys.stderr)
+            return True
+
+    return _Console()
 
 
 # --- device access -------------------------------------------------------------

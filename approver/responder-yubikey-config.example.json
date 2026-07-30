@@ -1,0 +1,20 @@
+{
+  "v": 1,
+  "key_id": "approver-yk",
+  "key_type": "p256",
+  "public_key": "<base64 33B compressed P-256 point — the ARKG-derived key registered in the allowlist>",
+  "ctx": "ai-remote-approvals",
+  "ikm": "<64 hex chars = the 32 bytes of input keying material the key was derived from>",
+  "rp_id": "example.com",
+  "credential": {
+    "v": 1,
+    "algorithm": -65539,
+    "key_handle": "<base64 — handed back to the YubiKey so it can rebuild the private half>",
+    "seed_public_key_cbor": "<base64 CBOR COSE ARKG seed public key>",
+    "credential_id": "<base64>",
+    "aaguid": "<base64, 16 bytes>",
+    "client_data_hash": "<base64, 32 bytes>",
+    "attestation_object": "<base64 CBOR, or null when made with attestation='none'>",
+    "seed_attestation_object": "<base64 CBOR, or null>"
+  }
+}

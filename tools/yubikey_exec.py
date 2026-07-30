@@ -177,23 +177,12 @@ def attestation_report(check: yubikey.AttestationCheck) -> dict:
 
 # --- console interaction -------------------------------------------------------
 def _user_interaction():
-    """A fido2 UserInteraction that prompts on the console for touch / PIN."""
-    from fido2.client import UserInteraction
+    """A fido2 UserInteraction that prompts on the console for touch / PIN.
 
-    class _Cli(UserInteraction):
-        def prompt_up(self):
-            print("\n>>> touch your YubiKey now <<<\n", file=sys.stderr)
-
-        def request_pin(self, permissions, rd_id):
-            from getpass import getpass
-
-            return getpass("enter YubiKey PIN: ")
-
-        def request_uv(self, permissions, rd_id):
-            print("user verification required", file=sys.stderr)
-            return True
-
-    return _Cli()
+    Lives in the library so both front ends (this and
+    ``approver/responder_yubikey.py``) announce a touch the same way.
+    """
+    return yubikey.console_user_interaction()
 
 
 def _print(report: dict, *, as_json: bool, title: str | None = None) -> None:

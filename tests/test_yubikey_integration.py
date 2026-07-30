@@ -26,6 +26,7 @@ from tests.conftest import (  # noqa: E402
     requires_preview_sign,
     requires_yubikey,
     requires_yubikey_touch,
+    run_async,
 )
 
 
@@ -251,6 +252,58 @@ def test_yubikey_exec_run_end_to_end(tmp_path, capsys):
 
     # And the saved file must derive again with no device involved.
     assert yubikey_exec.main(["derive", "--in", str(out)]) == yubikey_exec.EXIT_OK
+
+
+@requires_yubikey
+@requires_preview_sign
+@requires_yubikey_touch
+def test_yubikey_responder_reply_is_accepted_by_the_hook(live_credential, capsys):
+    """The whole §7 chain on real silicon: the YubiKey signs a decision, hook.py trusts it.
+
+    This is the round trip nothing else can cover — the ARKG private half exists only
+    inside the authenticator (§8.4), so no offline stand-in proves that what the device
+    actually emits passes ``hook.verify_reply``.
+    """
+    from approver import hook, responder, responder_yubikey
+    from lib import crypto
+
+    # What `register` would have produced, minus the bus.
+    derived = yubikey.seed_public_key(live_credential, ctx=b"approvals-integration")
+    cfg = responder_yubikey.config_from_derivation("approver-yk", live_credential, derived)
+    assert cfg["key_type"] == crypto.P256
+
+    # ... and what `serve` rebuilds from that config alone, with no device involved.
+    result, restored = responder_yubikey.derived_from_config(cfg)
+
+    payload = {
+        "hook_event_name": "PermissionRequest",
+        "session_id": "yubikey-integration",
+        "tool_name": "Bash",
+        "tool_input": {"command": "echo hello"},
+        "permission_mode": "default",
+        "cwd": ".",
+    }
+    request = hook.build_request(payload, nonce="bm9uY2UtaW50ZWdyYXRpb24=", ts=1737345600)
+    handler = responder.make_approval_handler(
+        key_id="approver-yk",
+        sign=responder_yubikey.device_signer(
+            result, restored, user_interaction=yubikey.console_user_interaction()
+        ),
+        prompt=lambda req: ("allow", "approved on the key", None),
+    )
+
+    print("\n\n=== signing an approval decision: touch your YubiKey ===")
+    with capsys.disabled():
+        reply = run_async(handler(request))
+
+    assert reply is not None, "the responder produced no reply (missed touch?)"
+    allowlist = {"approver-yk": {"pubkey": cfg["public_key"], "key_type": crypto.P256}}
+    assert hook.verify_reply(request, reply, allowlist) == (True, "ok")
+    assert hook.decision_output(reply)["hookSpecificOutput"]["decision"]["behavior"] == "allow"
+
+    # Same signature, flipped decision — the hook must reject it (no extra touch).
+    reply["behavior"] = "deny"
+    assert hook.verify_reply(request, reply, allowlist)[0] is False
 
 
 @requires_yubikey

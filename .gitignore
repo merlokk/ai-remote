@@ -18,6 +18,10 @@ __pycache__/
 approver/responder-config.json
 approver/handler-config.json
 
+# YubiKey responder config. Holds no private key (the ARKG private half never leaves
+# the device), but it identifies a credential and links the derived key to it.
+approver/responder-yubikey-config.json
+
 # Saved yubikey-exec credentials (`make-credential --out`). No private key material
 # — the ARKG private halves never leave the device — but they identify a credential,
 # and the docs use these names as examples, so keep them out of commits by default.

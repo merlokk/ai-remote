@@ -158,6 +158,76 @@ def test_validate_ctx_accepts_bytes():
     yubikey.validate_ctx(b"my-ctx")
 
 
+# --- derived key -> lib.crypto p256 public key (pure) --------------------------
+# Only cryptography is involved (COSE coordinates in, base64 point out), so this
+# runs without the fido2 extra. It is the seam the YubiKey responder registers
+# through: the allowlist entry the hook verifies against is exactly this string.
+def _p256_pair():
+    from cryptography.hazmat.primitives.asymmetric import ec
+
+    priv = ec.generate_private_key(ec.SECP256R1())
+    numbers = priv.public_key().public_numbers()
+    cose = {1: 2, 3: -9, -1: 1, -2: numbers.x.to_bytes(32, "big"), -3: numbers.y.to_bytes(32, "big")}
+    return priv, cose
+
+
+def test_p256_public_b64_is_a_33_byte_compressed_point():
+    import base64
+
+    _, cose = _p256_pair()
+    raw = base64.b64decode(yubikey.p256_public_b64(cose), validate=True)
+    assert len(raw) == 33
+    assert raw[0] in (0x02, 0x03)
+
+
+def test_p256_public_b64_matches_lib_crypto_for_the_same_key():
+    from lib import crypto
+
+    priv, cose = _p256_pair()
+    assert yubikey.p256_public_b64(cose) == crypto.KeyPair(priv, crypto.P256).public_b64()
+
+
+def test_lib_crypto_verifies_a_signature_against_the_converted_key():
+    # The whole point: a signature made by the P-256 key behind a COSE/ARKG public
+    # key must verify through lib.crypto's "p256" scheme — that is what hook.py does.
+    from lib import crypto
+
+    priv, cose = _p256_pair()
+    message = b"signing bytes"
+    sig = crypto.KeyPair(priv, crypto.P256).sign(message)
+    assert crypto.verify(yubikey.p256_public_b64(cose), message, sig, crypto.P256) is True
+
+
+def test_p256_public_b64_accepts_a_derived_key_object():
+    _, cose = _p256_pair()
+    derived = yubikey.DerivedKey(
+        derived_public_key=cose,
+        derived_public_key_cbor=b"",
+        arkg_args={},
+        arkg_args_cbor=b"",
+        ikm=b"\x01" * 32,
+        ctx=b"ctx",
+        key_handle=b"kh",
+        seed_public_key=None,
+    )
+    assert yubikey.p256_public_b64(derived) == yubikey.p256_public_b64(cose)
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {},  # no coordinates at all
+        {-2: b"\x01" * 32},  # x only
+        {-2: b"\x01" * 32, -3: b"\x02" * 32},  # not a point on the curve
+        {-2: "not bytes", -3: "not bytes"},
+    ],
+)
+def test_p256_public_b64_rejects_a_malformed_key(bad):
+    # Registration must fail loudly rather than publish a key nothing can verify.
+    with pytest.raises(yubikey.YubiKeyError):
+        yubikey.p256_public_b64(bad)
+
+
 # --- optional-dependency contract ----------------------------------------------
 def test_module_exposes_availability_flag():
     assert isinstance(yubikey.FIDO2_AVAILABLE, bool)

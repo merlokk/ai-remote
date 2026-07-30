@@ -38,20 +38,23 @@ Claude Code ──stdin──▶ hook.py ──approvals.<sid>──▶ NATS ─
                           (hook verifies sig against the allowlist)
 
 registration_handler.py  ──▶ owns handler-config.json (the allowlist `clients` + one-time `pending_tokens`)
+responder_yubikey.py     ──▶ drop-in alternative responder: the key lives on a YubiKey (ARKG P-256),
+                             so there is no private key on disk and each decision costs a touch
 ```
 
 | Component | Role |
 |-----------|------|
 | `approver/hook.py` | Claude Code `PermissionRequest` hook. Sends the request, verifies the signed reply against the allowlist, prints the decision. Fail-safe. |
 | `approver/responder.py` | The human side. `register` bootstraps a key; `serve` prompts the operator and signs each decision. |
+| `approver/responder_yubikey.py` | The same, with the key on a **YubiKey**: no private key on disk, and every decision costs a touch. Needs the `yubikey` extra. |
 | `approver/registration_handler.py` | Owns the allowlist (`handler-config.json`). Mints one-time tokens and registers responder public keys. |
 | `approver/protocol.py` | Shared wire-format: canonical JSON, hashes, and the exact "signing bytes" both sides assemble identically. |
 | `lib/bus.py` | Thin async JSON request-reply wrapper over `nats-py`. |
 | `lib/config.py` | Versioned, atomic JSON config store. |
 | `lib/crypto.py` | Ed25519 / ECDSA P-256 keygen / sign / verify (fail-safe verify; scheme picked by `key_type`). |
-| `lib/yubikey.py` | **Optional, standalone:** YubiKey ARKG (`previewSign`) — version, `makeCredential`, offline key derivation, "is it a YubiKey?" attestation. Needs the `yubikey` extra. |
+| `lib/yubikey.py` | **Optional:** YubiKey ARKG (`previewSign`) — version, `makeCredential`, offline key derivation, signing, "is it a YubiKey?" attestation. Needs the `yubikey` extra. |
 | `nats/` | `docker compose` sandbox: NATS + JetStream, a web dashboard, and `nats-box` (the `nats` CLI). |
-| `scripts/` | Windows command-file end-to-end checks: `e2e-registration.cmd` (§6 flow) and `e2e-approval.cmd` (§7 flow). |
+| `scripts/` | Windows command-file end-to-end checks: `e2e-registration.cmd` (§6), `e2e-approval.cmd` (§7), plus the hardware runs `yubikey-arkg.cmd` (§8) and `yubikey-approval.cmd` (§8.7). |
 
 ## Prerequisites
 
@@ -72,9 +75,12 @@ cd nats && docker compose up -d && cd ..
 uv sync --extra yubikey
 ```
 
-The `yubikey` extra is **optional and separate** from the approval flow — nothing in
-`approver/` imports `fido2`. Without it, `lib/yubikey.py` still imports and its pure
-helpers work; its device features raise a clear error and its tests skip.
+The `yubikey` extra is **optional**: the core approval path (`hook.py`,
+`responder.py`, `registration_handler.py`) never imports `fido2`, so the flow above
+works without it. Only the YubiKey-backed responder needs it (see
+[A YubiKey-backed responder](#a-yubikey-backed-responder)). Without the extra,
+`lib/yubikey.py` still imports and its pure helpers work; its device features raise a
+clear error and its tests skip.
 
 Sample configs are committed as `approver/*.example.json` (the real files hold
 secrets and are git-ignored). To customize the NATS server or approval timeout,
@@ -235,8 +241,8 @@ Code would show is instead answered by the remote operator.
 
 ## YubiKey / ARKG (optional)
 
-`lib/yubikey.py` is a **standalone** library — not part of the approval flow above —
-wrapping a YubiKey's ARKG support (CTAP2 `previewSign`). Full details in
+`lib/yubikey.py` wraps a YubiKey's ARKG support (CTAP2 `previewSign`). It is usable on
+its own, and it is what backs the YubiKey responder further down. Full details in
 [`CLAUDE.md`](CLAUDE.md) §8.
 
 ARKG in one line: the key holds one *seed* pair; anyone with the seed **public** key
@@ -366,6 +372,87 @@ invocation:
 Exit codes: `0` ok, `1` error (no key, no `fido2`, bad input), `2` not a YubiKey while
 `--require-yubikey`.
 
+### A YubiKey-backed responder
+
+`approver/responder_yubikey.py` is `responder.py` with the signing key on the YubiKey:
+same subjects, same wire format, **no private key on this machine**, and one touch per
+decision. The key it signs with is an ARKG key derived from the authenticator's seed
+key, so the private half only ever exists inside the device.
+
+`hook.py` needs no changes and knows nothing about YubiKeys: an ARKG derived key *is* a
+P-256 key, and the authenticator signs ECDSA-P256 over SHA-256, DER-encoded — exactly
+`lib/crypto.py`'s `key_type: "p256"` scheme. Registration publishes the derived key as
+the compressed SEC1 point that scheme expects, so a YubiKey reply is verified through
+the same code path as a software one.
+
+```bat
+REM 1. mint a token as usual (the allowlist owner does this)
+py approver\registration_handler.py --get-token approver-yk
+
+REM 2. register: makeCredential on the key (one touch), derive, publish the derived
+REM    public key with key_type=p256. Elevated console, venv interpreter by path:
+sudo .venv\Scripts\python.exe approver\responder_yubikey.py register approver-yk.<secret> --require-yubikey
+
+REM ... or reuse a credential saved earlier — no device, no touch at all:
+py approver\responder_yubikey.py register approver-yk.<secret> --credential cred.json
+
+REM 3. serve: prompt the operator, then sign each decision on the key
+sudo .venv\Scripts\python.exe approver\responder_yubikey.py serve
+```
+
+`register` writes `approver/responder-yubikey-config.json` only after the handler acks,
+same as the software responder. That file holds **no private key** — just the
+credential, the derivation label `ctx` and the `ikm`. That is enough to re-derive the
+*public* key offline and to let the device rebuild the private half when it signs.
+`serve` re-derives at startup and refuses to start if the result no longer matches the
+registered public key: such a responder would only produce replies the hook must reject.
+
+| Step | Device? | Touch? |
+|------|---------|--------|
+| `register` (no `--credential`) | yes | one — `makeCredential` |
+| `register --credential FILE` | no | none — derivation is offline |
+| `serve` startup | no | none — re-derivation is offline |
+| each allow / deny | yes | one — the decision is signed on the key |
+
+The whole loop in one command file — six steps, two touches. Elevate first; it does
+not elevate itself, and it resolves `.venv\Scripts\python.exe` by path:
+
+```bat
+REM in an elevated console:  sudo cmd   then:
+scripts\yubikey-approval.cmd --require-yubikey
+scripts\yubikey-approval.cmd --deny                  REM exercise the deny path
+scripts\yubikey-approval.cmd --credential cred.json  REM reuse a credential: one touch
+```
+
+It mints a throwaway token, makes the credential (**touch**), registers the derived
+key through the real registration handler, starts a real `responder_yubikey serve` in
+its own window, pipes a `PermissionRequest` into the real `hook.py` (**touch**), and
+checks the decision that comes back. Along the way it prints the allowlist entry the
+handler stored, so you can see the `key_type=p256` + compressed point the hook verifies
+with. Only the operator's `a`/`d` keystroke is scripted; the touch is not. The
+credential is kept (path printed), so a re-run with `--credential` costs one touch
+instead of two. Exit `0` = PASS, `1` = FAIL (each failure prints its likely cause and
+`hook.py`'s own reason verbatim), `2` = `--require-yubikey` said no.
+
+The "is it a YubiKey?" check is opt-in here too: `--attest` reports the verdict,
+`--require-yubikey` refuses to register anything that does not pin to a Yubico root
+(exit `2`, nothing published, nothing persisted). Worth using — registration is the
+moment you choose which key to trust.
+
+Caveats, all inherited from §8 or §6:
+
+- **Administrator terminal on Windows**, or the `previewSign` output is silently dropped;
+  elevation drops `VIRTUAL_ENV`, so name `.venv\Scripts\python.exe` by path.
+- `--rp-id` must match the credential — it defaults to `example.com` on both sides, and
+  is stored in the config so `serve` picks it up by itself.
+- Registering the same YubiKey twice gives two **unlinkable** keys: the `ikm` is fresh
+  each time. Re-registering rotates `clients[key_id]` in the allowlist.
+- **Run one responder at a time.** Both responders share the `approvers` queue group,
+  so with both running each request goes to exactly one of them — but which one is
+  arbitrary.
+- Key unplugged, or a touch that never comes: no reply is sent, and Claude Code falls
+  back to its own prompt (§7 fail-safe). It never becomes a silent allow.
+
 ### Integration tests with a real key
 
 Optional — skipped unless the hardware is actually there, so a plain `py -m pytest`
@@ -377,8 +464,10 @@ unattended run never blocks waiting for a finger:
 $env:AI_REMOTE_YUBIKEY_TOUCH="1"; py -m pytest tests/test_yubikey_integration.py -v -s
 ```
 
-A full pass asks for **two** button presses. Without the env var you still get the
-read-only tier (enumeration, firmware, `getInfo`) if a key is plugged in.
+A full pass asks for **several** button presses — one shared `makeCredential` plus one
+per signature, including the YubiKey-responder round trip that ends in
+`hook.verify_reply`. The prompts say which step is asking. Without the env var you still
+get the read-only tier (enumeration, firmware, `getInfo`) if a key is plugged in.
 
 ## Command reference
 
@@ -393,12 +482,15 @@ read-only tier (enumeration, firmware, `getInfo`) if a key is plugged in.
 | `py tools/yubikey_exec.py sign --in cred.json --message "..."` | Sign a string with the derived key (touch), verify it on the spot |
 | `py tools/yubikey_exec.py verify --in cred.json --ikm <hex> ...` | Check a signature offline (no device) |
 | `scripts\yubikey-arkg.cmd` | All five hardware steps in one file: version, make-credential, derive, sign, verify (elevated console) |
+| `scripts\yubikey-approval.cmd` | The whole YubiKey approval loop: token, make-credential, register, serve, hook, verify (elevated console, two touches) |
 | `scripts\e2e-registration.cmd` | End-to-end registration check (Windows) |
 | `scripts\e2e-approval.cmd` | End-to-end approval-loop check (Windows) |
 | `py approver/registration_handler.py --get-token <key_id>` | Mint a one-time registration token (TTL 15 min) |
 | `py approver/registration_handler.py [--once]` | Serve the `registrations` subject (allowlist owner) |
 | `py approver/responder.py register <token> [--key-type ed25519\|p256]` | Generate a key pair and register its public half |
 | `py approver/responder.py serve` | Answer approval requests (the human operator) |
+| `py approver/responder_yubikey.py register <token> [--credential FILE] [--require-yubikey]` | Register an ARKG key derived from a YubiKey (`key_type=p256`) |
+| `py approver/responder_yubikey.py serve` | Answer approval requests, signing each decision on the YubiKey (elevated console) |
 | `py approver/hook.py` | The `PermissionRequest` hook (reads stdin, prints the decision) |
 
 ## Notes & safety
@@ -406,6 +498,9 @@ read-only tier (enumeration, firmware, `getInfo`) if a key is plugged in.
 - **Runtime configs hold secrets** and are git-ignored:
   `approver/responder-config.json` (the private key) and
   `approver/handler-config.json` (live token secrets in `pending_tokens`).
+  `approver/responder-yubikey-config.json` is git-ignored too — it holds no private key
+  (that never leaves the YubiKey), but it identifies the credential behind a
+  registered key.
 - **`tool_input` travels on the bus as-is** — for `Bash` that's the full command,
   for `Write` the file contents. Restrict access to NATS and the
   `approvals.<session_id>` subject; do not connect untrusted subscribers
