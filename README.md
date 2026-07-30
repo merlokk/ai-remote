@@ -33,7 +33,7 @@ individual tool calls:
 
 ```
 Claude Code ──stdin──▶ hook.py ──approvals.<sid>──▶ NATS ──▶ responder.py (human: allow/deny + Ed25519 sign)
-     ▲                    │                                          │
+     ▲                    │                                         │
      └──── allow/deny ────┘◀──────────── signed reply ──────────────┘
                           (hook verifies sig against the allowlist)
 
@@ -49,6 +49,7 @@ registration_handler.py  ──▶ owns handler-config.json (the allowlist `clie
 | `lib/bus.py` | Thin async JSON request-reply wrapper over `nats-py`. |
 | `lib/config.py` | Versioned, atomic JSON config store. |
 | `lib/crypto.py` | Ed25519 / ECDSA P-256 keygen / sign / verify (fail-safe verify; scheme picked by `key_type`). |
+| `lib/yubikey.py` | **Optional, standalone:** YubiKey ARKG (`previewSign`) — version, `makeCredential`, offline key derivation, "is it a YubiKey?" attestation. Needs the `yubikey` extra. |
 | `nats/` | `docker compose` sandbox: NATS + JetStream, a web dashboard, and `nats-box` (the `nats` CLI). |
 | `scripts/` | Windows command-file end-to-end checks: `e2e-registration.cmd` (§6 flow) and `e2e-approval.cmd` (§7 flow). |
 
@@ -66,7 +67,14 @@ uv sync
 
 # 2. Bring up the NATS sandbox (server + dashboard + nats-box)
 cd nats && docker compose up -d && cd ..
+
+# Optional: the YubiKey/ARKG library (lib/yubikey.py) needs the `fido2` extra
+uv sync --extra yubikey
 ```
+
+The `yubikey` extra is **optional and separate** from the approval flow — nothing in
+`approver/` imports `fido2`. Without it, `lib/yubikey.py` still imports and its pure
+helpers work; its device features raise a clear error and its tests skip.
 
 Sample configs are committed as `approver/*.example.json` (the real files hold
 secrets and are git-ignored). To customize the NATS server or approval timeout,
@@ -225,11 +233,53 @@ holds the `clients` allowlist the hook verifies replies against.
 With the hook wired and a responder `serve`-ing, every permission prompt Claude
 Code would show is instead answered by the remote operator.
 
+## YubiKey / ARKG (optional)
+
+`lib/yubikey.py` is a **standalone** library — not part of the approval flow above —
+wrapping a YubiKey's ARKG support (CTAP2 `previewSign`). Full details in
+[`CLAUDE.md`](CLAUDE.md) §8.
+
+ARKG in one line: the key holds one *seed* pair; anyone with the seed **public** key
+can derive unlimited fresh, mutually unlinkable public keys **offline**, while only
+the authenticator can produce the matching private keys.
+
+Requires `uv sync --extra yubikey`, a YubiKey on firmware **5.8.0+** advertising
+`previewSign`, and — **on Windows — an administrator terminal** (otherwise the native
+WebAuthn path drops the extension output).
+
+```python
+from lib import yubikey
+
+# 0. which key is this?
+info = yubikey.get_device_info()
+print(info.firmware_version, info.supports_preview_sign, info.meets_arkg_firmware)
+
+# 1. makeCredential with previewSign -> an ARKG seed key on the device (needs a touch)
+result = yubikey.make_credential()
+
+# 2. offline: derive a fresh public key + the args the authenticator needs to sign
+derived = yubikey.seed_public_key(result, ctx=b"my-purpose")   # ikm: 32 random bytes
+print(derived.derived_public_key)   # verify signatures with this
+print(derived.arkg_args)            # send back with result.key_handle to have it sign
+
+# 3. separately: is this really a YubiKey?
+check = yubikey.verify_yubikey_attestation(result)
+print(check.is_yubikey, check.trusted_root_subject, check.reasons)
+```
+
+`is_yubikey` requires all three of: the attestation statement verifying, the
+certificate chain pinning to a bundled Yubico root (`lib/yubico-fido-ca.pem`), and the
+certificate naming Yubico. `reasons` says what failed. Run
+`py -m lib.yubikey --arkg` to exercise the whole thing against real hardware.
+
 ## Command reference
 
 | Command | What it does |
 |---------|--------------|
 | `py -m pytest -q` | Run the test suite |
+| `uv sync --extra yubikey` | Install the optional `fido2` dependency |
+| `py -m lib.yubikey` | Show the connected YubiKey's firmware / AAGUID / `previewSign` support |
+| `py -m lib.yubikey --arkg` | Full ARKG smoke test on real hardware (touch + attestation check) |
 | `scripts\e2e-registration.cmd` | End-to-end registration check (Windows) |
 | `scripts\e2e-approval.cmd` | End-to-end approval-loop check (Windows) |
 | `py approver/registration_handler.py --get-token <key_id>` | Mint a one-time registration token (TTL 15 min) |

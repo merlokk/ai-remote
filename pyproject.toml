@@ -8,6 +8,11 @@ dependencies = [
     "cryptography>=49.0.0", # Ed25519 / ECDSA P-256 sign/verify
 ]
 
+[project.optional-dependencies]
+yubikey = [
+    "fido2>=2.2.1",
+]
+
 [dependency-groups]
 dev = [
     "pytest",
