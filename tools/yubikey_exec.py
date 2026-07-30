@@ -140,6 +140,18 @@ def parse_signature(text: str) -> bytes:
         raise yubikey.YubiKeyError(f"--signature must be hex: {e}") from e
 
 
+def write_signature(signature: bytes, path: str | Path) -> None:
+    """Write ``signature`` as one bare hex line.
+
+    Deliberately not JSON: a shell script picks it up with a single `for /f`, which is
+    how scripts\\yubikey-arkg.cmd hands the signature from its sign step to its verify
+    step.
+    """
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(signature.hex(), encoding="utf-8")
+
+
 def signature_report(signature: bytes, *, verified: bool | None = None) -> dict:
     report: dict = {"signature": signature.hex(), "signature_bytes": len(signature)}
     if verified is not None:
@@ -296,6 +308,11 @@ def _do_sign(args, result, derived, out: dict) -> int:
     # and this is the only point where both halves are in hand.
     verified = yubikey.verify_signature(derived, signature, data=data, digest=digest)
     out["sign"] = signature_report(signature, verified=verified)
+
+    if getattr(args, "sig_out", None):
+        write_signature(signature, args.sig_out)
+        out["sign"]["signature_written_to"] = str(args.sig_out)
+
     _print(out["sign"], as_json=args.json, title="signature")
     if not verified and not args.json:
         print("\nWARNING: the signature does not verify against the derived key", file=sys.stderr)
@@ -450,6 +467,9 @@ def _build_parser() -> argparse.ArgumentParser:
     p_sg.add_argument("--in", dest="input", type=Path, required=True, help="file written by make-credential --out")
     _add_derive_flags(p_sg)
     _add_payload_flags(p_sg)
+    p_sg.add_argument(
+        "--sig-out", type=Path, help="write the signature as bare hex, for a later `verify`"
+    )
     p_sg.add_argument("--rp-id", default="example.com")
     p_sg.add_argument("--user-verification", choices=("discouraged", "preferred", "required"), default="discouraged")
 

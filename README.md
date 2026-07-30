@@ -329,21 +329,28 @@ kept distinct from `1` (error) so scripts can tell the two apart.
 process, with the key unplugged** — that split is the whole point. Add `--json` for a
 single machine-readable document, `--ikm <hex>` to reproduce a derivation.
 
-All three hardware steps in one command file (elevate first, it does not elevate
-itself — and it resolves `.venv\Scripts\python.exe` by path, since elevation drops
-`VIRTUAL_ENV`):
+The whole hardware flow in one command file — **five steps**: version →
+make-credential (touch) → derive → sign (touch) → verify offline. Elevate first, it
+does not elevate itself, and it resolves `.venv\Scripts\python.exe` by path since
+elevation drops `VIRTUAL_ENV`:
 
 ```bat
 REM in an elevated console:  sudo cmd   then:
-scripts\yubikey-arkg.cmd --ctx my-purpose
-scripts\yubikey-arkg.cmd --ctx my-purpose --out cred.json --attest
-
-REM with a string to sign: step 3 becomes derive + sign + verify (second touch)
+scripts\yubikey-arkg.cmd
 scripts\yubikey-arkg.cmd --ctx my-purpose --message "hello signed world"
+scripts\yubikey-arkg.cmd --ctx my-purpose --out cred.json --attest
+scripts\yubikey-arkg.cmd --no-sign          REM stop after derive; one touch only
 ```
 
-It prints the version, asks for a touch, derives the public key, and keeps the
-credential so `derive --in` can re-run without the key. Exit `0` = all steps OK.
+Two touches: one for `make-credential`, one for `sign`. The script mints a single
+`ikm` up front and passes it to steps 3–5 so they all address the *same* derived key,
+and hands the signature from step 4 to step 5 through a file (`--sig-out`). Step 5 is
+the point of it: it re-derives the public key from the credential file alone and
+verifies with **no device attached**.
+
+Credential and signature files are kept (paths printed at the end) so `derive` and
+`verify` can re-run later. Exit `0` = all steps OK, `1` = a step failed, `3` = the key
+signed but the signature does not verify.
 
 **The "is it a YubiKey?" check is optional and off by default.** Turn it on per
 invocation:
@@ -385,7 +392,7 @@ read-only tier (enumeration, firmware, `getInfo`) if a key is plugged in.
 | `py tools/yubikey_exec.py run [--attest]` | make-credential + derive, optionally with the YubiKey check |
 | `py tools/yubikey_exec.py sign --in cred.json --message "..."` | Sign a string with the derived key (touch), verify it on the spot |
 | `py tools/yubikey_exec.py verify --in cred.json --ikm <hex> ...` | Check a signature offline (no device) |
-| `scripts\yubikey-arkg.cmd [--message "..."]` | All hardware steps in one file (run from an elevated console) |
+| `scripts\yubikey-arkg.cmd` | All five hardware steps in one file: version, make-credential, derive, sign, verify (elevated console) |
 | `scripts\e2e-registration.cmd` | End-to-end registration check (Windows) |
 | `scripts\e2e-approval.cmd` | End-to-end approval-loop check (Windows) |
 | `py approver/registration_handler.py --get-token <key_id>` | Mint a one-time registration token (TTL 15 min) |

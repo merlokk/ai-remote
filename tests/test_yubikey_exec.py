@@ -235,6 +235,39 @@ def test_signing_payload_rejects_non_hex_digest():
         yubikey_exec.signing_payload(args)
 
 
+def test_sign_accepts_sig_out():
+    args = yubikey_exec._build_parser().parse_args(
+        ["sign", "--in", "x.json", "--message", "hi", "--sig-out", "sig.txt"]
+    )
+    assert str(args.sig_out) == "sig.txt"
+
+
+def test_sign_sig_out_defaults_to_none():
+    args = yubikey_exec._build_parser().parse_args(["sign", "--in", "x.json", "--message", "hi"])
+    assert args.sig_out is None
+
+
+def test_write_signature_writes_bare_hex(tmp_path):
+    path = tmp_path / "sig.txt"
+    yubikey_exec.write_signature(b"\xde\xad\xbe\xef", path)
+    # One bare hex line, so a shell script can read it with a single `for /f`.
+    assert path.read_text(encoding="utf-8").strip() == "deadbeef"
+    assert "\n" not in path.read_text(encoding="utf-8").rstrip("\n")
+
+
+def test_write_signature_round_trips_through_parse_signature(tmp_path):
+    path = tmp_path / "sig.txt"
+    signature = bytes(range(70))
+    yubikey_exec.write_signature(signature, path)
+    assert yubikey_exec.parse_signature(path.read_text(encoding="utf-8").strip()) == signature
+
+
+def test_write_signature_creates_parent_directories(tmp_path):
+    path = tmp_path / "nested" / "dir" / "sig.txt"
+    yubikey_exec.write_signature(b"\x01", path)
+    assert path.is_file()
+
+
 # --- verify: offline, no device ------------------------------------------------
 def _esp256_signed(message):
     """A derived-key stand-in plus a real signature over ``message``."""
