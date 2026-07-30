@@ -38,8 +38,31 @@ def test_valid_token_registers_client_and_consumes_token():
     reply, changed = rh.handle_registration(data, _req(), now=100)
     assert reply == {"v": V, "ok": True, "key_id": "approver-1"}
     assert changed is True
-    assert data["clients"]["approver-1"] == {"pubkey": "PUB==", "registered_ts": 100}
+    # key_type defaults to ed25519 when the request omits it (backward compatible).
+    assert data["clients"]["approver-1"] == {
+        "pubkey": "PUB==",
+        "key_type": "ed25519",
+        "registered_ts": 100,
+    }
     assert data["pending_tokens"] == []
+
+
+def test_valid_token_pins_requested_key_type():
+    data = _data(pending=[_pending()])
+    req = _req()
+    req["key_type"] = "p256"
+    rh.handle_registration(data, req, now=100)
+    assert data["clients"]["approver-1"]["key_type"] == "p256"
+
+
+def test_unknown_key_type_rejected_as_bad_request():
+    data = _data(pending=[_pending()])
+    req = _req()
+    req["key_type"] = "rsa"
+    reply, changed = rh.handle_registration(data, req, now=100)
+    assert reply["ok"] is False and reply["error"] == "bad request"
+    assert changed is False
+    assert len(data["pending_tokens"]) == 1  # token not spent on a bad request
 
 
 def test_unknown_token_rejected():
@@ -89,10 +112,14 @@ def test_bad_request_rejected(bad):
 def test_registration_rotates_existing_key():
     data = _data(
         pending=[_pending()],
-        clients={"approver-1": {"pubkey": "OLD", "registered_ts": 1}},
+        clients={"approver-1": {"pubkey": "OLD", "key_type": "ed25519", "registered_ts": 1}},
     )
     rh.handle_registration(data, _req(pubkey="NEW=="), now=200)
-    assert data["clients"]["approver-1"] == {"pubkey": "NEW==", "registered_ts": 200}
+    assert data["clients"]["approver-1"] == {
+        "pubkey": "NEW==",
+        "key_type": "ed25519",
+        "registered_ts": 200,
+    }
 
 
 def test_token_is_one_time():

@@ -30,7 +30,7 @@ def _request(**overrides):
     return req
 
 
-def _hook_verifies(request, reply, pubkey_b64):
+def _hook_verifies(request, reply, pubkey_b64, key_type=crypto.DEFAULT_KEY_TYPE):
     """Mirror the hook-side signature check (§7): recompute signing bytes, verify."""
     updated = reply.get("updated_input")
     uih = protocol.canonical_sha256(updated) if updated is not None else ""
@@ -45,7 +45,7 @@ def _hook_verifies(request, reply, pubkey_b64):
         ts=request["ts"],
         reason=reply["reason"],
     )
-    return crypto.verify(pubkey_b64, sb, reply["sig"])
+    return crypto.verify(pubkey_b64, sb, reply["sig"], key_type)
 
 
 # --- token parsing -------------------------------------------------------------
@@ -70,8 +70,16 @@ def test_build_registration_request_shape():
         "token": "approver-1.SEKRIT",
         "key_id": "approver-1",
         "pubkey": "PUB==",
+        "key_type": crypto.ED25519,  # default scheme
         "ts": 111,
     }
+
+
+def test_build_registration_request_carries_key_type():
+    req = responder.build_registration_request(
+        "approver-1.SEKRIT", "PUB==", ts=111, key_type=crypto.P256
+    )
+    assert req["key_type"] == crypto.P256
 
 
 # --- reply building / signing --------------------------------------------------
@@ -95,6 +103,22 @@ def test_build_reply_signature_verifies():
         req, behavior="allow", key_id="approver-1", private_b64=kp.private_b64(), reason="ok"
     )
     assert _hook_verifies(req, reply, kp.public_b64())
+
+
+def test_build_reply_signature_verifies_with_p256():
+    kp = crypto.generate_keypair(crypto.P256)
+    req = _request()
+    reply = responder.build_reply(
+        req,
+        behavior="allow",
+        key_id="approver-1",
+        private_b64=kp.private_b64(),
+        key_type=crypto.P256,
+        reason="ok",
+    )
+    assert _hook_verifies(req, reply, kp.public_b64(), crypto.P256)
+    # And a P-256 reply must not verify if checked as Ed25519.
+    assert not _hook_verifies(req, reply, kp.public_b64(), crypto.ED25519)
 
 
 def test_build_reply_allow_with_updated_input_is_signed():

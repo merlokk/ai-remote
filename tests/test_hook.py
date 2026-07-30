@@ -33,19 +33,23 @@ def _req():
     return hook.build_request(_payload(), nonce="bm9uY2U=", ts=1737345600)
 
 
-def _reply(request, kp, *, key_id="approver-1", behavior="allow", reason="ok", updated_input=None):
+def _reply(
+    request, kp, *, key_id="approver-1", behavior="allow", reason="ok", updated_input=None,
+    key_type=crypto.DEFAULT_KEY_TYPE,
+):
     return responder.build_reply(
         request,
         behavior=behavior,
         key_id=key_id,
         private_b64=kp.private_b64(),
+        key_type=key_type,
         reason=reason,
         updated_input=updated_input,
     )
 
 
-def _allowlist(kp, key_id="approver-1"):
-    return {key_id: {"pubkey": kp.public_b64(), "registered_ts": 1}}
+def _allowlist(kp, key_id="approver-1", key_type=crypto.DEFAULT_KEY_TYPE):
+    return {key_id: {"pubkey": kp.public_b64(), "key_type": key_type, "registered_ts": 1}}
 
 
 # --- build_request -------------------------------------------------------------
@@ -62,6 +66,39 @@ def test_verify_reply_accepts_valid_signed_reply():
     kp = crypto.generate_keypair()
     req = _req()
     ok, why = hook.verify_reply(req, _reply(req, kp), _allowlist(kp))
+    assert ok is True, why
+
+
+def test_verify_reply_accepts_p256_signed_reply():
+    kp = crypto.generate_keypair(crypto.P256)
+    req = _req()
+    reply = _reply(req, kp, key_type=crypto.P256)
+    ok, why = hook.verify_reply(req, reply, _allowlist(kp, key_type=crypto.P256))
+    assert ok is True, why
+
+
+def test_verify_reply_rejects_scheme_mismatch_between_allowlist_and_signature():
+    # Reply is signed Ed25519 but the allowlist pins P-256 for this key_id → reject.
+    kp = crypto.generate_keypair(crypto.ED25519)
+    req = _req()
+    reply = _reply(req, kp, key_type=crypto.ED25519)
+    ok, _ = hook.verify_reply(req, reply, _allowlist(kp, key_type=crypto.P256))
+    assert ok is False
+
+
+def test_verify_reply_rejects_unsupported_allowlist_key_type():
+    kp = crypto.generate_keypair()
+    req = _req()
+    ok, _ = hook.verify_reply(req, _reply(req, kp), _allowlist(kp, key_type="rsa"))
+    assert ok is False
+
+
+def test_verify_reply_defaults_to_ed25519_for_legacy_allowlist_entry():
+    # A pre-key_type allowlist entry (no key_type) must still verify as Ed25519.
+    kp = crypto.generate_keypair()
+    req = _req()
+    allowlist = {"approver-1": {"pubkey": kp.public_b64(), "registered_ts": 1}}
+    ok, why = hook.verify_reply(req, _reply(req, kp), allowlist)
     assert ok is True, why
 
 
@@ -217,11 +254,15 @@ def test_main_falls_through_on_bad_stdin_json(monkeypatch, capsys):
 
 
 # --- integration ---------------------------------------------------------------
-def _serve_and_decide(tmp_path, *, behavior, reason="ok", updated_input=None, signer=None, trust=None):
-    kp = signer or crypto.generate_keypair()
+def _serve_and_decide(
+    tmp_path, *, behavior, reason="ok", updated_input=None, signer=None, trust=None,
+    key_type=crypto.DEFAULT_KEY_TYPE,
+):
+    kp = signer or crypto.generate_keypair(key_type)
     trusted = trust or kp
     cfg = tmp_path / "handler-config.json"
-    Config(cfg, {"v": protocol.PROTOCOL_VERSION, "clients": _allowlist(trusted)}).save()
+    clients = _allowlist(trusted, key_type=key_type)
+    Config(cfg, {"v": protocol.PROTOCOL_VERSION, "clients": clients}).save()
     session = uuid.uuid4().hex
     payload = _payload(session_id=session)
 
@@ -233,6 +274,7 @@ def _serve_and_decide(tmp_path, *, behavior, reason="ok", updated_input=None, si
                     behavior=behavior,
                     key_id="approver-1",
                     private_b64=kp.private_b64(),
+                    key_type=key_type,
                     reason=reason,
                     updated_input=updated_input,
                 )
@@ -248,6 +290,12 @@ def _serve_and_decide(tmp_path, *, behavior, reason="ok", updated_input=None, si
 @requires_nats
 def test_request_decision_allow_end_to_end(tmp_path):
     out = run_async(_serve_and_decide(tmp_path, behavior="allow")())
+    assert out["hookSpecificOutput"]["decision"]["behavior"] == "allow"
+
+
+@requires_nats
+def test_request_decision_allow_end_to_end_p256(tmp_path):
+    out = run_async(_serve_and_decide(tmp_path, behavior="allow", key_type=crypto.P256)())
     assert out["hookSpecificOutput"]["decision"]["behavior"] == "allow"
 
 

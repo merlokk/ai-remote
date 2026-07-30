@@ -92,6 +92,12 @@ def verify_reply(request: dict, reply, allowlist: dict) -> tuple[bool, str]:
     client = allowlist.get(key_id) if isinstance(key_id, str) else None
     if not isinstance(client, dict) or not client.get("pubkey"):
         return False, f"key_id {key_id!r} not in allowlist"
+    # The scheme is pinned by the trusted allowlist entry (bound to key_id at
+    # registration), never taken from the reply — no algorithm-downgrade vector.
+    # Absent key_type means a pre-key_type registration → Ed25519.
+    key_type = client.get("key_type", crypto.DEFAULT_KEY_TYPE)
+    if key_type not in crypto.KEY_TYPES:
+        return False, f"unsupported key_type {key_type!r} for key_id {key_id!r}"
 
     reason = reply.get("reason", "")
     if not isinstance(reason, str):
@@ -115,7 +121,9 @@ def verify_reply(request: dict, reply, allowlist: dict) -> tuple[bool, str]:
         reason=reason,
     )
     sig = reply.get("sig")
-    if not isinstance(sig, str) or not crypto.verify(client["pubkey"], signing_bytes, sig):
+    if not isinstance(sig, str) or not crypto.verify(
+        client["pubkey"], signing_bytes, sig, key_type
+    ):
         return False, "signature verification failed"
 
     return True, "ok"

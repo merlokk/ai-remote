@@ -14,11 +14,13 @@ Owner of the allowlist stored in ``handler-config.json`` (the ``clients`` map th
                          token, verify it is unexpired and bound to the claimed
                          ``key_id``, then write ``clients[key_id]`` (rotating any
                          previous key) and consume the token. A token is spent only
-                         on success.
+                         on success. With ``--once``, exit after the first
+                         successful registration instead of running forever
+                         (scripted e2e runs need no process to kill).
 
 Run with the `py` launcher (CLAUDE.md §5):
   py approver/registration_handler.py --get-token approver-1
-  py approver/registration_handler.py
+  py approver/registration_handler.py [--once]
 """
 from __future__ import annotations
 
@@ -36,6 +38,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from approver import protocol  # noqa: E402
 from lib import bus  # noqa: E402
 from lib import config as configlib  # noqa: E402
+from lib import crypto  # noqa: E402
 
 DEFAULT_CONFIG = Path(__file__).resolve().parent / "handler-config.json"
 DEFAULT_SUBJECT = "registrations"
@@ -113,6 +116,10 @@ def _valid_request(request) -> bool:
         value = request.get(field)
         if not isinstance(value, str) or not value:
             return False
+    # key_type is optional (older responders omit it → Ed25519), but if present it
+    # must name a scheme the hook can actually verify with.
+    if "key_type" in request and request["key_type"] not in crypto.KEY_TYPES:
+        return False
     return True
 
 
@@ -129,6 +136,8 @@ def handle_registration(data: dict, request, now: int) -> tuple[dict, bool]:
     token = request["token"]
     key_id = request["key_id"]
     pubkey = request["pubkey"]
+    # Absent key_type means a pre-key_type responder → Ed25519 (backward compatible).
+    key_type = request.get("key_type", crypto.DEFAULT_KEY_TYPE)
 
     # The token is bound to the key_id in its prefix — you can only register your slot.
     if key_id != token.split(".", 1)[0]:
@@ -144,7 +153,11 @@ def handle_registration(data: dict, request, now: int) -> tuple[dict, bool]:
     if now >= record.get("expires_ts", 0):
         return _error("expired"), False
 
-    data.setdefault("clients", {})[key_id] = {"pubkey": pubkey, "registered_ts": now}
+    data.setdefault("clients", {})[key_id] = {
+        "pubkey": pubkey,
+        "key_type": key_type,
+        "registered_ts": now,
+    }
     data["pending_tokens"] = [t for t in data["pending_tokens"] if t.get("token") != token]
     return {"v": protocol.PROTOCOL_VERSION, "ok": True, "key_id": key_id}, True
 

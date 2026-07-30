@@ -5,7 +5,7 @@ requires-python = ">=3.14"
 # Approved libraries only — see CLAUDE.md §1. New deps require repo-owner sign-off.
 dependencies = [
     "nats-py",              # NATS client
-    "cryptography>=49.0.0", # Ed25519 sign/verify
+    "cryptography>=49.0.0", # Ed25519 / ECDSA P-256 sign/verify
 ]
 
 [dependency-groups]

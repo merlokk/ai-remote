@@ -3,8 +3,8 @@
 Move Claude Code's permission prompt **out of the terminal**. Instead of the
 interactive "allow / deny?" prompt, a `PermissionRequest` hook publishes the
 request onto [NATS](https://nats.io/), a human responder somewhere else signs
-the decision with an **Ed25519** key, and the hook verifies that signature
-before handing Claude Code an `allow` / `deny` verdict.
+the decision with an **Ed25519** or **ECDSA P-256** key, and the hook verifies
+that signature before handing Claude Code an `allow` / `deny` verdict.
 
 > Full protocol, message contracts and design rationale live in
 > [`CLAUDE.md`](CLAUDE.md) §6–§7. This README is the practical "what it is / how
@@ -18,9 +18,10 @@ individual tool calls:
 
 - **Approve from elsewhere.** The decision is made by whoever is subscribed to
   the bus, not by whoever launched the session.
-- **Signed & tamper-evident.** Every decision is Ed25519-signed over the exact
-  command (`tool_input` hash), a per-request nonce (anti-replay) and the
-  behavior. A reply that doesn't verify against a *registered* key is rejected.
+- **Signed & tamper-evident.** Every decision is signed (Ed25519 or ECDSA P-256,
+  per the key's `key_type`) over the exact command (`tool_input` hash), a
+  per-request nonce (anti-replay) and the behavior. A reply that doesn't verify
+  against a *registered* key — using the scheme pinned for it — is rejected.
 - **Fail-safe by design.** NATS down, a timeout, a bad/absent signature, an
   untrusted key — **any** failure falls back to the normal interactive prompt.
   There is never a "silent allow".
@@ -47,8 +48,9 @@ registration_handler.py  ──▶ owns handler-config.json (the allowlist `clie
 | `approver/protocol.py` | Shared wire-format: canonical JSON, hashes, and the exact "signing bytes" both sides assemble identically. |
 | `lib/bus.py` | Thin async JSON request-reply wrapper over `nats-py`. |
 | `lib/config.py` | Versioned, atomic JSON config store. |
-| `lib/crypto.py` | Ed25519 keygen / sign / verify (fail-safe verify). |
+| `lib/crypto.py` | Ed25519 / ECDSA P-256 keygen / sign / verify (fail-safe verify; scheme picked by `key_type`). |
 | `nats/` | `docker compose` sandbox: NATS + JetStream, a web dashboard, and `nats-box` (the `nats` CLI). |
+| `scripts/` | Windows command-file end-to-end checks: `e2e-registration.cmd` (§6 flow) and `e2e-approval.cmd` (§7 flow). |
 
 ## Prerequisites
 
@@ -123,6 +125,10 @@ walkthrough below.
 This walks the whole flow **without Claude Code** — you play Claude by piping a
 fake `PermissionRequest` into the hook. Use three terminals.
 
+> The commands below are written for **bash/Git Bash or PowerShell** (both keep
+> single-quoted JSON intact). `cmd.exe` mangles the quoting in step 3 — use one of
+> the `scripts\*.cmd` e2e runs above instead, or a here-doc/file for the payload.
+
 **Step 1 — bootstrap a responder key.** In **Terminal A**, serve the
 registration handler (`--once` makes it exit after the first success):
 
@@ -138,9 +144,15 @@ message, so it picks up the token even though it's already serving:
 py approver/registration_handler.py --get-token approver-1
 #   -> approver-1.<secret>
 
-# register: generates an Ed25519 pair, stores it in approver/responder-config.json,
-# and adds the public key to approver/handler-config.json -> clients["approver-1"]
+# register: generates a fresh key pair (Ed25519 by default) and sends the public
+# half to the handler, which — on success — writes it into its own
+# approver/handler-config.json -> clients["approver-1"]. The private key is saved
+# to approver/responder-config.json only after that ack, so a rejected
+# registration never clobbers a working config.
 py approver/responder.py register "approver-1.<secret>"
+
+# want ECDSA P-256 instead of the default Ed25519? add --key-type p256
+py approver/responder.py register "approver-1.<secret>" --key-type p256
 ```
 
 Terminal A exits (`--once`) once registration succeeds.
@@ -222,7 +234,7 @@ Code would show is instead answered by the remote operator.
 | `scripts\e2e-approval.cmd` | End-to-end approval-loop check (Windows) |
 | `py approver/registration_handler.py --get-token <key_id>` | Mint a one-time registration token (TTL 15 min) |
 | `py approver/registration_handler.py [--once]` | Serve the `registrations` subject (allowlist owner) |
-| `py approver/responder.py register <token>` | Generate a key pair and register its public half |
+| `py approver/responder.py register <token> [--key-type ed25519\|p256]` | Generate a key pair and register its public half |
 | `py approver/responder.py serve` | Answer approval requests (the human operator) |
 | `py approver/hook.py` | The `PermissionRequest` hook (reads stdin, prints the decision) |
 

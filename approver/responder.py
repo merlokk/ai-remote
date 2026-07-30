@@ -2,15 +2,17 @@
 
 Two commands:
 
-  register <token>   Generate a fresh Ed25519 key pair, register its public half
-                     with the registration handler over ``registrations`` using a
-                     one-time token, and store the pair in responder-config.json.
-                     The key is persisted only if the handler acks ``ok:true``, so
-                     a rejected registration never clobbers a working config.
+  register <token>   Generate a fresh key pair — Ed25519 by default, ECDSA P-256
+                     with ``--key-type p256`` — register its public half with the
+                     registration handler over ``registrations`` using a one-time
+                     token, and store the pair in responder-config.json. The key is
+                     persisted only if the handler acks ``ok:true``, so a rejected
+                     registration never clobbers a working config.
 
   serve              Subscribe to ``approvals.*``, present each request to the
-                     operator, sign the decision (Ed25519) and reply. A queue group
-                     keeps a single responder answering when several are running.
+                     operator, sign the decision with the config's ``key_type``
+                     (ed25519/p256) and reply. A queue group keeps a single
+                     responder answering when several are running.
 
 Run with the `py` launcher (CLAUDE.md §5):  py approver/responder.py serve
 """
@@ -49,13 +51,20 @@ def parse_key_id(token: str) -> str:
     return key_id
 
 
-def build_registration_request(token: str, pubkey_b64: str, ts: int) -> dict:
-    """Assemble the ``registrations`` request; ``key_id`` comes from the token (§6)."""
+def build_registration_request(
+    token: str, pubkey_b64: str, ts: int, key_type: str = crypto.DEFAULT_KEY_TYPE
+) -> dict:
+    """Assemble the ``registrations`` request; ``key_id`` comes from the token (§6).
+
+    ``key_type`` (``ed25519``/``p256``) tells the handler which algorithm to pin
+    for this key in the allowlist; the hook then verifies with that same scheme.
+    """
     return {
         "v": protocol.PROTOCOL_VERSION,
         "token": token,
         "key_id": parse_key_id(token),
         "pubkey": pubkey_b64,
+        "key_type": key_type,
         "ts": ts,
     }
 
@@ -66,6 +75,7 @@ def build_reply(
     behavior: str,
     key_id: str,
     private_b64: str,
+    key_type: str = crypto.DEFAULT_KEY_TYPE,
     reason: str = "",
     updated_input: dict | None = None,
 ) -> dict:
@@ -74,7 +84,9 @@ def build_reply(
     Echoes ``v/session_id/tool_name/input_sha256/nonce/ts`` from the request; the
     responder contributes ``behavior/reason/updated_input``. ``updated_input`` is
     honored only on ``allow``. The signature covers the recomputed
-    ``updated_input_sha256`` — the hash itself is not sent on the wire.
+    ``updated_input_sha256`` — the hash itself is not sent on the wire. ``key_type``
+    selects the signing scheme; the hook picks it up from the allowlist by ``key_id``
+    (it is not carried in the reply), so it is not part of the signed bytes.
     """
     if behavior not in _BEHAVIORS:
         raise ValueError(f"behavior must be one of {_BEHAVIORS}, got {behavior!r}")
@@ -93,7 +105,7 @@ def build_reply(
         ts=request["ts"],
         reason=reason,
     )
-    sig = crypto.sign(private_b64, sb)
+    sig = crypto.sign(private_b64, sb, key_type)
 
     reply = {
         "v": request["v"],
@@ -116,18 +128,24 @@ def build_reply(
 async def register(
     token: str,
     *,
+    key_type: str = crypto.DEFAULT_KEY_TYPE,
     config_path: Path | str = DEFAULT_CONFIG,
     servers: str = bus.DEFAULT_SERVERS,
     timeout: float = 10.0,
 ) -> dict:
     """Register/rotate this responder's key. Persists only on ``ok:true``.
 
+    ``key_type`` (``ed25519``/``p256``) picks the scheme for the freshly generated
+    pair and is announced to the handler so it pins the same algorithm.
+
     Returns the handler's reply dict. Raises ``ValueError`` on a malformed token
     and ``bus.BusError`` on transport failure (no handler / timeout).
     """
     key_id = parse_key_id(token)
-    keypair = crypto.generate_keypair()
-    req = build_registration_request(token, keypair.public_b64(), int(time.time()))
+    keypair = crypto.generate_keypair(key_type)
+    req = build_registration_request(
+        token, keypair.public_b64(), int(time.time()), key_type=key_type
+    )
 
     async with bus.connect(servers) as b:
         reply = await b.request("registrations", req, timeout=timeout)
@@ -138,6 +156,7 @@ async def register(
             {
                 "v": protocol.PROTOCOL_VERSION,
                 "key_id": key_id,
+                "key_type": key_type,
                 "private_key": keypair.private_b64(),
                 "public_key": keypair.public_b64(),
             },
@@ -184,6 +203,8 @@ async def serve(
         )
     key_id = cfg["key_id"]
     private_b64 = cfg["private_key"]
+    # Older configs predate key_type; default to Ed25519 to stay backward compatible.
+    key_type = cfg.get("key_type", crypto.DEFAULT_KEY_TYPE)
 
     async def handler(request: dict):
         # Run the blocking prompt off the event loop so NATS keeps its heartbeats.
@@ -196,6 +217,7 @@ async def serve(
             behavior=behavior,
             key_id=key_id,
             private_b64=private_b64,
+            key_type=key_type,
             reason=reason,
             updated_input=updated_input,
         )
@@ -203,7 +225,7 @@ async def serve(
     async with bus.connect(servers) as b:
         await b.reply(subject, handler, queue=queue)
         print(
-            f"responder key_id={key_id!r} serving {subject!r} "
+            f"responder key_id={key_id!r} ({key_type}) serving {subject!r} "
             f"(queue={queue!r}) — Ctrl+C to stop",
             file=sys.stderr,
         )
@@ -217,6 +239,12 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p_reg = sub.add_parser("register", help="register/rotate key via a one-time token")
     p_reg.add_argument("token", help="one-time token '<key_id>.<secret>' from the handler")
+    p_reg.add_argument(
+        "--key-type",
+        choices=crypto.KEY_TYPES,
+        default=crypto.DEFAULT_KEY_TYPE,
+        help="signature scheme for the generated key (default: %(default)s)",
+    )
     p_reg.add_argument("--config", default=str(DEFAULT_CONFIG))
     p_reg.add_argument("--servers", default=bus.DEFAULT_SERVERS)
     p_reg.add_argument("--timeout", type=float, default=10.0)
@@ -237,6 +265,7 @@ def main(argv=None) -> int:
             reply = asyncio.run(
                 register(
                     args.token,
+                    key_type=args.key_type,
                     config_path=Path(args.config),
                     servers=args.servers,
                     timeout=args.timeout,
