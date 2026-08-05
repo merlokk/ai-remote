@@ -231,7 +231,11 @@ def prompt_operator(request: dict):
 
 
 def make_approval_handler(
-    *, key_id: str, sign: Callable[[bytes], str], prompt=prompt_operator
+    *,
+    key_id: str,
+    sign: Callable[[bytes], str],
+    prompt=prompt_operator,
+    on_signed: Callable[[dict], None] | None = None,
 ):
     """Build the ``approvals.*`` handler: ask the operator, sign the decision, reply.
 
@@ -243,6 +247,11 @@ def make_approval_handler(
     signing fails: a signer that cannot sign — key unplugged, touch timed out — must
     neither crash the responder loop nor answer, so the hook falls back to the
     interactive prompt (§7 fail-safe).
+
+    ``on_signed`` is handed each finished reply just before it goes on the wire, for
+    front ends that want to confirm what was signed (see
+    ``responder_yubikey.print_decision``). It runs guarded: reporting is a courtesy
+    and must never cost a valid decision.
     """
 
     def decide(request: dict):
@@ -251,7 +260,7 @@ def make_approval_handler(
             return None
         behavior, reason, updated_input = decision
         try:
-            return build_signed_reply(
+            reply = build_signed_reply(
                 request,
                 behavior=behavior,
                 key_id=key_id,
@@ -264,6 +273,13 @@ def make_approval_handler(
             print(f"could not sign the decision: {e}", file=sys.stderr)
             print("no reply sent - Claude Code falls back to its own prompt", file=sys.stderr)
             return None
+
+        if on_signed is not None:
+            try:
+                on_signed(reply)
+            except Exception as e:  # noqa: BLE001 — never drop a signed reply over this
+                print(f"could not report the signed decision: {e}", file=sys.stderr)
+        return reply
 
     async def handler(request: dict):
         return await asyncio.to_thread(decide, request)

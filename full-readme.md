@@ -424,7 +424,18 @@ sudo .venv\Scripts\python.exe approver\responder_yubikey.py serve
 Its prompt is a single `a`/`d`/`s` keystroke — unlike the software responder it does
 **not** ask for a free-text `reason`: the decision already costs a physical touch, and a
 question between the keystroke and the touch is one step too many. `reason` still goes
-on the wire (empty) and is still covered by the signature.
+on the wire (empty) and is still covered by the signature. Once the key has signed, the
+outcome is echoed back — neither the keystroke nor the touch tells you what actually
+left the machine:
+
+```
+allow / deny / skip? [a/d/s]: a
+
+>>> touch your YubiKey to sign this decision <<<
+  decision  : allow
+  signature : sha256:ece85c5662ca6be6
+  sent to the hook
+```
 
 `register` writes `approver/responder-yubikey-config.json` only after the handler acks,
 same as the software responder. That file holds **no private key** — just the

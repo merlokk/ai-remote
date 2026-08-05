@@ -15,7 +15,8 @@ and every decision costs a physical touch.
   serve              Subscribe to ``approvals.*``, prompt the operator (a single
                      a/d/s keystroke - no reason is asked for, the touch is enough
                      ceremony), then have the YubiKey sign the decision (second
-                     touch, once per decision) and reply.
+                     touch, once per decision) and reply. Each signed decision is
+                     echoed back on the console with a fingerprint of its signature.
 
 Why the hook needs no changes: an ARKG derived key is a P-256 key and the
 authenticator signs ECDSA-P256 over SHA-256, DER-encoded - exactly
@@ -38,6 +39,8 @@ from __future__ import annotations
 import argparse
 import asyncio
 import base64
+import binascii
+import hashlib
 import sys
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -67,6 +70,8 @@ EXIT_ERROR = 1
 EXIT_NOT_YUBIKEY = 2
 
 _TOUCH_MESSAGE = "\n>>> touch your YubiKey to sign this decision <<<\n"
+#: Hex characters of the signature's sha256 shown after a decision is signed.
+FINGERPRINT_CHARS = 16
 _REQUIRED_CONFIG_FIELDS = ("key_id", "public_key", "ctx", "ikm", "credential")
 
 
@@ -282,6 +287,33 @@ def prompt_operator(request: dict):
     return None
 
 
+def signature_fingerprint(sig_b64: str, *, chars: int = FINGERPRINT_CHARS) -> str:
+    """Short sha256 of the signature bytes, for the console.
+
+    The full DER signature is too long to read and means nothing by eye; a truncated
+    hash is enough to match this line against a log or a second window.
+    """
+    return hashlib.sha256(base64.b64decode(sig_b64, validate=True)).hexdigest()[:chars]
+
+
+def print_decision(reply: Mapping[str, Any]) -> None:
+    """Confirm on the console what was signed and sent (§8.7).
+
+    Neither the keystroke nor the touch echoes the outcome, so between "I pressed a"
+    and "the key blinked" there is nothing telling the operator what actually left
+    the machine. Prints the decision plus a fingerprint of the signature.
+
+    Never raises: it runs after a decision is signed and about to be published.
+    """
+    print(f"  decision  : {reply.get('behavior')}", file=sys.stderr)
+    try:
+        digest = "sha256:" + signature_fingerprint(str(reply.get("sig", "")))
+    except (binascii.Error, TypeError, ValueError) as e:
+        digest = f"<unreadable signature: {e}>"
+    print(f"  signature : {digest}", file=sys.stderr)
+    print("  sent to the hook\n", file=sys.stderr)
+
+
 async def serve(
     *,
     config_path: Path | str = DEFAULT_CONFIG,
@@ -289,6 +321,7 @@ async def serve(
     subject: str = responder.DEFAULT_SUBJECT,
     queue: str = responder.DEFAULT_QUEUE,
     prompt=prompt_operator,
+    on_signed=print_decision,
     user_verification: str = DEFAULT_USER_VERIFICATION,
     user_interaction: Any = None,
 ) -> None:
@@ -315,6 +348,7 @@ async def serve(
             or yubikey.console_user_interaction(touch_message=_TOUCH_MESSAGE),
         ),
         prompt=prompt,
+        on_signed=on_signed,
     )
 
     async with bus.connect(servers) as b:

@@ -242,6 +242,39 @@ def test_make_approval_handler_returns_none_when_signing_fails(capsys):
     assert "device unplugged" in capsys.readouterr().err
 
 
+def test_make_approval_handler_reports_the_signed_reply():
+    kp = crypto.generate_keypair()
+    seen = []
+    handler = responder.make_approval_handler(
+        key_id="approver-1",
+        sign=lambda sb: crypto.sign(kp.private_b64(), sb),
+        prompt=lambda request: ("allow", "", None),
+        on_signed=seen.append,
+    )
+
+    reply = run_async(handler(_request()))
+
+    assert seen == [reply]  # the callback sees exactly what goes on the wire
+
+
+def test_make_approval_handler_still_replies_when_reporting_fails(capsys):
+    # Announcing the decision is a courtesy to the operator; losing a signed reply
+    # over a broken console would send Claude Code back to its own prompt.
+    kp = crypto.generate_keypair()
+    req = _request()
+    handler = responder.make_approval_handler(
+        key_id="approver-1",
+        sign=lambda sb: crypto.sign(kp.private_b64(), sb),
+        prompt=lambda request: ("allow", "", None),
+        on_signed=lambda reply: (_ for _ in ()).throw(RuntimeError("no console")),
+    )
+
+    reply = run_async(handler(req))
+
+    assert reply is not None and _hook_verifies(req, reply, kp.public_b64())
+    assert "no console" in capsys.readouterr().err
+
+
 def test_build_reply_tamper_breaks_verification():
     kp = crypto.generate_keypair()
     req = _request()

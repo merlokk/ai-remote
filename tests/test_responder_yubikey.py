@@ -271,6 +271,49 @@ def test_prompt_operator_shows_the_request(monkeypatch, capsys):
     assert "rm -rf build" in err and "Bash" in err
 
 
+def test_signature_fingerprint_is_the_sha256_of_the_signature_bytes():
+    import hashlib
+
+    raw = b"\x30\x06 a der signature"
+    sig_b64 = base64.b64encode(raw).decode("ascii")
+
+    fp = responder_yubikey.signature_fingerprint(sig_b64)
+
+    assert hashlib.sha256(raw).hexdigest().startswith(fp)
+    assert len(fp) == 16  # short enough to read off a console, long enough to match
+
+
+def test_print_decision_names_the_behavior_and_the_signature(capsys):
+    sign, _ = _device_stand_in()
+    req = _request()
+    reply = responder.build_signed_reply(
+        req, behavior="allow", key_id="approver-yk", sign=sign
+    )
+
+    responder_yubikey.print_decision(reply)
+
+    err = capsys.readouterr().err
+    assert "allow" in err
+    assert responder_yubikey.signature_fingerprint(reply["sig"]) in err
+
+
+def test_print_decision_survives_a_reply_without_a_usable_signature(capsys):
+    # It runs after a decision is already signed and about to be sent: it may not
+    # raise, whatever it is handed.
+    responder_yubikey.print_decision({"behavior": "deny", "sig": "not base64!!"})
+
+    assert "deny" in capsys.readouterr().err
+
+
+def test_serve_reports_every_signed_decision():
+    import inspect
+
+    assert (
+        inspect.signature(responder_yubikey.serve).parameters["on_signed"].default
+        is responder_yubikey.print_decision
+    )
+
+
 def test_serve_defaults_to_the_reasonless_prompt():
     # responder.prompt_operator would ask for a reason; this responder must not.
     import inspect
