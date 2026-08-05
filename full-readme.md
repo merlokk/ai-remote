@@ -421,6 +421,11 @@ REM 3. serve: prompt the operator, then sign each decision on the key
 sudo .venv\Scripts\python.exe approver\responder_yubikey.py serve
 ```
 
+Its prompt is a single `a`/`d`/`s` keystroke — unlike the software responder it does
+**not** ask for a free-text `reason`: the decision already costs a physical touch, and a
+question between the keystroke and the touch is one step too many. `reason` still goes
+on the wire (empty) and is still covered by the signature.
+
 `register` writes `approver/responder-yubikey-config.json` only after the handler acks,
 same as the software responder. That file holds **no private key** — just the
 credential, the derivation label `ctx` and the `ikm`. That is enough to re-derive the

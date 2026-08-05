@@ -215,7 +215,6 @@ echo.
 
 echo [4/6] starting responder_yubikey serve ^(re-derives offline, no touch^) ...
 > "%ANS%" echo %ANSWER%
->> "%ANS%" echo signed on the yubikey
 "%PYEXE%" -c "import json,sys; json.dump({'hook_event_name':'PermissionRequest','session_id':'yk-approval-smoke','tool_name':'Bash','tool_input':{'command':'echo hello from the yubikey'},'permission_mode':'default','cwd':'.'}, open(sys.argv[1],'w',encoding='utf-8'))" "%PAYLOAD%"
 if errorlevel 1 goto :fail_python
 

@@ -198,8 +198,13 @@ async def register(
     return reply
 
 
-def prompt_operator(request: dict):
-    """Blocking console prompt. Returns ``(behavior, reason, updated_input)`` or None to skip."""
+def print_request(request: dict) -> None:
+    """Render a permission request on stderr, for an operator about to decide on it.
+
+    Split out from :func:`prompt_operator` so other front ends can show the same
+    thing while asking differently — ``responder_yubikey.py`` reuses it for a prompt
+    that takes the keystroke and nothing else.
+    """
     print("\n=== permission request ===================================", file=sys.stderr)
     print(f"  session : {request.get('session_id')}", file=sys.stderr)
     print(f"  tool    : {request.get('tool_name')}", file=sys.stderr)
@@ -211,6 +216,11 @@ def prompt_operator(request: dict):
         file=sys.stderr,
     )
     print("===========================================================", file=sys.stderr)
+
+
+def prompt_operator(request: dict):
+    """Blocking console prompt. Returns ``(behavior, reason, updated_input)`` or None to skip."""
+    print_request(request)
     answer = input("allow / deny / skip? [a/d/s]: ").strip().lower()
     if answer in ("a", "allow"):
         return ("allow", input("reason (optional): ").strip(), None)

@@ -12,9 +12,10 @@ and every decision costs a physical touch.
                      a one-time token, and store what is needed to re-derive it in
                      responder-yubikey-config.json. Written only on ``ok:true``.
 
-  serve              Subscribe to ``approvals.*``, prompt the operator, then have
-                     the YubiKey sign the decision (second touch, once per
-                     decision) and reply.
+  serve              Subscribe to ``approvals.*``, prompt the operator (a single
+                     a/d/s keystroke - no reason is asked for, the touch is enough
+                     ceremony), then have the YubiKey sign the decision (second
+                     touch, once per decision) and reply.
 
 Why the hook needs no changes: an ARKG derived key is a P-256 key and the
 authenticator signs ECDSA-P256 over SHA-256, DER-encoded - exactly
@@ -262,13 +263,32 @@ async def register(
     return reply
 
 
+def prompt_operator(request: dict):
+    """One keystroke, no reason asked. Returns ``(behavior, "", None)`` or None to skip.
+
+    Same display as :func:`approver.responder.prompt_operator`, but the free-text
+    ``reason`` prompt is dropped: every decision here already costs a physical touch,
+    and a second question between the keystroke and the touch only slows the operator
+    down. ``reason`` still travels (empty) and is still covered by the signature (§7).
+    """
+    responder.print_request(request)
+    answer = input("allow / deny / skip? [a/d/s]: ").strip().lower()
+    if answer in ("a", "allow"):
+        return ("allow", "", None)
+    if answer in ("d", "deny"):
+        return ("deny", "", None)
+    # ASCII only: a Windows console with a legacy codepage mangles anything else.
+    print("skipped (no reply - hook falls back to the interactive prompt)", file=sys.stderr)
+    return None
+
+
 async def serve(
     *,
     config_path: Path | str = DEFAULT_CONFIG,
     servers: str = bus.DEFAULT_SERVERS,
     subject: str = responder.DEFAULT_SUBJECT,
     queue: str = responder.DEFAULT_QUEUE,
-    prompt=responder.prompt_operator,
+    prompt=prompt_operator,
     user_verification: str = DEFAULT_USER_VERIFICATION,
     user_interaction: Any = None,
 ) -> None:

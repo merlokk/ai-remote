@@ -232,6 +232,55 @@ def test_device_signer_passes_the_message_through_as_data(monkeypatch):
     assert seen.get("digest") is None
 
 
+# --- the console prompt --------------------------------------------------------
+def _answers(monkeypatch, *lines):
+    """Feed ``input()`` exactly these lines; a further read is a test failure."""
+    pending = list(lines)
+
+    def fake_input(prompt=""):
+        assert pending, f"prompt asked for more input than expected: {prompt!r}"
+        return pending.pop(0)
+
+    monkeypatch.setattr("builtins.input", fake_input)
+    return pending
+
+
+@pytest.mark.parametrize("answer,behavior", [("a", "allow"), ("allow", "allow"),
+                                             ("d", "deny"), ("deny", "deny")])
+def test_prompt_operator_takes_one_keystroke_and_asks_no_reason(monkeypatch, answer, behavior):
+    # The decision already costs a touch; a free-text prompt between the keystroke
+    # and the touch is one step too many. reason goes out empty (still signed).
+    pending = _answers(monkeypatch, answer)
+
+    assert responder_yubikey.prompt_operator(_request()) == (behavior, "", None)
+    assert pending == []  # nothing left unread, and nothing extra was asked for
+
+
+def test_prompt_operator_skips_on_anything_else(monkeypatch):
+    _answers(monkeypatch, "s")
+
+    assert responder_yubikey.prompt_operator(_request()) is None
+
+
+def test_prompt_operator_shows_the_request(monkeypatch, capsys):
+    _answers(monkeypatch, "a")
+
+    responder_yubikey.prompt_operator(_request())
+
+    err = capsys.readouterr().err
+    assert "rm -rf build" in err and "Bash" in err
+
+
+def test_serve_defaults_to_the_reasonless_prompt():
+    # responder.prompt_operator would ask for a reason; this responder must not.
+    import inspect
+
+    assert (
+        inspect.signature(responder_yubikey.serve).parameters["prompt"].default
+        is responder_yubikey.prompt_operator
+    )
+
+
 # --- the payoff: hook.py accepts a YubiKey-signed reply ------------------------
 def test_hook_accepts_a_reply_signed_by_a_device_key():
     sign, pubkey = _device_stand_in()
