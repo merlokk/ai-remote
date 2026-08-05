@@ -85,7 +85,7 @@ How the responder's public key gets into the allowlist that `hook.py` checks. Ke
 **Roles and configs:**
 - `registration-handler.py` — the allowlist owner. Stores it in its own JSON config next to the script (`handler-config.json`); this same config is read by `hook.py` when checking `key_id`. Issues one-time tokens and listens on the `registrations` subject.
 - `responder.py` — stores its `key_id` and **private** key in its own JSON config (`responder-config.json`). The private key never leaves for the bus. The `key_id` is not chosen by the responder — it comes inside the token (see below).
-- `responder_yubikey.py` (§8.7) — an alternative responder that registers through exactly this protocol with `key_type: p256`, except the key pair is derived from a YubiKey, so there is **no private key to store**: `responder-yubikey-config.json` keeps only what re-derives the public half. To the handler and to `hook.py` it is indistinguishable from a software P-256 responder — that is the design goal, and why neither needed changing.
+- `responder_yubikey.py` (§8.7) — **the primary responder** (`responder.py` is the software stand-in used by tests and hardware-free development); it registers through exactly this protocol with `key_type: p256`, except the key pair is derived from a YubiKey, so there is **no private key to store**: `responder-yubikey-config.json` keeps only what re-derives the public half. To the handler and to `hook.py` it is indistinguishable from a software P-256 responder — that is the design goal, and why neither needed changing.
 
 `handler-config.json`:
 ```json
