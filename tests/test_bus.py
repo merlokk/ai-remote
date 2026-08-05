@@ -98,6 +98,51 @@ def test_queue_group_delivers_to_single_subscriber():
     assert hits["a"] > 0 and hits["b"] >= 0
 
 
+def test_junk_payload_is_ignored_and_does_not_reach_the_handler(capsys):
+    """Anything can be published on our subject; a non-JSON message must not blow up.
+
+    `nats req approvals.<sid> "x"` from a console is enough to feed a live responder
+    a payload that is not JSON. Before this was guarded it surfaced as a
+    JSONDecodeError traceback out of the subscription callback.
+    """
+    subject = _subject()
+    seen = []
+
+    async def body():
+        async with connect() as bus:
+            await bus.reply(subject, seen.append)
+            # Raw bytes: not our encoder, so this is exactly what a stray CLI sends.
+            await bus.client.publish(subject, b"x", reply=bus.client.new_inbox())
+            await bus.flush()
+            with pytest.raises(RequestTimeout):  # ...and a real request still works
+                await bus.request(subject, {"ok": 1}, timeout=0.5)
+
+    run_async(body())
+
+    # The junk never became a request; the valid one did.
+    assert seen == [{"ok": 1}]
+    assert "could not decode" in capsys.readouterr().err
+
+
+def test_json_that_is_not_an_object_is_ignored():
+    # Valid JSON, wrong shape: handlers are documented to receive a dict, and
+    # `5`.get(...) would raise inside the callback just like bad JSON did.
+    subject = _subject()
+    seen = []
+
+    async def body():
+        async with connect() as bus:
+            await bus.reply(subject, seen.append)
+            await bus.client.publish(subject, b"5", reply=bus.client.new_inbox())
+            await bus.flush()
+            with pytest.raises(RequestTimeout):
+                await bus.request(subject, {"ok": 1}, timeout=0.5)
+
+    run_async(body())
+
+    assert seen == [{"ok": 1}]
+
+
 def test_connect_yields_bus():
     async def body():
         async with connect() as bus:

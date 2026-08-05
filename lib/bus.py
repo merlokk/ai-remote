@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import sys
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from typing import Any
@@ -85,10 +86,27 @@ class Bus:
         ``handler`` may be sync or async and receives the decoded request dict. If it
         returns ``None`` (or the message has no reply inbox), no reply is published.
         Pass ``queue`` to load-balance across responders via a NATS queue group.
+
+        A message that is not a JSON object is dropped with a warning and never
+        reaches ``handler``: subjects are open, so a stray ``nats pub`` / ``nats req``
+        can hand a live responder anything at all, and that must not surface as a
+        traceback out of the subscription callback (nor be answered).
         """
 
         async def cb(msg):
-            req = _decode(msg.data)
+            try:
+                req = _decode(msg.data)
+            except (UnicodeDecodeError, json.JSONDecodeError) as e:
+                # ASCII only: this can land on a Windows console with a legacy codepage.
+                print(f"bus: could not decode a message on {msg.subject!r}: {e}", file=sys.stderr)
+                return
+            if not isinstance(req, dict):
+                print(
+                    f"bus: could not decode a message on {msg.subject!r}: "
+                    f"expected a JSON object, got {type(req).__name__}",
+                    file=sys.stderr,
+                )
+                return
             result = handler(req)
             if inspect.isawaitable(result):
                 result = await result
