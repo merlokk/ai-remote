@@ -70,8 +70,6 @@ EXIT_ERROR = 1
 EXIT_NOT_YUBIKEY = 2
 
 _TOUCH_MESSAGE = "\n>>> touch your YubiKey to sign this decision <<<\n"
-#: Hex characters of the signature's sha256 shown after a decision is signed.
-FINGERPRINT_CHARS = 16
 _REQUIRED_CONFIG_FIELDS = ("key_id", "public_key", "ctx", "ikm", "credential")
 
 
@@ -287,13 +285,13 @@ def prompt_operator(request: dict):
     return None
 
 
-def signature_fingerprint(sig_b64: str, *, chars: int = FINGERPRINT_CHARS) -> str:
-    """Short sha256 of the signature bytes, for the console.
+def signature_fingerprint(sig_b64: str) -> str:
+    """sha256 of the signature bytes, hex - what the console shows after a decision.
 
-    The full DER signature is too long to read and means nothing by eye; a truncated
-    hash is enough to match this line against a log or a second window.
+    The whole digest: the raw DER signature is longer still and means nothing by eye,
+    while a truncated hash is not something an operator can compare against anything.
     """
-    return hashlib.sha256(base64.b64decode(sig_b64, validate=True)).hexdigest()[:chars]
+    return hashlib.sha256(base64.b64decode(sig_b64, validate=True)).hexdigest()
 
 
 def print_decision(reply: Mapping[str, Any]) -> None:

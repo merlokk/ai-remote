@@ -271,16 +271,15 @@ def test_prompt_operator_shows_the_request(monkeypatch, capsys):
     assert "rm -rf build" in err and "Bash" in err
 
 
-def test_signature_fingerprint_is_the_sha256_of_the_signature_bytes():
+def test_signature_fingerprint_is_the_full_sha256_of_the_signature_bytes():
     import hashlib
 
     raw = b"\x30\x06 a der signature"
     sig_b64 = base64.b64encode(raw).decode("ascii")
 
-    fp = responder_yubikey.signature_fingerprint(sig_b64)
-
-    assert hashlib.sha256(raw).hexdigest().startswith(fp)
-    assert len(fp) == 16  # short enough to read off a console, long enough to match
+    # The whole digest, not a truncated one: a half-hash on the console invites the
+    # question "sha256 of what, and why so short?".
+    assert responder_yubikey.signature_fingerprint(sig_b64) == hashlib.sha256(raw).hexdigest()
 
 
 def test_print_decision_names_the_behavior_and_the_signature(capsys):

@@ -433,7 +433,7 @@ allow / deny / skip? [a/d/s]: a
 
 >>> touch your YubiKey to sign this decision <<<
   decision  : allow
-  signature : sha256:ece85c5662ca6be6
+  signature : sha256:7faff4db5669b2433dc98cd9f75df674ee998f265b21d1c8670c7a3e1dfda221
   sent to the hook
 ```
 
