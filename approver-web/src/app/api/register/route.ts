@@ -1,10 +1,11 @@
 /**
- * POST /api/register — register this app's key with a one-time token (§6).
+ * POST /api/register — register the browser's key with a one-time token (§6).
  *
- * The token never leaves the server beyond the `registrations` subject, and the
- * generated private key never leaves the server at all. A rejection (bad or
- * spent token, no handler listening) leaves any existing key untouched — 409,
- * because it is the request that is wrong, not the server.
+ * The browser generates the pair and sends only public material; there is no
+ * private key on this side to leak. The token goes no further than the
+ * `registrations` subject. A rejection (bad or spent token, no handler
+ * listening) leaves any existing key untouched — 409, because it is the request
+ * that is wrong, not the server.
  */
 import { getResponder, RegistrationError } from "@/lib/responder";
 import { registerRequestSchema } from "@/lib/schemas";
@@ -30,8 +31,9 @@ export async function POST(request: Request): Promise<Response> {
     return json({ ok: false, error: parsed.error.issues[0]?.message ?? "bad token" }, 400);
   }
 
+  const { token, public_key, public_key_raw } = parsed.data;
   try {
-    const keyId = await getResponder().register(parsed.data.token);
+    const keyId = await getResponder().register(token, public_key, public_key_raw);
     return json({ ok: true, key_id: keyId }, 200);
   } catch (err) {
     if (err instanceof RegistrationError) return json({ ok: false, error: err.message }, 409);

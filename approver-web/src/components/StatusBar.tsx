@@ -48,7 +48,7 @@ export function StatusBar({
               stream {streamOpen ? "live" : "reconnecting"}
             </Badge>
             <Badge colorPalette={unsigned ? "orange" : "brand"} variant="subtle">
-              {unsigned ? "unsigned — not registered" : `signing: ${status.signing_mode}`}
+              {unsigned ? "no key registered" : "key: browser (non-extractable)"}
             </Badge>
           </HStack>
 
@@ -74,8 +74,9 @@ export function StatusBar({
 
           {unsigned ? (
             <Text fontSize="sm" color="fg.muted">
-              No key yet, so decisions go out unsigned, <Text as="code">hook.py</Text> rejects
-              them and Claude Code falls back to its own prompt. Register above to fix that.
+              Nothing is registered yet, so no decision can be answered:{" "}
+              <Text as="code">hook.py</Text> would reject it and Claude Code falls back to its
+              own prompt. Register above to fix that.
             </Text>
           ) : null}
         </Stack>

@@ -2,10 +2,16 @@
  * Types shared by the server responder and the browser.
  *
  * Kept apart from `responder.ts` so client components can import them without
- * pulling the `nats` module into the browser bundle.
+ * pulling the NATS client into the browser bundle.
  */
 import type { KeyType, PermissionRequest } from "./schemas";
-import type { SigningMode } from "./signer";
+
+/**
+ * Where the signing key lives. `browser` is the only signing mode: the private
+ * half is a non-extractable WebCrypto key in IndexedDB, so the server can verify
+ * but never sign (see `browser-key.ts`).
+ */
+export type SigningMode = "unsigned" | "browser";
 
 export interface PendingRequest {
   /** The request's own nonce — unique per request, so it is the entry's id. */
@@ -25,7 +31,7 @@ export interface ResponderStatus {
   key_id: string;
   key_type: KeyType;
   signing_mode: SigningMode;
-  /** True once a key has been registered and decisions are actually signed. */
+  /** True once a key has been registered — says nothing about who holds it. */
   registered: boolean;
   /** The registered public key (base64 compressed point), or null. */
   public_key: string | null;
@@ -48,7 +54,5 @@ export interface RegisterResult {
 
 export interface DecisionResult {
   ok: boolean;
-  /** False while phase 1 replies with an empty signature (the hook rejects it). */
-  signed?: boolean;
   error?: string;
 }

@@ -32,21 +32,20 @@ export async function POST(request: Request): Promise<Response> {
     return json({ ok: false, error: detail }, 400);
   }
 
-  const { nonce, behavior, reason, updated_input } = parsed.data;
+  const { nonce, behavior, reason, updated_input, sig } = parsed.data;
   try {
-    const reply = await getResponder().decide(
+    await getResponder().decide(
       nonce,
-      behavior,
-      reason,
-      updated_input ?? null,
+      { behavior, reason, updatedInput: updated_input ?? null },
+      sig,
     );
-    return json({ ok: true, signed: reply.sig !== "" }, 200);
+    return json({ ok: true }, 200);
   } catch (err) {
     if (err instanceof DecisionError) return json({ ok: false, error: err.message }, 409);
-    // Signing failed. The Python responders stay silent here on purpose (§7):
+    // Nothing was sent. The Python responders stay silent here on purpose (§7):
     // no reply, hook falls back. Report it, do not guess a verdict.
     const message = err instanceof Error ? err.message : String(err);
     console.error("[approver-web] could not answer:", message);
-    return json({ ok: false, error: `could not sign the decision: ${message}` }, 500);
+    return json({ ok: false, error: `could not answer: ${message}` }, 500);
   }
 }

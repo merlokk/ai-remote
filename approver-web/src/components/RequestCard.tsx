@@ -79,7 +79,7 @@ export function RequestCard({ pending, now }: { pending: PendingRequest; now: nu
       <Separator />
 
       <Card.Footer paddingTop={5}>
-        <DecisionForm nonce={pending.nonce} />
+        <DecisionForm nonce={pending.nonce} request={request} />
       </Card.Footer>
     </Card.Root>
   );

@@ -22,12 +22,16 @@ import {
 } from "@nats-io/transport-node";
 
 import { loadConfig, saveConfig } from "./config";
-import { generateP256 } from "./keys";
+import { verifyP256 } from "./keys";
 import { PROTOCOL_VERSION } from "./protocol";
-import { buildSignedReply, type SignedReply } from "./reply";
-import { type Behavior, permissionRequestSchema, registrationReplySchema } from "./schemas";
-import { type Signer, softwareSigner, unsignedSigner } from "./signer";
-import type { PendingRequest, ResponderStatus, Snapshot } from "./types";
+import {
+  assembleReply,
+  type Decision,
+  decisionSigningBytes,
+  type SignedReply,
+} from "./reply";
+import { permissionRequestSchema, registrationReplySchema } from "./schemas";
+import type { PendingRequest, ResponderStatus, SigningMode, Snapshot } from "./types";
 
 const decoder = new TextDecoder();
 const encoder = new TextEncoder();
@@ -55,20 +59,9 @@ class Responder {
   private error: string | null = null;
 
   private loaded = loadConfig();
-  private signer: Signer = this.signerFromConfig();
 
-  /** A registered key signs; without one we stay in the unsigned phase-1 mode. */
-  private signerFromConfig(): Signer {
-    const { key_id, key_type, private_key } = this.loaded.config;
-    if (!private_key) return unsignedSigner(key_id, key_type);
-    try {
-      return softwareSigner(key_id, key_type, private_key);
-    } catch (err) {
-      // A broken key must not take the app down: it still shows requests, it
-      // just cannot sign — which the status bar reports.
-      console.error("[approver-web] stored key unusable:", err);
-      return unsignedSigner(key_id, key_type);
-    }
+  private get signingMode(): SigningMode {
+    return this.loaded.config.public_key_raw ? "browser" : "unsigned";
   }
 
   get config() {
@@ -164,25 +157,33 @@ class Responder {
     if (dropped) this.notify();
   }
 
-  /** Sign a decision and answer into the request's reply inbox. */
-  async decide(
-    nonce: string,
-    behavior: Behavior,
-    reason: string,
-    updatedInput: Record<string, unknown> | null,
-  ): Promise<SignedReply> {
+  /**
+   * Answer a request with a decision the browser signed.
+   *
+   * The server re-derives the signing bytes from the *pending request it holds*
+   * plus the posted decision, and verifies the signature against the registered
+   * key before anything goes on the wire. So a caller cannot post one decision
+   * and a signature over another, and a canonicalisation mismatch is caught here
+   * — with a message — instead of surfacing as the hook silently falling back.
+   */
+  async decide(nonce: string, decision: Decision, sig: string): Promise<SignedReply> {
     const entry = this.entries.get(nonce);
     if (!entry) {
       throw new DecisionError("this request is gone (expired, or already answered)");
     }
+    const { key_id, public_key_raw } = this.loaded.config;
+    if (!public_key_raw) {
+      throw new DecisionError("no key is registered — register this browser first");
+    }
 
-    const reply = await buildSignedReply(entry.pending.request, {
-      behavior,
-      signer: this.signer,
-      reason,
-      updatedInput,
-    });
+    const bytes = await decisionSigningBytes(entry.pending.request, decision);
+    if (!verifyP256(public_key_raw, bytes, sig)) {
+      throw new DecisionError(
+        "the signature does not match the registered key — is this browser the one that registered?",
+      );
+    }
 
+    const reply = assembleReply(entry.pending.request, decision, { keyId: key_id, sig });
     entry.msg.respond(encoder.encode(JSON.stringify(reply)));
     this.entries.delete(nonce);
     this.notify();
@@ -190,13 +191,14 @@ class Responder {
   }
 
   /**
-   * Register (or rotate) this app's key with a one-time token (§6).
+   * Register (or rotate) the browser's key with a one-time token (§6).
    *
-   * Order matters and mirrors both Python responders: generate in memory →
-   * publish the public half → **persist only on `ok:true`**. A rejected
-   * registration must not clobber a key that still works.
+   * The key pair itself is generated in the browser; only the public halves
+   * arrive here. Order mirrors both Python responders: publish the public key →
+   * **persist only on `ok:true`**. A rejected registration must not clobber a
+   * key that still works.
    */
-  async register(token: string): Promise<string> {
+  async register(token: string, publicB64: string, publicRawB64: string): Promise<string> {
     const keyId = token.split(".", 1)[0];
     if (!keyId) throw new RegistrationError("token has an empty key_id");
 
@@ -206,12 +208,11 @@ class Responder {
       throw new RegistrationError(this.error ?? "not connected to NATS");
     }
 
-    const key = generateP256();
     const request = {
       v: PROTOCOL_VERSION,
       token,
       key_id: keyId,
-      pubkey: key.publicB64,
+      pubkey: publicB64,
       key_type: "p256" as const,
       ts: Math.floor(Date.now() / 1000),
     };
@@ -240,12 +241,11 @@ class Responder {
       ...this.loaded.config,
       key_id: keyId,
       key_type: "p256",
-      private_key: key.privateB64,
-      public_key: key.publicB64,
+      public_key: publicB64,
+      public_key_raw: publicRawB64,
     };
     saveConfig(this.loaded.config, this.loaded.path);
     this.loaded.fromFile = true;
-    this.signer = this.signerFromConfig();
     this.notify();
     return keyId;
   }
@@ -256,10 +256,10 @@ class Responder {
       servers: this.config.servers,
       subject: this.config.subject,
       queue: this.config.queue,
-      key_id: this.signer.keyId,
-      key_type: this.signer.keyType,
-      signing_mode: this.signer.mode,
-      registered: this.signer.mode !== "unsigned",
+      key_id: this.loaded.config.key_id,
+      key_type: this.loaded.config.key_type,
+      signing_mode: this.signingMode,
+      registered: this.signingMode !== "unsigned",
       public_key: this.loaded.config.public_key ?? null,
       config_path: this.loaded.path,
       config_from_file: this.loaded.fromFile,

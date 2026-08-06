@@ -1,13 +1,14 @@
 "use client";
 
 /**
- * Registering this app as a responder (§6).
+ * Registering this browser as a responder (§6).
  *
- * Collapsed once a key exists — rotation is rare — and open while there is
- * none, because until then every decision this app sends is rejected.
+ * Collapsed once this browser holds a key — rotation is rare — and open while
+ * it does not, because until then every decision it sends is rejected.
  *
- * The token is a bearer credential for one `key_id`, so it goes straight to the
- * server and is never kept in component state after the request.
+ * The key pair is generated **here**, non-extractable, and only the public half
+ * is ever sent (see `browser-key.ts`). The token is a bearer credential for one
+ * `key_id`, so it is not kept in component state after the request.
  */
 import {
   Button,
@@ -24,11 +25,16 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useState } from "react";
 import { useForm } from "react-hook-form";
 
+import { useBrowserKey } from "@/lib/browser-key-context";
 import { type RegisterFormValues, registerFormSchema } from "@/lib/schemas";
 import type { RegisterResult, ResponderStatus } from "@/lib/types";
 
 export function RegisterPanel({ status }: { status: ResponderStatus | null }) {
-  const registered = status?.registered ?? false;
+  const { key, ready, register: registerKey } = useBrowserKey();
+  const registered = key !== null;
+  // A key here that the allowlist no longer knows: someone rotated this key_id
+  // elsewhere, and every decision would be rejected with no visible reason.
+  const stale = key !== null && status?.public_key != null && status.public_key !== key.public_key;
   const [open, setOpen] = useState<boolean | null>(null);
   const [result, setResult] = useState<RegisterResult | null>(null);
 
@@ -42,18 +48,14 @@ export function RegisterPanel({ status }: { status: ResponderStatus | null }) {
     defaultValues: { token: "" },
   });
 
-  // Open by default until a key exists; after that the operator decides.
-  const expanded = open ?? !registered;
+  // Open by default until this browser has a usable key; after that the
+  // operator decides — except a stale key, which needs attention.
+  const expanded = open ?? (!registered || stale);
 
   const onSubmit = handleSubmit(async (values) => {
     setResult(null);
     try {
-      const response = await fetch("/api/register", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ token: values.token }),
-      });
-      const body = (await response.json()) as RegisterResult;
+      const body = await registerKey(values.token);
       setResult(body);
       if (body.ok) reset({ token: "" }); // don't leave a spent token on screen
     } catch (err) {
@@ -68,8 +70,14 @@ export function RegisterPanel({ status }: { status: ResponderStatus | null }) {
           <Collapsible.Trigger width="100%" cursor="pointer">
             <HStack justify="space-between" width="100%">
               <Text fontWeight="semibold">Register</Text>
-              <Text fontSize="sm" color="fg.muted">
-                {registered ? `${status?.key_id} — registered` : "no key yet"}
+              <Text fontSize="sm" color={stale ? "red.fg" : "fg.muted"}>
+                {!ready
+                  ? "checking this browser…"
+                  : stale
+                    ? "this browser's key is not the registered one"
+                    : registered
+                      ? `${key?.key_id} — key held by this browser`
+                      : "no key in this browser"}
               </Text>
             </HStack>
           </Collapsible.Trigger>
@@ -77,14 +85,22 @@ export function RegisterPanel({ status }: { status: ResponderStatus | null }) {
           <Collapsible.Content>
             <Stack gap={4} paddingTop={4}>
               <Text fontSize="sm" color="fg.muted">
-                Registers this app as a responder: it generates a P-256 key, publishes the
-                public half with your one-time token, and stores the pair only if the handler
-                accepts it. Mint a token with{" "}
+                Registers <em>this browser</em> as a responder. The P-256 key is generated
+                here and marked non-extractable — the private half never leaves the browser,
+                not even to this app&apos;s own server, and it survives closing the browser.
+                Only the public half is published, with your one-time token. Mint one with{" "}
                 <Code size="sm">
                   py approver/registration_handler.py --get-token approver-web
                 </Code>
                 .
               </Text>
+
+              {stale ? (
+                <Text fontSize="sm" color="red.fg">
+                  The allowlist holds a different key for {status?.key_id}. Decisions from
+                  this browser will be rejected until you register again.
+                </Text>
+              ) : null}
 
               <Field.Root invalid={!!errors.token}>
                 <Field.Label>One-time token</Field.Label>
@@ -109,9 +125,9 @@ export function RegisterPanel({ status }: { status: ResponderStatus | null }) {
                 </Text>
               ) : null}
 
-              {registered && status?.public_key ? (
+              {key ? (
                 <Text fontSize="xs" color="fg.subtle" fontFamily="mono" wordBreak="break-all">
-                  public key {status.public_key}
+                  public key {key.public_key}
                 </Text>
               ) : null}
 

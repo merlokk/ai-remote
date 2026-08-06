@@ -26,10 +26,23 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useState } from "react";
 import { useForm } from "react-hook-form";
 
-import { type Behavior, type DecisionFormValues, decisionFormSchema } from "@/lib/schemas";
+import { useBrowserKey } from "@/lib/browser-key-context";
+import {
+  type Behavior,
+  type DecisionFormValues,
+  decisionFormSchema,
+  type PermissionRequest,
+} from "@/lib/schemas";
 import type { DecisionResult } from "@/lib/types";
 
-export function DecisionForm({ nonce }: { nonce: string }) {
+export function DecisionForm({
+  nonce,
+  request,
+}: {
+  nonce: string;
+  request: PermissionRequest;
+}) {
+  const { key, ready, sign } = useBrowserKey();
   const [sent, setSent] = useState<{ behavior: Behavior; result: DecisionResult } | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
@@ -49,12 +62,22 @@ export function DecisionForm({ nonce }: { nonce: string }) {
       const text = values.updatedInput.trim();
       // Validated by the schema above, so this parse cannot throw here.
       const updated = behavior === "allow" && text ? JSON.parse(text) : null;
+      const decision = { behavior, reason: values.reason, updatedInput: updated };
 
       try {
+        // Signed here, in the browser, before anything is posted: the server
+        // has no key and only verifies (see browser-key.ts).
+        const sig = await sign(request, decision);
         const response = await fetch("/api/decision", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ nonce, behavior, reason: values.reason, updated_input: updated }),
+          body: JSON.stringify({
+            nonce,
+            behavior,
+            reason: values.reason,
+            updated_input: updated,
+            sig,
+          }),
         });
         const result = (await response.json()) as DecisionResult;
         if (result.ok) setSent({ behavior, result });
@@ -67,8 +90,18 @@ export function DecisionForm({ nonce }: { nonce: string }) {
   if (sent) {
     return (
       <Text fontSize="sm" color="fg.muted">
-        sent <Text as="strong">{sent.behavior}</Text>
-        {sent.result.signed ? " (signed)" : " — unsigned, the hook will reject it"}
+        sent <Text as="strong">{sent.behavior}</Text>, signed by this browser
+      </Text>
+    );
+  }
+
+  if (ready && !key) {
+    // No key means no valid answer is possible. Say so instead of offering
+    // buttons that would produce a reply the hook throws away.
+    return (
+      <Text fontSize="sm" color="fg.muted">
+        This browser holds no signing key — register above to answer this request. Left alone,
+        it expires and Claude Code asks in its own terminal.
       </Text>
     );
   }

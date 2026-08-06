@@ -29,12 +29,15 @@ export const configSchema = z.object({
   key_id: z.string().min(1).default("approver-web"),
   key_type: z.enum(KEY_TYPES).default("p256"),
   /**
-   * The registered key pair, written only after the handler acks `ok:true`.
-   * Same field names and encodings as `responder-config.json` (§6). Absent
-   * until this app has registered — which is why they are optional.
+   * The registered **public** key, written only after the handler acks
+   * `ok:true`. There is deliberately no private key here: custody lives in the
+   * browser (`browser-key.ts`). `public_key` is the base64 33-byte compressed
+   * point the allowlist holds; `public_key_raw` is the 65-byte uncompressed
+   * form, kept only so the server can verify what the browser signed without
+   * doing a modular square root.
    */
-  private_key: z.string().min(1).optional(),
   public_key: z.string().min(1).optional(),
+  public_key_raw: z.string().min(1).optional(),
   /**
    * How long a request stays on screen, seconds. Should be >= the hook's own
    * `timeout` in handler-config.json, otherwise the card vanishes while Claude
@@ -110,8 +113,16 @@ export const tokenSchema = z
 export const registerFormSchema = z.object({ token: tokenSchema });
 export type RegisterFormValues = z.infer<typeof registerFormSchema>;
 
-/** POST /api/register. */
-export const registerRequestSchema = z.object({ token: tokenSchema });
+/**
+ * POST /api/register. The browser generates the key and sends only public
+ * material — both encodings, because the wire wants the compressed point and
+ * local verification wants the uncompressed one.
+ */
+export const registerRequestSchema = z.object({
+  token: tokenSchema,
+  public_key: z.string().min(1),
+  public_key_raw: z.string().min(1),
+});
 
 /** What `registration_handler.py` sends back on `registrations`. */
 export const registrationReplySchema = z.object({
@@ -121,12 +132,20 @@ export const registrationReplySchema = z.object({
   error: z.string().optional(),
 });
 
-/** POST /api/decision. `updated_input` is honored only on allow (§7). */
+/**
+ * POST /api/decision. `updated_input` is honored only on allow (§7).
+ *
+ * `sig` comes from the browser — the server has no key to make one with. It
+ * re-derives the signing bytes from the pending request plus these fields and
+ * checks the signature before answering, so a client cannot get an arbitrary
+ * reply onto the bus by posting a mismatched decision.
+ */
 export const decisionRequestSchema = z.object({
   nonce: z.string().min(1),
   behavior: z.enum(BEHAVIORS),
   reason: z.string().max(500).default(""),
   updated_input: z.record(z.string(), z.unknown()).nullish(),
+  sig: z.string().min(1),
 });
 
 export type DecisionRequest = z.infer<typeof decisionRequestSchema>;

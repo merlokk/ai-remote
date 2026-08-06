@@ -5,8 +5,9 @@ on the bus and answers it with a button, instead of the console prompt in
 `approver/responder.py`.
 
 The loop is closed: register a key with a one-time token from the page, and every
-allow/deny is signed so `hook.py` accepts it. The key currently lives on disk
-(like `approver/responder.py`); moving it into the browser is the open item.
+allow/deny is signed so `hook.py` accepts it. The key is a **non-extractable
+WebCrypto key held by the browser** — no private key on disk, not even on this
+app's own server, and it survives closing the browser.
 Architecture and the decisions behind it: [`CLAUDE.md`](CLAUDE.md).
 
 ## Run
