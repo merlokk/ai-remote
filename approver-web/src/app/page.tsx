@@ -4,30 +4,38 @@ import { Box, Card, Container, HStack, Heading, Stack, Text } from "@chakra-ui/r
 
 import { RegisterPanel } from "@/components/RegisterPanel";
 import { RequestCard } from "@/components/RequestCard";
+import { SoundToggle } from "@/components/SoundToggle";
 import { StatusBar } from "@/components/StatusBar";
 import { useApprovalStream, useNow } from "@/lib/use-approval-stream";
+import { useRequestAlert } from "@/lib/use-request-alert";
 
 export default function Page() {
   const { snapshot, streamOpen } = useApprovalStream();
   const now = useNow();
   const requests = snapshot?.requests ?? [];
   const live = snapshot?.status.connected ?? false;
+  // null until the first snapshot, so the alert can tell "page just loaded"
+  // from "a request just arrived".
+  const { sound, toggleSound } = useRequestAlert(snapshot?.requests ?? null);
 
   return (
     <Container maxW="3xl" paddingY={12}>
       <Stack gap={8}>
         <Stack gap={2}>
-          <HStack gap={3}>
-            {/* The one purely decorative use of the house colour. */}
-            <Box
-              width="2.5"
-              height="2.5"
-              borderRadius="full"
-              bg={live ? "brand.solid" : "border.emphasized"}
-            />
-            <Heading size="2xl" letterSpacing="tight">
-              approver-web
-            </Heading>
+          <HStack gap={3} justify="space-between">
+            <HStack gap={3}>
+              {/* The one purely decorative use of the house colour. */}
+              <Box
+                width="2.5"
+                height="2.5"
+                borderRadius="full"
+                bg={live ? "brand.solid" : "border.emphasized"}
+              />
+              <Heading size="2xl" letterSpacing="tight">
+                approver-web
+              </Heading>
+            </HStack>
+            <SoundToggle sound={sound} onToggle={toggleSound} />
           </HStack>
           <Text color="fg.muted">
             Claude Code permission requests, live off the bus. Keep this tab open — it is the

@@ -111,6 +111,8 @@ src/lib/
   responder.ts           server-only: NATS connection, pending map, TTL sweep, decide(), register()
   types.ts               types shared with the browser (kept out of responder.ts on purpose)
   use-approval-stream.ts client: EventSource -> snapshot, plus a ticking clock
+  alert-sound.ts         the chirp, synthesised (client) — no asset, no dependency
+  use-request-alert.ts   diffs snapshots for NEW nonces; sound + tab-title count
 src/app/
   layout.tsx providers.tsx page.tsx      the single page
   theme.ts               the whole visual system (see "Look and feel")
@@ -118,7 +120,7 @@ src/app/
   api/decision/route.ts  POST — validate, sign, respond into the reply inbox
   api/register/route.ts  POST — one-time token -> a registered key (§6)
 src/components/
-  RegisterPanel.tsx StatusBar.tsx RequestCard.tsx DecisionForm.tsx
+  RegisterPanel.tsx StatusBar.tsx RequestCard.tsx DecisionForm.tsx SoundToggle.tsx
 ```
 
 Mirrored from the Python side on purpose: `protocol.ts` ↔ `protocol.py`,
@@ -440,6 +442,33 @@ The CLI prints a third-party risk assessment per skill and warns that skills run
 with full agent permissions — `web-design-guidelines` came back "Med Risk" from
 Snyk, everything else "Low"/"Safe". They are instruction markdown, not code, but
 that is a reason to read a skill before trusting it, not a reason to skip reading.
+
+## The new-request alert
+
+The page exists to be watched while you look at something else, so an arriving
+request chirps and the tab title carries the count — `(2) approver-web`.
+
+- **Synthesised, not a file.** Two sine tones through a gain envelope
+  (`alert-sound.ts`): no asset in the repo, no dependency to approve (root §1),
+  nothing fetched at runtime. The envelope is not decoration — ramping the gain
+  over 8 ms at each end removes the click a bare start/stop produces, which
+  otherwise reads as a fault rather than a notification.
+- **The first snapshot never sounds.** Opening the page with four requests
+  already waiting is not four events, and a beep on every reload trains you to
+  ignore it. `use-request-alert.ts` adopts the first snapshot silently, then
+  diffs **nonces** — not lengths, because one request expiring as another
+  arrives leaves the count unchanged.
+- **The toggle is also the gesture.** Browsers refuse audio until the page has
+  had a real user interaction, so the context starts suspended and the button
+  reads `Sound — click to enable`. Clicking it in that state **unlocks** rather
+  than switching the preference off — an early version did the opposite of its
+  own label. The preference itself lives in `localStorage`.
+
+Verified in a real browser: a synthetic `element.click()` does **not** count as
+a user gesture (the context stays suspended), while `agent-browser click`, which
+dispatches a real input event, unlocks it — worth knowing before concluding the
+audio is broken. With sound on, one new request produced exactly two oscillators
+(one two-note chirp) and six seconds of ordinary snapshot churn produced none.
 
 ## Run — `run.cmd`
 
