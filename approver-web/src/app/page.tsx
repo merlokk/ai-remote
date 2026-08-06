@@ -1,6 +1,6 @@
 "use client";
 
-import { Box, Container, Heading, Stack, Text } from "@chakra-ui/react";
+import { Box, Card, Container, HStack, Heading, Stack, Text } from "@chakra-ui/react";
 
 import { RequestCard } from "@/components/RequestCard";
 import { StatusBar } from "@/components/StatusBar";
@@ -10,12 +10,24 @@ export default function Page() {
   const { snapshot, streamOpen } = useApprovalStream();
   const now = useNow();
   const requests = snapshot?.requests ?? [];
+  const live = snapshot?.status.connected ?? false;
 
   return (
-    <Container maxW="4xl" py={8}>
-      <Stack gap={6}>
-        <Stack gap={1}>
-          <Heading size="2xl">approver-web</Heading>
+    <Container maxW="3xl" paddingY={12}>
+      <Stack gap={8}>
+        <Stack gap={2}>
+          <HStack gap={3}>
+            {/* The one purely decorative use of the house colour. */}
+            <Box
+              width="2.5"
+              height="2.5"
+              borderRadius="full"
+              bg={live ? "brand.solid" : "border.emphasized"}
+            />
+            <Heading size="2xl" letterSpacing="tight">
+              approver-web
+            </Heading>
+          </HStack>
           <Text color="fg.muted">
             Claude Code permission requests, live off the bus. Keep this tab open — it is the
             responder.
@@ -25,13 +37,18 @@ export default function Page() {
         <StatusBar status={snapshot?.status ?? null} streamOpen={streamOpen} />
 
         {requests.length === 0 ? (
-          <Box borderWidth="1px" borderStyle="dashed" borderRadius="md" p={10} textAlign="center">
-            <Text color="fg.muted">
-              No pending requests. Trigger one in Claude Code and it shows up here.
-            </Text>
-          </Box>
+          <Card.Root variant="subtle">
+            <Card.Body paddingY={16}>
+              <Stack gap={1} textAlign="center">
+                <Text fontWeight="medium">Nothing waiting</Text>
+                <Text color="fg.muted" fontSize="sm">
+                  Trigger a permission request in Claude Code and it shows up here.
+                </Text>
+              </Stack>
+            </Card.Body>
+          </Card.Root>
         ) : (
-          <Stack gap={4}>
+          <Stack gap={6}>
             {requests.map((pending) => (
               <RequestCard key={pending.nonce} pending={pending} now={now} />
             ))}

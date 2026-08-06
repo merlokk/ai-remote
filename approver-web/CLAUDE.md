@@ -174,10 +174,7 @@ Known remaining gap: floats. Python's `repr` and JS number formatting agree for
 everything realistic in a `tool_input`, but they are not the same algorithm. If a
 tool ever ships a float in its input, add a vector.
 
-## Look and feel — the owner's direction
-
-What is built today is stock Chakra: default radii, default grey, no theme. That
-is a starting point, not the intended end state.
+## Look and feel
 
 **The direction the repository owner asked for: soft rounded panels, green.**
 The reference they pointed at is a modern SaaS marketing page — content sitting
@@ -185,23 +182,49 @@ on generously rounded cards over a calm background, green as the single brand
 colour carrying buttons, badges and highlights. Concretely, for this app:
 
 - **Generously rounded surfaces.** Cards, panels, inputs and buttons all
-  visibly rounded — closer to `2xl` than to the default; pills fully rounded.
-  The radius is the signature, so it should be consistent everywhere rather
-  than tuned per component.
+  visibly rounded; pills fully rounded. The radius is the signature, so it is
+  consistent everywhere rather than tuned per component.
 - **Green is the house colour.** One green as the primary accent, used with
   restraint on the things that matter, not painted across every surface.
-- **Calm background, raised cards.** A soft neutral page behind clearly
-  separated cards. Prefer a soft shadow or a very light border over the heavy
-  1px grey outlines currently in `StatusBar`.
+- **A light green page, white cards floating on it.** The background itself is
+  green (`#e9f7dd`, lettuce rather than mint), which is what makes the white
+  cards lift; shadow rather than a heavy 1px outline separates them.
 - **Quiet type, generous whitespace.** Spacing does the work; the type stays
   plain. No display face — see the dependency constraint below.
 
-Where it goes: `src/app/providers.tsx`. Chakra v3 does this with
-`createSystem(defaultConfig, defineConfig({ theme: { tokens: … } }))` (all three
-are exported from `@chakra-ui/react`, verified on 3.36.1) — replace the bare
-`defaultSystem` there with a project system, override the `radii` scale and the
-green palette once, and let the components inherit. Do not scatter `borderRadius`
-props across components.
+### How it is built
+
+It all lives in **`src/app/theme.ts`** — `createSystem(defaultConfig,
+defineConfig(…))`, handed to `ChakraProvider` by `providers.tsx`. Four levers,
+chosen so that nothing has to be restyled component by component:
+
+| Lever | What it does |
+|-------|--------------|
+| `semanticTokens.colors.bg.canvas`, used by `globalCss` on `html, body` | The page tint, `#e9f7dd` light / `brand.950` dark. Deliberately a **token, not a literal in `globalCss`** — one place to retune, and dark mode does not end up with a light-green page. It extends Chakra's `bg` group; `bg.subtle` and `bg.panel` are untouched, so the cards keep lifting off it. The hue leans warmer than the brand ramp: a light tint *of* `#2a8256` reads mint, not lettuce. |
+| `semanticTokens.radii` `l1`/`l2`/`l3` → `lg`/`2xl`/`3xl` (0.5 / 1 / 1.5 rem) | Chakra's recipes never hardcode a radius: `Card` uses `l3`, `Button` / `Input` / `Textarea` / `Badge` use `l2`. Remapping three tokens rounds the whole UI, including components nobody has used yet. Defaults were xs/sm/md — barely rounded at all. |
+| a `brand` palette (scale + the 8 semantic entries) | `brand.solid` = `#2a8256`, 4.7:1 against white so button labels stay AA-legible. Chakra's built-in `green` is left alone for success semantics. Without the semantic entries (`solid`, `fg`, `subtle`, …) `colorPalette="brand"` renders unstyled. |
+| recipe defaults: `badge.base.borderRadius: full`, `card` variant `elevated` | Pills, and raised panels instead of outlined boxes, repo-wide. Both merge into Chakra's recipes rather than replacing them (verified: the badge base keeps its `display`/`gap`/`fontWeight`; `Code`, which borrows badge's *variants* but has its own base, correctly stays `l2` and does not become a pill). |
+
+There is deliberately **no global `colorPalette: "brand"`**. Green is the
+accent, not the paint — see constraint 1 below for why that matters more here
+than it would on a marketing page. It is applied by hand in exactly three
+places: the Allow button, the healthy status badges, and one dot next to the
+page title.
+
+Verified twice over: at the token level (`system.token(...)` resolves the radii
+to 0.5/1/1.5 rem, `--chakra-colors-brand-600` to `#2a8256` and
+`--chakra-colors-bg-canvas` to `#e9f7dd`), and in a real browser via
+`agent-browser` against
+`run.cmd --prod`, with requests parked on the bus so the cards had something to
+render.
+
+That browser pass is also how the **decision options ended up collapsed**. With
+`Reason` and `Replacement input` open on every card, four requests ran to a
+4 400 px page and the buttons were buried; collapsed behind one
+`Collapsible.Root` trigger the same page is 2 900 px and every card ends in its
+two buttons. Both fields are optional, so nothing needed is hidden — and the
+panel is **forced open whenever `errors.reason || errors.updatedInput`**, since
+a validation message nobody can see is worse than a tall page.
 
 **Two constraints that outrank the aesthetic.** They are not style preferences:
 
@@ -212,6 +235,16 @@ props across components.
    thing an operator is agreeing to has to stay more prominent than the button
    agreeing to it. A prettier page that makes it easier to click Allow by reflex
    is a worse page.
+
+   How `DecisionForm` and `RequestCard` currently honour that: both buttons are
+   **solid, `size="lg"`, the same width** — neither is the quiet secondary one
+   you dismiss, and they are told apart by their labels, not only by green vs
+   red. Above them, the `tool_input` is the heaviest element on the card (its
+   own labelled block, `size="lg"`, generous padding) while the metadata around
+   it is small and muted. Collapsing the optional fields serves this too: what
+   a card now ends with is the command, then the two answers, with nothing
+   between them. Keep it that way — if a redesign makes Allow the obvious
+   default, it has regressed regardless of how it looks.
 2. **No new dependencies for looks.** Root §1 requires sign-off for any package,
    which includes web-font, icon and animation libraries. The direction above is
    reachable with Chakra tokens and system fonts alone; if it genuinely is not,
@@ -284,10 +317,15 @@ shadows a user-level skill (there are none), and `frontend-design` (build) and
 `web-design-guidelines` (review) are opposite halves of the same job. What
 matters is where each one meets *this* codebase:
 
-- **`next-dev-loop` will refuse until `agent-browser` is installed** — it names
+- **`next-dev-loop`'s prerequisite is now installed.** It names
   `agent-browser >= 0.31.1` and `/_next/mcp` as "hard floors, not soft
   preferences", and stops rather than degrading to grep. Next 16.3 + Turbopack
-  already satisfies its half; the other half is `npm i -g agent-browser`.
+  satisfies its half; `agent-browser` 0.33.2 is installed globally, plus its own
+  Chrome via `agent-browser install` (~190 MB under `~/.agent-browser`).
+  **Drive it from Git Bash, not PowerShell** — every `agent-browser` command run
+  through the `agent-browser.ps1` shim hung with no output until it was killed
+  (three attempts, 180–300 s each); the same commands return instantly under
+  `bash`. Both shells are available here, so this costs nothing once you know.
 - **`web-design-guidelines` downloads its actual rules at review time** from
   `raw.githubusercontent.com/vercel-labs/web-interface-guidelines`. The skill
   itself is a 30-line wrapper, so `skills-lock.json` pins the wrapper, not the
