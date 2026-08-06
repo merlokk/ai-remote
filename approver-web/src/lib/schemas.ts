@@ -25,9 +25,16 @@ export const configSchema = z.object({
   servers: z.string().min(1).default("nats://127.0.0.1:4222"),
   subject: z.string().min(1).default("approvals.*"),
   queue: z.string().min(1).default("approvers"),
-  /** Registered allowlist identity. Meaningless until phase 2 signs with it. */
+  /** Registered allowlist identity — set by `register`, from the token prefix. */
   key_id: z.string().min(1).default("approver-web"),
   key_type: z.enum(KEY_TYPES).default("p256"),
+  /**
+   * The registered key pair, written only after the handler acks `ok:true`.
+   * Same field names and encodings as `responder-config.json` (§6). Absent
+   * until this app has registered — which is why they are optional.
+   */
+  private_key: z.string().min(1).optional(),
+  public_key: z.string().min(1).optional(),
   /**
    * How long a request stays on screen, seconds. Should be >= the hook's own
    * `timeout` in handler-config.json, otherwise the card vanishes while Claude
@@ -87,6 +94,32 @@ export const decisionFormSchema = z
   });
 
 export type DecisionFormValues = z.infer<typeof decisionFormSchema>;
+
+// --- registration (§6) ----------------------------------------------------------
+/**
+ * A one-time token is `<key_id>.<secret>`; the first dot splits it, so a
+ * `key_id` cannot contain one. Same rule as `responder.parse_key_id`, checked
+ * here so the browser says "that is not a token" instead of the bus doing it.
+ */
+export const tokenSchema = z
+  .string()
+  .trim()
+  .min(3, "paste the token from --get-token")
+  .regex(/^[^.\s]+\.[^\s]+$/, "expected '<key_id>.<secret>' — one dot, no spaces");
+
+export const registerFormSchema = z.object({ token: tokenSchema });
+export type RegisterFormValues = z.infer<typeof registerFormSchema>;
+
+/** POST /api/register. */
+export const registerRequestSchema = z.object({ token: tokenSchema });
+
+/** What `registration_handler.py` sends back on `registrations`. */
+export const registrationReplySchema = z.object({
+  v: z.number().optional(),
+  ok: z.boolean(),
+  key_id: z.string().optional(),
+  error: z.string().optional(),
+});
 
 /** POST /api/decision. `updated_input` is honored only on allow (§7). */
 export const decisionRequestSchema = z.object({

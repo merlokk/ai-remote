@@ -2,6 +2,7 @@
 
 import { Box, Card, Container, HStack, Heading, Stack, Text } from "@chakra-ui/react";
 
+import { RegisterPanel } from "@/components/RegisterPanel";
 import { RequestCard } from "@/components/RequestCard";
 import { StatusBar } from "@/components/StatusBar";
 import { useApprovalStream, useNow } from "@/lib/use-approval-stream";
@@ -33,6 +34,8 @@ export default function Page() {
             responder.
           </Text>
         </Stack>
+
+        <RegisterPanel status={snapshot?.status ?? null} />
 
         <StatusBar status={snapshot?.status ?? null} streamOpen={streamOpen} />
 

@@ -9,7 +9,7 @@
  *
  * Location: $AI_REMOTE_WEB_CONFIG, else ./config.json next to package.json.
  */
-import { readFileSync } from "node:fs";
+import { closeSync, fsyncSync, openSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 import { type Config, configSchema } from "./schemas";
@@ -52,4 +52,22 @@ export function loadConfig(): LoadedConfig {
     throw new Error(`${path} is invalid: ${parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`);
   }
   return { config: parsed.data, path, fromFile };
+}
+
+/**
+ * Write the config atomically — temp file, fsync, rename — the way
+ * `lib/config.py` does. This file holds a private key once registration has
+ * run, and a half-written one would cost the registration (the token is spent).
+ */
+export function saveConfig(config: Config, path: string = configPath()): void {
+  const tmp = `${path}.tmp`;
+  const body = `${JSON.stringify(config, null, 2)}\n`;
+  writeFileSync(tmp, body, { encoding: "utf-8", mode: 0o600 });
+  const fd = openSync(tmp, "r+");
+  try {
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+  renameSync(tmp, path);
 }

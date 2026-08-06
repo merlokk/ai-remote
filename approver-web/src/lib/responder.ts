@@ -21,10 +21,12 @@ import {
   type Subscription,
 } from "@nats-io/transport-node";
 
-import { loadConfig } from "./config";
+import { loadConfig, saveConfig } from "./config";
+import { generateP256 } from "./keys";
+import { PROTOCOL_VERSION } from "./protocol";
 import { buildSignedReply, type SignedReply } from "./reply";
-import { type Behavior, permissionRequestSchema } from "./schemas";
-import { type Signer, unsignedSigner } from "./signer";
+import { type Behavior, permissionRequestSchema, registrationReplySchema } from "./schemas";
+import { type Signer, softwareSigner, unsignedSigner } from "./signer";
 import type { PendingRequest, ResponderStatus, Snapshot } from "./types";
 
 const decoder = new TextDecoder();
@@ -37,6 +39,11 @@ interface Entry {
 }
 
 export class DecisionError extends Error {}
+/** The handler said no, or the bus did — nothing was persisted. */
+export class RegistrationError extends Error {}
+
+const REGISTRATION_SUBJECT = "registrations";
+const REGISTRATION_TIMEOUT_MS = 10_000;
 
 class Responder {
   private entries = new Map<string, Entry>();
@@ -48,10 +55,21 @@ class Responder {
   private error: string | null = null;
 
   private loaded = loadConfig();
-  private signer: Signer = unsignedSigner(
-    this.loaded.config.key_id,
-    this.loaded.config.key_type,
-  );
+  private signer: Signer = this.signerFromConfig();
+
+  /** A registered key signs; without one we stay in the unsigned phase-1 mode. */
+  private signerFromConfig(): Signer {
+    const { key_id, key_type, private_key } = this.loaded.config;
+    if (!private_key) return unsignedSigner(key_id, key_type);
+    try {
+      return softwareSigner(key_id, key_type, private_key);
+    } catch (err) {
+      // A broken key must not take the app down: it still shows requests, it
+      // just cannot sign — which the status bar reports.
+      console.error("[approver-web] stored key unusable:", err);
+      return unsignedSigner(key_id, key_type);
+    }
+  }
 
   get config() {
     return this.loaded.config;
@@ -171,6 +189,67 @@ class Responder {
     return reply;
   }
 
+  /**
+   * Register (or rotate) this app's key with a one-time token (§6).
+   *
+   * Order matters and mirrors both Python responders: generate in memory →
+   * publish the public half → **persist only on `ok:true`**. A rejected
+   * registration must not clobber a key that still works.
+   */
+  async register(token: string): Promise<string> {
+    const keyId = token.split(".", 1)[0];
+    if (!keyId) throw new RegistrationError("token has an empty key_id");
+
+    await this.start();
+    const nc = this.nc;
+    if (!nc || nc.isClosed()) {
+      throw new RegistrationError(this.error ?? "not connected to NATS");
+    }
+
+    const key = generateP256();
+    const request = {
+      v: PROTOCOL_VERSION,
+      token,
+      key_id: keyId,
+      pubkey: key.publicB64,
+      key_type: "p256" as const,
+      ts: Math.floor(Date.now() / 1000),
+    };
+
+    let payload: unknown;
+    try {
+      const msg = await nc.request(
+        REGISTRATION_SUBJECT,
+        encoder.encode(JSON.stringify(request)),
+        { timeout: REGISTRATION_TIMEOUT_MS },
+      );
+      payload = JSON.parse(decoder.decode(msg.data));
+    } catch (err) {
+      // No responders / timeout / unparseable answer — all mean "not registered".
+      const message = err instanceof Error ? err.message : String(err);
+      throw new RegistrationError(
+        `no answer from the registration handler (${message}) — is it running?`,
+      );
+    }
+
+    const reply = registrationReplySchema.safeParse(payload);
+    if (!reply.success) throw new RegistrationError("the handler sent a reply we cannot read");
+    if (!reply.data.ok) throw new RegistrationError(reply.data.error ?? "registration rejected");
+
+    this.loaded.config = {
+      ...this.loaded.config,
+      key_id: keyId,
+      key_type: "p256",
+      private_key: key.privateB64,
+      public_key: key.publicB64,
+    };
+    saveConfig(this.loaded.config, this.loaded.path);
+    this.loaded.fromFile = true;
+    this.signer = this.signerFromConfig();
+    this.notify();
+    return keyId;
+  }
+
   status(): ResponderStatus {
     return {
       connected: this.nc !== null && !this.nc.isClosed(),
@@ -180,6 +259,8 @@ class Responder {
       key_id: this.signer.keyId,
       key_type: this.signer.keyType,
       signing_mode: this.signer.mode,
+      registered: this.signer.mode !== "unsigned",
+      public_key: this.loaded.config.public_key ?? null,
       config_path: this.loaded.path,
       config_from_file: this.loaded.fromFile,
       error: this.error,

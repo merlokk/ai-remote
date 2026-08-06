@@ -10,19 +10,25 @@ did not change for it.
 The difference is only the front end: instead of a console prompt, the operator
 gets a page that lists pending requests and answers them with a button.
 
-## Status: phase 1 of 2
+## Status: the loop closes
 
-| Phase | Scope | State |
-|-------|-------|-------|
-| **1** | See requests off the bus, answer allow/deny, reply into the request's inbox — **no signature** | **done, this scaffold** |
-| **2** | Sign the decision with a registered key, plus a registration page for the one-time token | planned, see "Phase 2" below |
+| Scope | State |
+|-------|-------|
+| See requests off the bus, answer allow/deny, reply into the request's inbox | done |
+| Register a key with a one-time token (§6), from the page | done |
+| Sign each decision so `hook.py` accepts it (§7) | done — **software key on disk** |
+| Move key custody off the disk (browser WebCrypto) | open, see "Key custody" below |
 
-**What phase 1 does *not* do: make a decision take effect.** The reply carries
-`sig: ""`, `hook.py` rejects it as untrusted and Claude Code falls back to its
-own prompt (§7). That is deliberate — the round trip is fully observable while no
-key exists, and there is no code path by which a missing signature turns into an
-allow. The UI says so in the status bar, and `POST /api/decision` reports
-`signed: false`.
+Verified end to end against the real `registration_handler.py` and
+`hook.verify_reply`: a token minted by the handler, registered through
+`POST /api/register`, then a decision this app signed coming back
+`trusted=True`, with a flipped `behavior` rejected. The remaining question is
+not *whether* it signs but *where the private key lives*.
+
+**Until a key is registered the app still answers with `sig: ""`,** which
+`hook.py` rejects, so Claude Code falls back to its own prompt (§7). That is the
+correct behaviour for an unregistered responder — not a silent allow — and the
+status bar says `unsigned — not registered` while it lasts.
 
 ## Architecture
 
@@ -44,7 +50,7 @@ sequenceDiagram
     B->>O: card: tool, cwd, tool_input
     O->>B: Allow / Deny (+ reason, + replacement input)
     B->>S: POST /api/decision {nonce, behavior, reason}
-    S->>S: signingBytes() -> signer.sign()  (phase 1: "")
+    S->>S: signingBytes() -> signer.sign()  ("" until registered)
     S-->>N: msg.respond(reply)
     N-->>H: reply inbox
     H->>H: verify sig against clients[key_id]
@@ -70,11 +76,11 @@ Reasons for (2), in order of weight:
 - **The reply inbox has to be held somewhere.** A `Msg` is answerable only by the
   process that received it. Server-side, a page reload costs nothing; with
   `nats.ws` a reload drops every in-flight request on the floor.
-- **`config.json` is read with `fs`,** exactly like the Python responders read
-  theirs, and phase 2's key material never has to be shipped to a browser.
-- **Phase 2 keeps both options.** The signing seam is a `sign(bytes) -> b64`
-  callable (below); it can live on the server *or* in the browser (WebCrypto)
-  without touching the transport.
+- **`config.json` is read and written with `fs`,** exactly like the Python
+  responders handle theirs — including the registered private key.
+- **It keeps both custody options open.** The signing seam is a
+  `sign(bytes) -> b64` callable (see "Key custody"); it can live on the server
+  *or* in the browser (WebCrypto) without touching the transport.
 
 Cost of (2), stated plainly: the machine running the Next server is a trusted
 component. It sees every `tool_input` and it is what actually answers the bus.
@@ -89,19 +95,22 @@ config.json              runtime config (git-ignored; config.example.json is the
 src/lib/
   protocol.ts            port of approver/protocol.py — canonical JSON, sha256, signing bytes
   protocol.test.ts       cross-language parity vectors (node:test)
-  schemas.ts             every zod schema: config, bus request, decision form, decision POST
-  config.ts              config.json loader (server)
-  signer.ts              the sign(bytes) -> b64 seam. Phase 1 = unsignedSigner
+  schemas.ts             every zod schema: config, bus request, token, both POSTs
+  config.ts              config.json loader + atomic save (server)
+  keys.ts                P-256 in lib/crypto.py's encodings: generate + sign (server)
+  signer.ts              the sign(bytes) -> b64 seam: unsignedSigner / softwareSigner
   reply.ts               port of responder.build_signed_reply
-  responder.ts           server-only: NATS connection, pending map, TTL sweep, decide()
+  responder.ts           server-only: NATS connection, pending map, TTL sweep, decide(), register()
   types.ts               types shared with the browser (kept out of responder.ts on purpose)
   use-approval-stream.ts client: EventSource -> snapshot, plus a ticking clock
 src/app/
   layout.tsx providers.tsx page.tsx      the single page
+  theme.ts               the whole visual system (see "Look and feel")
   api/stream/route.ts    GET  — SSE, full snapshot per frame; opening it starts NATS
   api/decision/route.ts  POST — validate, sign, respond into the reply inbox
+  api/register/route.ts  POST — one-time token -> a registered key (§6)
 src/components/
-  StatusBar.tsx RequestCard.tsx DecisionForm.tsx
+  RegisterPanel.tsx StatusBar.tsx RequestCard.tsx DecisionForm.tsx
 ```
 
 Mirrored from the Python side on purpose: `protocol.ts` ↔ `protocol.py`,
@@ -116,6 +125,7 @@ you can answer by reading two short files.
 |-------|-------|
 | `GET /api/stream` | `text/event-stream`. Every frame is a **whole** `{status, requests}` snapshot, so a reconnect needs no resync. `: ping` every 15 s. Opening the stream is what triggers the NATS connect — there is no connect button, because having the page open *is* being a responder. |
 | `POST /api/decision` | `{nonce, behavior, reason, updated_input?}` → `{ok, signed}`. `409` = the request is gone (expired or already answered). `500` = signing failed — nothing was sent, so the hook falls back. |
+| `POST /api/register` | `{token}` → `{ok, key_id}` \| `{ok:false, error}`. `409` = the handler or the bus said no (bad/spent token, nothing listening) and **nothing was persisted**. The token goes no further than the `registrations` subject; the generated private key never leaves the server. |
 
 `nonce` is the entry id: it is unique per request and already on the wire.
 
@@ -124,15 +134,25 @@ you can answer by reading two short files.
 ```json
 { "v": 1, "servers": "nats://127.0.0.1:4222", "subject": "approvals.*",
   "queue": "approvers", "key_id": "approver-web", "key_type": "p256",
-  "request_ttl": 120 }
+  "request_ttl": 120,
+  "private_key": "<b64 32-byte scalar>", "public_key": "<b64 33-byte point>" }
 ```
 
-Every field has a default, so the app runs with no config file at all (the status
-bar says so). This is looser than `lib/config.py`, which fails fast when a
-responder has no key — phase 1 has no key to miss. **Phase 2 changes that:** once
-a key is required, a missing/unregistered one must refuse to start, the way
-`responder_yubikey.py serve` refuses when its re-derivation does not match the
-registered public key.
+Every field has a default, so the app runs with **no config file at all** — it
+just cannot sign until it registers. `register` then writes the file (atomically:
+temp + fsync + rename, `0600`, the way `lib/config.py` does), and the two key
+fields use the same names and encodings as `responder-config.json`, so the two
+software responders are readable side by side.
+
+`AI_REMOTE_WEB_CONFIG` overrides the location — how the e2e run keeps its key out
+of the repo working copy.
+
+An unusable stored key (wrong length, `key_type: ed25519` — which this app never
+generates) does **not** stop the app: it logs, falls back to the unsigned signer
+and says `unsigned` in the status bar. Refusing to start would take away the one
+screen that can explain the problem. That is a softer stance than
+`responder_yubikey.py serve`, which refuses when its re-derivation does not match
+the registered public key, and it is a deliberate difference: this app has a UI.
 
 `request_ttl` should be ≥ the hook's own `timeout` in `handler-config.json`,
 otherwise a card disappears while Claude Code is still waiting.
@@ -468,65 +488,96 @@ this very repository. Run **one** responder at a time. It is also a fine way to
 watch what the hook sends — just be aware that whatever it catches, the YubiKey
 responder does not see.
 
-## Phase 2 — signing
+## Registration and signing
 
-Goal: `hook.py` accepts this app's decisions. Nothing about the transport, the
-UI or the wire format changes; the work is a key, a registration, and one
-implementation of `Signer`.
+### The `Register` panel
 
-### Where the key should live
+Top of the page, collapsed once a key exists, open while there is none — because
+until then every decision this app sends is thrown away. It takes the one-time
+token from `py approver/registration_handler.py --get-token approver-web` and
+runs the §6 exchange:
+
+1. `POST /api/register` validates the token's shape in Zod — `<key_id>.<secret>`,
+   one dot, no spaces, the same rule as `responder.parse_key_id`, so a typo is
+   rejected in the browser instead of on the bus.
+2. `responder.register()` generates a P-256 pair **in memory**, publishes the
+   public half over `registrations` with `key_type: "p256"`.
+3. Only on `ok: true` does it write `config.json` and swap in `softwareSigner`.
+   A rejected registration leaves an existing key untouched — the same ordering
+   both Python responders use, for the same reason.
+
+The token is a bearer credential for one `key_id`: it goes straight to the
+server, is never logged, and the form clears it on success. Re-registering
+rotates `clients[key_id]`, which the handler allows by design.
+
+### Key custody — the open question
+
+The key currently sits in `config.json`, i.e. **a private key on disk**, exactly
+like `approver/responder.py`. That was the fastest way to a closed loop and it is
+the weaker of the two real options:
 
 | Option | Key custody | Verdict |
 |--------|-------------|---------|
-| **Browser, WebCrypto P-256, non-extractable, IndexedDB** | never on disk in usable form, never leaves the tab | **recommended.** Closest in spirit to the YubiKey responder; the server becomes a relay that cannot forge a decision |
-| Server, software key in `config.json` | a private key on disk | simplest, and the exact equivalent of `responder.py`. Fine as an interim step, but it is the weaker story |
+| **Browser, WebCrypto P-256, non-extractable, IndexedDB** | never on disk in usable form, never leaves the tab | **still the better answer.** Closest in spirit to the YubiKey responder; the server becomes a relay that cannot forge a decision. `signer.ts` is the only thing that changes: the POST body carries `sig` and the server checks shape before responding |
+| Server, software key in `config.json` | a private key on disk | **what is implemented.** Simplest, and the exact equivalent of `responder.py` |
 | Browser + WebAuthn / passkey (touch per decision) | in an authenticator | **does not work as-is.** WebAuthn signs `authenticatorData ‖ sha256(clientDataJSON)`, not our signing bytes, so `hook.py` rejects it. Supporting it means teaching the *hook* a second verification shape — a protocol change (§7), not a front-end change |
 | Browser + YubiKey ARKG (`previewSign`) | on the device | not reachable: `previewSign` is a CTAP2 extension, and the browser WebAuthn API does not expose it. That path stays with `responder_yubikey.py` |
 
-Both real options plug into the same seam:
-`signer.ts` → `{keyId, keyType, mode, sign(bytes) -> base64}`. For the browser
-variant the server's signer becomes "ask the connected tab", i.e. the POST body
-carries `sig` and the server only checks shape before responding.
+Both plug into the same seam: `signer.ts` → `{keyId, keyType, mode,
+sign(bytes) -> base64}`. Moving custody to the browser is a change to that object
+and to who computes the signature, nothing else — the transport, the UI and the
+wire format all stay.
 
-### Two encodings that will otherwise waste an afternoon
+Two other custody ideas, ruled out earlier and still ruled out:
+
+| Option | Why not |
+|--------|---------|
+| Browser + WebAuthn / passkey (touch per decision) | WebAuthn signs `authenticatorData ‖ sha256(clientDataJSON)`, not our signing bytes, so `hook.py` rejects it. Supporting it means teaching the *hook* a second verification shape — a protocol change (§7), not a front-end change |
+| Browser + YubiKey ARKG (`previewSign`) | not reachable: `previewSign` is a CTAP2 extension and the browser WebAuthn API does not expose it. That path stays with `responder_yubikey.py` |
+
+### The encodings, and why `keys.ts` looks the way it does
 
 `lib/crypto.py` `key_type="p256"` expects, and the hook verifies against:
 
 - **public key** — base64 of the **33-byte compressed SEC1 point**
-  (`0x02|0x03` by y-parity, then x). WebCrypto exports `raw` as the **65-byte
-  uncompressed** point and `spki` as DER. Compress before registering — the
-  YubiKey responder needed the same conversion, `lib/yubikey.p256_public_b64`.
-- **signature** — **DER** (`SEQUENCE { r, s }`, variable length). WebCrypto
-  `ECDSA` produces **raw `r ‖ s`**, 64 bytes fixed. Convert before sending.
+  (`0x02|0x03` by y-parity, then x). Node's JWK export gives `x`/`y`, so
+  `keys.ts` compresses; WebCrypto's `raw` export is the **65-byte uncompressed**
+  point, so a browser signer will need the same step. The YubiKey responder
+  needed this conversion too — `lib/yubikey.p256_public_b64`.
+- **private key** — the bare **32-byte scalar**. Re-importing one is the awkward
+  direction: JWK import demands `x`/`y`, and recovering them from a compressed
+  point is a modular square root. `keys.ts` instead wraps the scalar in a SEC1
+  `ECPrivateKey` DER with the public key omitted and lets OpenSSL derive it —
+  which keeps `config.json` byte-identical to `responder-config.json` instead of
+  inventing a second private-key encoding. **A browser signer cannot do that**:
+  WebCrypto has no SEC1 import, so a non-extractable key must be generated in
+  the browser and never round-tripped through this format.
+- **signature** — **DER** (`SEQUENCE { r, s }`, variable length). Node's
+  `createSign("SHA256").sign()` already emits DER. WebCrypto `ECDSA` produces
+  **raw `r ‖ s`**, 64 bytes fixed, so the browser variant must convert.
 
 And hash exactly once: `crypto.verify(..., "p256")` runs `ECDSA(SHA256)` over the
 signing bytes, so the signer must hash them once and no more.
 
-### Steps
+### What is still missing
 
-1. **Registration UI.** A second page (or a panel) that takes a one-time token
-   `<key_id>.<secret>` minted by
-   `py approver/registration_handler.py --get-token approver-web`, generates the
-   key pair, and sends the §6 `registrations` request with
-   `key_type: "p256"` and the compressed public key. React Hook Form + Zod
-   again — the token format (`key_id` non-empty, no `.` in it) is a real
-   validation, not decoration. Persist **only on `ok: true`**, like both Python
-   responders: a rejected registration must not clobber a working key.
-2. **`Signer` implementation** + `signing_mode` in the status bar going green.
-3. **Refuse to serve without a usable key**, mirroring
-   `responder_yubikey.py serve`: if the stored public key is not what
-   `clients[key_id]` holds, say so loudly instead of signing replies the hook
-   will silently reject.
-4. **Tests.** Sign in the app, verify with `lib/crypto.verify` from Python (a
-   fixture file is enough), and a `hook.verify_reply` round trip — the mirror of
-   the YubiKey integration test that proves a real device signature is accepted.
-5. **A `.cmd` script** in `scripts/`, in the style of `e2e-approval.cmd`, once
-   there is something end-to-end worth scripting.
+1. **Check the registered key against the allowlist at startup**, mirroring
+   `responder_yubikey.py serve`: if `clients[key_id].pubkey` is not our
+   `public_key` any more (someone else rotated that `key_id`), say so instead of
+   signing replies the hook will silently reject. Today that only surfaces as
+   decisions quietly not working.
+2. **Tests.** The cross-language checks exist as a scratch script, not in the
+   repo: Node signs → `lib.crypto.verify` accepts, and a full
+   `hook.verify_reply` round trip. Both belong in `tests/` (Python side) or
+   `keys.test.ts` with a committed fixture, per the repo's TDD rule (root §1).
+3. **A `.cmd` script** in `scripts/`, in the style of `e2e-approval.cmd`, for the
+   register → request → signed-decision loop that is currently driven by hand.
 
 ### Not in scope, but worth deciding before shipping to anyone else
 
-The page has **no authentication**. Anyone who can reach `localhost:3000` can
-approve a `rm -rf`, and once phase 2 lands, sign it with a trusted key. That is
-acceptable for a local single-user tool and unacceptable the moment it binds to
-anything but the loopback interface. Root §7 already says the bus itself must not
-be exposed; this page is one more thing on that list.
+The page has **no authentication**, and that now matters more than it did.
+Anyone who can reach `localhost:3000` can approve a `rm -rf` **and have it
+signed with a trusted key** — and can also hand `POST /api/register` a token to
+mint a new one. That is acceptable for a local single-user tool and unacceptable
+the moment it binds to anything but the loopback interface. Root §7 already says
+the bus itself must not be exposed; this page is one more thing on that list.

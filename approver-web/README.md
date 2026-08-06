@@ -4,9 +4,10 @@ Claude Code permission requests in a browser tab: the page lists what is waiting
 on the bus and answers it with a button, instead of the console prompt in
 `approver/responder.py`.
 
-Phase 1 — **decisions are not signed yet**, so `hook.py` rejects them and Claude
-Code falls back to its own prompt. Everything else of the §7 round trip is real.
-Architecture, the decisions behind it and the phase-2 plan: [`CLAUDE.md`](CLAUDE.md).
+The loop is closed: register a key with a one-time token from the page, and every
+allow/deny is signed so `hook.py` accepts it. The key currently lives on disk
+(like `approver/responder.py`); moving it into the browser is the open item.
+Architecture and the decisions behind it: [`CLAUDE.md`](CLAUDE.md).
 
 ## Run
 
@@ -19,6 +20,14 @@ run.cmd                         # installs on first run, then http://localhost:3
 `run.cmd [--prod] [--port N] [--install]` — no elevation, no venv, unlike the
 scripts in `scripts\`. `copy config.example.json config.json` if you want to
 change the defaults; the app runs without it.
+
+Then register the page as a responder — mint a token and paste it into the
+`Register` panel at the top:
+
+```powershell
+py approver\registration_handler.py --get-token approver-web   # prints the token
+py approver\registration_handler.py                            # leave it listening
+```
 
 Open the page and leave it open: having it open *is* being a responder. It
 subscribes to `approvals.*` in the `approvers` queue group, so **run only one
