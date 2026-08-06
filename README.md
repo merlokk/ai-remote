@@ -130,6 +130,17 @@ becomes a YubiKey touch. There is also a software responder with the key on disk
 so the protocol can be tested and developed without hardware; it and the
 `yubikey-exec` CLI are covered in [`full-readme.md`](full-readme.md).
 
+## Screenshots
+
+The whole run, captured step by step, is in [`screens/`](screens/):
+
+1. [NATS up on Docker](screens/1.%20docker%20NATS.png)
+2. [the hook wired into Claude Code](screens/2.%20hook%20in%20claude.png)
+3. [the key seen, firmware and `previewSign`](screens/3.%20key%20version.png)
+4. [minting a one-time registration token](screens/4.%20generate%20one-time%20code.png)
+5. registration — [client](screens/5.%20registration%20-%20client.png) / [server](screens/5.%20registration%20-%20server.png)
+6. [an approved request](screens/6.%20approved%20request.png)
+
 ## Tech stack & dependencies
 
 | | |
