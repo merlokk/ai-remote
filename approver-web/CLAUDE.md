@@ -174,6 +174,53 @@ Known remaining gap: floats. Python's `repr` and JS number formatting agree for
 everything realistic in a `tool_input`, but they are not the same algorithm. If a
 tool ever ships a float in its input, add a vector.
 
+## Look and feel — the owner's direction
+
+What is built today is stock Chakra: default radii, default grey, no theme. That
+is a starting point, not the intended end state.
+
+**The direction the repository owner asked for: soft rounded panels, green.**
+The reference they pointed at is a modern SaaS marketing page — content sitting
+on generously rounded cards over a calm background, green as the single brand
+colour carrying buttons, badges and highlights. Concretely, for this app:
+
+- **Generously rounded surfaces.** Cards, panels, inputs and buttons all
+  visibly rounded — closer to `2xl` than to the default; pills fully rounded.
+  The radius is the signature, so it should be consistent everywhere rather
+  than tuned per component.
+- **Green is the house colour.** One green as the primary accent, used with
+  restraint on the things that matter, not painted across every surface.
+- **Calm background, raised cards.** A soft neutral page behind clearly
+  separated cards. Prefer a soft shadow or a very light border over the heavy
+  1px grey outlines currently in `StatusBar`.
+- **Quiet type, generous whitespace.** Spacing does the work; the type stays
+  plain. No display face — see the dependency constraint below.
+
+Where it goes: `src/app/providers.tsx`. Chakra v3 does this with
+`createSystem(defaultConfig, defineConfig({ theme: { tokens: … } }))` (all three
+are exported from `@chakra-ui/react`, verified on 3.36.1) — replace the bare
+`defaultSystem` there with a project system, override the `radii` scale and the
+green palette once, and let the components inherit. Do not scatter `borderRadius`
+props across components.
+
+**Two constraints that outrank the aesthetic.** They are not style preferences:
+
+1. **This is a decision surface, not a landing page.** Allow and deny must stay
+   instantly distinguishable at a glance and must never be separated by colour
+   alone. If green becomes the house colour, `Allow` cannot simply be "the green
+   one" — deny keeps its own weight (colour *and* shape/label/position), and the
+   thing an operator is agreeing to has to stay more prominent than the button
+   agreeing to it. A prettier page that makes it easier to click Allow by reflex
+   is a worse page.
+2. **No new dependencies for looks.** Root §1 requires sign-off for any package,
+   which includes web-font, icon and animation libraries. The direction above is
+   reachable with Chakra tokens and system fonts alone; if it genuinely is not,
+   ask before installing.
+
+The `frontend-design` skill (see "Skills") is the one that fires on this work.
+Read it for judgement, but this section wins where they differ: it is written for
+distinctive brand identity, and this page is a tool.
+
 ## Stack
 
 Everything here was named in the request, plus the two things it implies:
