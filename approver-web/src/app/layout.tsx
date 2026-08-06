@@ -11,7 +11,11 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body>
+      {/* Extensions inject attributes here before React hydrates — Grammarly
+          adds data-gr-ext-installed, others do the same — and every one of them
+          is reported as a hydration mismatch we can neither cause nor fix.
+          Suppressing on <body> covers exactly that, and nothing inside it. */}
+      <body suppressHydrationWarning>
         <Providers>{children}</Providers>
       </body>
     </html>

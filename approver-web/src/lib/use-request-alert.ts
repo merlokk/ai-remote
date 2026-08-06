@@ -31,10 +31,18 @@ export function useRequestAlert(requests: PendingRequest[] | null): {
 } {
   const [enabled, setEnabled] = useState(true);
   const [running, setRunning] = useState(false);
+  // Initialised to a **constant**, not to audioSupported(): calling it during
+  // render returns false on the server (no `window`) and true in the browser,
+  // and the first client render must match the server's HTML exactly or React
+  // throws a hydration error. Assume support, correct it after mount — that way
+  // the common case never flashes, and only a genuinely unsupported browser
+  // sees the label change once.
+  const [supported, setSupported] = useState(true);
   const seen = useRef<Set<string> | null>(null);
 
-  // Preference is per browser and not worth a server round trip.
+  // Everything that depends on the browser is read after mount, for the same reason.
   useEffect(() => {
+    setSupported(audioSupported());
     setEnabled(window.localStorage.getItem(STORAGE_KEY) !== "off");
     setRunning(audioState() === "running");
   }, []);
@@ -82,7 +90,7 @@ export function useRequestAlert(requests: PendingRequest[] | null): {
     if (next) unlock();
   }, [enabled, running, unlock]);
 
-  const sound: SoundState = !audioSupported()
+  const sound: SoundState = !supported
     ? "unsupported"
     : !enabled
       ? "off"

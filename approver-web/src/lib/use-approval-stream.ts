@@ -40,7 +40,15 @@ export function useApprovalStream(): StreamState {
   return { snapshot, streamOpen };
 }
 
-/** A clock that ticks, for the countdown on each card. */
+/**
+ * A clock that ticks, for the countdown on each card.
+ *
+ * `Date.now()` as the initial state would normally be a hydration hazard — the
+ * server's value can never match the client's. It is safe only because nothing
+ * renders it server-side: cards exist once the SSE snapshot arrives, and that is
+ * client-only. Keep it that way; if a request ever renders during SSR, this has
+ * to move into an effect.
+ */
 export function useNow(intervalMs = 1000): number {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {

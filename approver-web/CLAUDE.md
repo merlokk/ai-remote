@@ -323,6 +323,19 @@ Conventions worth knowing before editing:
   project into the server output.
 - The responder is a single instance parked on `globalThis`, so dev-server hot
   reload does not leave a second subscriber in the queue group.
+- **Never branch on the environment during render.** The first client render has
+  to produce the same HTML the server did, or React throws a hydration error and
+  regenerates the tree. `useRequestAlert` got this wrong once: it called
+  `audioSupported()` (which tests for `window`) while computing the label, so the
+  server rendered `Sound unavailable` and the browser `Sound — click to enable`.
+  The rule that fixes it: initialise such state to a **constant** and correct it
+  in a mount effect. Assume the capable case, so the common path never flashes.
+  Same trap applies to `localStorage` and to `Date.now()` — `useNow` gets away
+  with the latter only because nothing renders a card server-side.
+- `<body suppressHydrationWarning>` in `layout.tsx` is for a different cause:
+  extensions (Grammarly and friends) add attributes to `<body>` before React
+  hydrates, and each one is reported as a mismatch nobody can fix from here. It
+  suppresses exactly that element's attributes, not anything inside it.
 - `agentRules: false` in `next.config.ts`. Without it `next dev` appends a
   generated block to this file on every run. Its actual point is worth keeping,
   so: **Next 16 is not the Next.js most training data describes** — app router,
