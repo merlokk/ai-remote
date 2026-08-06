@@ -6,3 +6,7 @@ next-env.d.ts
 
 # Runtime config: harmless today, but phase 2 puts key material next to it.
 config.json
+
+# Agent skills: third-party markdown, restored from skills-lock.json (which IS
+# committed) with `npx skills experimental_install`. See CLAUDE.md, "Skills".
+.claude/skills/

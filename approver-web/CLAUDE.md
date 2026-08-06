@@ -211,6 +211,114 @@ Conventions worth knowing before editing:
   in use ships its own docs in `node_modules/next/dist/docs/`; read those rather
   than recalling Next 13/14 conventions.
 
+## Skills
+
+Five skills are installed **for this folder only**:
+
+| Skill | Source | What it is |
+|-------|--------|------------|
+| `vercel-react-best-practices` | `vercel-labs/agent-skills` | React/Next performance rules from Vercel Engineering (78 of them: re-renders, bundle, server components, async) |
+| `vercel-composition-patterns` | `vercel-labs/agent-skills` | component API design — compound components, children over render props, React 19 without `forwardRef` |
+| `web-design-guidelines` | `vercel-labs/agent-skills` | reviewing UI code against the Web Interface Guidelines (accessibility, UX) |
+| `frontend-design` | `anthropics/skills` | visual design direction when building or reshaping UI |
+| `next-dev-loop` | `vercel/next.js` | verify a change in a *running* app, not just that it compiles — pairs `/_next/mcp` with a browser |
+
+They live in `approver-web/.claude/skills/`, and Claude Code scopes skills by
+directory: they surface as `approver-web:<name>` and win only while the work is
+inside this subtree. The Python half of the repo never sees them — which is the
+point, since every one of them is about React or Next.
+
+### How they sit with this app
+
+Checked once, deliberately, because five overlapping rule sets pointed at one
+small app is how contradictory advice gets followed. No two of them contradict
+each other: names are unique, frontmatter matches the directories, nothing
+shadows a user-level skill (there are none), and `frontend-design` (build) and
+`web-design-guidelines` (review) are opposite halves of the same job. What
+matters is where each one meets *this* codebase:
+
+- **`next-dev-loop` will refuse until `agent-browser` is installed** — it names
+  `agent-browser >= 0.31.1` and `/_next/mcp` as "hard floors, not soft
+  preferences", and stops rather than degrading to grep. Next 16.3 + Turbopack
+  already satisfies its half; the other half is `npm i -g agent-browser`.
+- **`web-design-guidelines` downloads its actual rules at review time** from
+  `raw.githubusercontent.com/vercel-labs/web-interface-guidelines`. The skill
+  itself is a 30-line wrapper, so `skills-lock.json` pins the wrapper, not the
+  instructions that end up executing — and offline it does nothing.
+- **`frontend-design` is written for brand work**: name a subject, pick display
+  typefaces, take an aesthetic risk, build a signature element. This page is a
+  utilitarian panel on Chakra defaults, and the repo bans new dependencies
+  without sign-off (root §1) — which is where "characterful typography" usually
+  starts. Useful for judgement, not a mandate to redesign.
+- **`server-no-shared-module-state` (impact HIGH) does *not* condemn
+  `responder.ts`.** The rule is about request-scoped data in module scope; its
+  Safe exceptions list "process-wide singletons that do not store request- or
+  user-specific mutable data", which is exactly what the `globalThis` responder
+  is. Do not "fix" it into per-request state — that would open a second NATS
+  subscription per viewer.
+- **`bundle-barrel-imports` (impact CRITICAL) points at `@chakra-ui/react`** — a
+  large barrel that Next's built-in optimize list genuinely does not cover
+  (`@chakra-ui` appears nowhere in `next/dist`, while `lucide-react`,
+  `@mui/material` and dozens more do). Its remedy is
+  `experimental.optimizePackageImports`, not deep imports. **Tried, measured,
+  reverted:** clean builds with and without the flag both produce 1 134 KB of
+  client JS across 12 files, with build time inside the noise. The option is not
+  being ignored — Turbopack supports it (its entry is commented out of
+  `lib/turbopack-warning.js`'s unsupported list) — there is simply nothing left
+  to strip, because Turbopack's own tree-shaking already got there. Do not
+  re-add it on the strength of the rule's CRITICAL label; re-measure instead.
+- **Two Next skills suggest `npx @next/codemod agents-md`**, which writes into
+  `CLAUDE.md` / `AGENTS.md` — the thing `agentRules: false` exists to prevent.
+  They do say to ask first. The answer for this repo is no.
+
+**Removed on purpose:** `next-cache-components-adoption`,
+`next-cache-components-optimizer`, `next-partial-prefetching-adoption`. They
+arrived with the `vercel/next.js` set and actively fight this app — Cache
+Components requires every route to be prerenderable and the migration deletes
+`export const dynamic = "force-dynamic"`, which both API routes need (an SSE
+stream and a held reply inbox are dynamic by definition). The payoff would have
+been zero anyway: one dynamic page has nothing to prerender or prefetch.
+
+**Git: the skills are ignored, `skills-lock.json` is committed.** 94 files of
+third-party markdown do not belong in this repository's history; the lock file
+pins each skill to its source and content hash, and restores them:
+
+```powershell
+npx skills experimental_install      # rebuild .claude/skills from the lock file
+npx skills list                      # what is installed
+npx skills update                    # refresh + rewrite the lock file
+```
+
+Adding another one — list first, then install by name:
+
+```powershell
+npx -y skills@latest add <owner>/<repo> -l                       # what is in there
+npx -y skills@latest add <owner>/<repo> -a claude-code -s <name> --copy
+```
+
+Every one of these was learned the hard way:
+
+- **`-a claude-code` and `--copy` keep the tree clean.** The default installs for
+  ~19 agents at once and produces `.agents/skills/` (real files) plus junctions
+  in `.claude/skills/` and `agent/skills/`. On Windows **git walks through
+  junctions**: `git add -A` then stages the same files three times.
+- **`-s` takes no comma-separated list.** It silently prints the available skills
+  and exits 1. Repeat the flag: `-s one -s two`.
+- **Never `-s "*"` on a repository that is not a skills repository.** `vercel/next.js`
+  advertises 4 skills through `-l`; `*` matched **21**, dragging in the skills the
+  Next.js team uses to maintain the framework itself — `backport-pr`, `react-vendoring`,
+  `v8-jit`, `sandbox-bench`, `pr-status-triage`. Removing them afterwards works
+  (`remove -s <name>` repeated, the lock file is rewritten correctly), but `-l`
+  first costs nothing.
+- **`vercel-labs/next-skills` is an empty pointer now.** The CLI reports "No
+  skills found" and exits 1; the Next.js skills moved into the framework
+  repository so they stay version-matched, and install from `vercel/next.js`.
+
+The CLI prints a third-party risk assessment per skill and warns that skills run
+with full agent permissions — `web-design-guidelines` came back "Med Risk" from
+Snyk, everything else "Low"/"Safe". They are instruction markdown, not code, but
+that is a reason to read a skill before trusting it, not a reason to skip reading.
+
 ## Run — `run.cmd`
 
 The front door. It resolves its own directory first, so it works from anywhere:
