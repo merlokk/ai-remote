@@ -13,8 +13,9 @@ import asyncio
 
 from approver import protocol, responder
 from approver import registration_handler as rh
+from lib import crypto
 from lib.bus import NoResponders, connect
-from lib.config import Config
+from lib.config import Config, ConfigError
 from tests.conftest import requires_nats, run_async
 
 V = protocol.PROTOCOL_VERSION
@@ -185,6 +186,249 @@ def test_get_token_writes_config(tmp_path):
     cfg = Config.load(p)
     assert cfg["pending_tokens"][0]["token"] == token
     assert cfg["pending_tokens"][0]["expires_ts"] == 1900
+
+
+# --- the server key (§6) --------------------------------------------------------
+def test_ensure_server_key_generates_an_ed25519_pair():
+    data = _data()
+    assert rh.ensure_server_key(data) is True
+    key = data["server_key"]
+    assert key["key_type"] == protocol.SERVER_KEY_TYPE
+    # The stored public half must be the one the stored private half produces.
+    assert (
+        crypto.KeyPair.from_private_b64(
+            key["private_key"], protocol.SERVER_KEY_TYPE
+        ).public_b64()
+        == key["public_key"]
+    )
+
+
+def test_ensure_server_key_keeps_an_existing_key():
+    data = _data()
+    rh.ensure_server_key(data)
+    before = dict(data["server_key"])
+    # Rotating silently would break every approver that pinned the old key.
+    assert rh.ensure_server_key(data) is False
+    assert data["server_key"] == before
+
+
+def test_ensure_server_key_rejects_an_inconsistent_key():
+    data = _data()
+    rh.ensure_server_key(data)
+    data["server_key"]["public_key"] = crypto.generate_keypair().public_b64()
+    with pytest.raises(ConfigError):
+        rh.ensure_server_key(data)
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "not-a-dict",
+        {"key_type": "ed25519", "public_key": "P"},          # no private half
+        {"key_type": "ed25519", "private_key": "not-b64!!"},  # unusable private half
+        {"key_type": "p256", "private_key": "P", "public_key": "P"},  # wrong scheme
+    ],
+)
+def test_ensure_server_key_rejects_a_broken_record(bad):
+    data = _data()
+    data["server_key"] = bad
+    with pytest.raises(ConfigError):
+        rh.ensure_server_key(data)
+
+
+def test_load_server_key_persists_it_and_is_stable(tmp_path):
+    p = tmp_path / "handler-config.json"
+    first = rh.load_server_key(p)
+    assert Config.load(p)["server_key"]["public_key"] == first
+    assert rh.load_server_key(p) == first  # a restart keeps the same identity
+
+
+def test_get_token_creates_the_server_key(tmp_path):
+    p = tmp_path / "handler-config.json"
+    rh.get_token("approver-1", config_path=p, ttl=900, now=1000)
+    assert Config.load(p)["server_key"]["public_key"]
+
+
+def test_regenerate_server_key_replaces_an_existing_one():
+    data = _data()
+    rh.ensure_server_key(data)
+    old = data["server_key"]["public_key"]
+
+    new, previous = rh.regenerate_server_key(data)
+
+    assert previous == old
+    assert new != old
+    assert data["server_key"]["public_key"] == new
+    assert (
+        crypto.KeyPair.from_private_b64(
+            data["server_key"]["private_key"], protocol.SERVER_KEY_TYPE
+        ).public_b64()
+        == new
+    )
+
+
+def test_regenerate_server_key_creates_one_when_there_is_none():
+    data = _data()
+    new, previous = rh.regenerate_server_key(data)
+    assert previous is None
+    assert data["server_key"]["public_key"] == new
+
+
+def test_regenerate_server_key_repairs_a_broken_record():
+    """The escape hatch: ensure_server_key refuses a corrupt key, this replaces it."""
+    data = _data()
+    data["server_key"] = "not-a-dict"
+    new, previous = rh.regenerate_server_key(data)
+    assert previous is None
+    assert rh.ensure_server_key(data) is False  # the new one validates
+    assert data["server_key"]["public_key"] == new
+
+
+def test_rotate_server_key_persists_and_leaves_the_allowlist_alone(tmp_path):
+    p = tmp_path / "handler-config.json"
+    token = rh.get_token("approver-1", config_path=p, ttl=900, now=1000)
+    old = Config.load(p)["server_key"]["public_key"]
+
+    new, previous = rh.rotate_server_key(p)
+
+    cfg = Config.load(p)
+    assert (previous, cfg["server_key"]["public_key"]) == (old, new)
+    # Rotating the handler's identity says nothing about the responder keys the
+    # hook verifies, nor about tokens already handed out.
+    assert cfg["pending_tokens"][0]["token"] == token
+    assert cfg["clients"] == {}
+
+
+def test_rotation_makes_the_handler_sign_with_the_new_key(tmp_path):
+    p = tmp_path / "handler-config.json"
+    old = rh.load_server_key(p)
+    new, _ = rh.rotate_server_key(p)
+    nonce = responder.new_nonce()
+    req = responder.build_registration_request(
+        "approver-1.NOPE", "PUB==", ts=int(time.time()), nonce=nonce
+    )
+
+    reply = run_async(rh.make_handler(p)(req))
+
+    assert responder.verify_server_reply(reply, nonce=nonce, pinned_pubkey=new) == new
+    # An approver still pinned to the old key refuses it — that is the cost of a
+    # rotation, and it must be loud rather than silent.
+    with pytest.raises(responder.ServerReplyError):
+        responder.verify_server_reply(reply, nonce=nonce, pinned_pubkey=old)
+
+
+def test_main_new_server_key_prints_the_key_and_rotates(tmp_path, capsys):
+    p = tmp_path / "handler-config.json"
+    rh.main(["--config", str(p), "--new-server-key"])
+    first = capsys.readouterr().out.strip()
+    assert Config.load(p)["server_key"]["public_key"] == first
+
+    assert rh.main(["--config", str(p), "--new-server-key"]) == 0
+    out = capsys.readouterr()
+    assert out.out.strip() != first  # a second run replaces it
+    assert first in out.err  # and says which key it replaced
+
+
+def test_main_new_server_key_names_the_approvers_that_must_re_register(tmp_path, capsys):
+    p = tmp_path / "handler-config.json"
+    data = _data(clients={"approver-web": {"pubkey": "P", "key_type": "ed25519"}})
+    rh.ensure_server_key(data)  # a key they may already have pinned
+    Config(p, data).save()
+
+    rh.main(["--config", str(p), "--new-server-key"])
+
+    assert "approver-web" in capsys.readouterr().err
+
+
+def test_main_first_server_key_warns_nobody(tmp_path, capsys):
+    """Nothing was invalidated: those clients registered before there was a key to pin."""
+    p = tmp_path / "handler-config.json"
+    Config(p, _data(clients={"approver-web": {"pubkey": "P", "key_type": "ed25519"}})).save()
+
+    rh.main(["--config", str(p), "--new-server-key"])
+
+    assert "register again" not in capsys.readouterr().err
+
+
+def test_sign_reply_verifies_against_the_published_public_key():
+    data = _data()
+    rh.ensure_server_key(data)
+    reply = rh.sign_reply(data, {"v": V, "ok": True, "key_id": "approver-1"}, _req(), now=500)
+
+    assert reply["server_key"] == data["server_key"]["public_key"]
+    assert reply["ts"] == 500
+    assert crypto.verify(
+        reply["server_key"],
+        protocol.registration_reply_signing_bytes(
+            v=V, ok=True, key_id="approver-1", nonce="", ts=500, error=""
+        ),
+        reply["sig"],
+        protocol.SERVER_KEY_TYPE,
+    )
+
+
+def test_sign_reply_echoes_the_request_nonce():
+    data = _data()
+    rh.ensure_server_key(data)
+    req = _req()
+    req["nonce"] = "bm9uY2U="
+    reply = rh.sign_reply(data, {"v": V, "ok": True, "key_id": "approver-1"}, req, now=500)
+    assert reply["nonce"] == "bm9uY2U="
+
+
+@pytest.mark.parametrize("request_", ["not-a-dict", {"nonce": 7}, {}])
+def test_sign_reply_uses_an_empty_nonce_when_the_request_has_none(request_):
+    # Older approvers send no nonce, and a junk message on the open `registrations`
+    # subject has no shape at all — neither may break signing.
+    data = _data()
+    rh.ensure_server_key(data)
+    reply = rh.sign_reply(data, {"v": V, "ok": False, "error": "bad request"}, request_, now=1)
+    assert reply["nonce"] == ""
+
+
+def test_error_replies_are_signed_too():
+    data = _data()
+    rh.ensure_server_key(data)
+    reply = rh.sign_reply(data, rh._error("token unknown"), _req(), now=7)
+    assert crypto.verify(
+        reply["server_key"],
+        protocol.registration_reply_signing_bytes(
+            v=V, ok=False, key_id="", nonce="", ts=7, error="token unknown"
+        ),
+        reply["sig"],
+        protocol.SERVER_KEY_TYPE,
+    )
+
+
+def test_make_handler_signs_the_reply_the_approver_verifies(tmp_path):
+    p = tmp_path / "handler-config.json"
+    token = rh.get_token("approver-1", config_path=p, ttl=900, now=int(time.time()))
+    nonce = responder.new_nonce()
+    req = responder.build_registration_request(
+        token, "PUB==", ts=int(time.time()), nonce=nonce
+    )
+
+    reply = run_async(rh.make_handler(p)(req))
+
+    assert reply["ok"] is True
+    # The approver's own verification is the contract, so use it rather than a
+    # re-implementation of the check.
+    assert responder.verify_server_reply(reply, nonce=nonce) == (
+        Config.load(p)["server_key"]["public_key"]
+    )
+
+
+def test_make_handler_signs_rejections(tmp_path):
+    p = tmp_path / "handler-config.json"
+    nonce = responder.new_nonce()
+    req = responder.build_registration_request(
+        "approver-1.NOPE", "PUB==", ts=int(time.time()), nonce=nonce
+    )
+
+    reply = run_async(rh.make_handler(p)(req))
+
+    assert reply["ok"] is False and reply["error"] == "token unknown"
+    responder.verify_server_reply(reply, nonce=nonce)  # raises if unsigned/tampered
 
 
 # --- integration ---------------------------------------------------------------

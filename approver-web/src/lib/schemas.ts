@@ -39,6 +39,13 @@ export const configSchema = z.object({
   public_key: z.string().min(1).optional(),
   public_key_raw: z.string().min(1).optional(),
   /**
+   * The registration handler's own public key (base64 Ed25519), pinned when
+   * this app registered (§6). Every later registration must be answered by
+   * exactly this key — a valid signature by a *different* one is a takeover of
+   * the `registrations` subject, not a handler that moved.
+   */
+  server_key: z.string().min(1).optional(),
+  /**
    * How long a request stays on screen, seconds. Should be >= the hook's own
    * `timeout` in handler-config.json, otherwise the card vanishes while Claude
    * Code is still waiting.
@@ -124,13 +131,26 @@ export const registerRequestSchema = z.object({
   public_key_raw: z.string().min(1),
 });
 
-/** What `registration_handler.py` sends back on `registrations`. */
+/**
+ * What `registration_handler.py` sends back on `registrations`.
+ *
+ * `server_key`/`sig`/`nonce`/`ts` are the handler's signature over the whole
+ * answer (§6). They are optional *here* so that a missing one produces our own
+ * "this is not the handler" message rather than a zod parse error — the
+ * verification in `responder.ts` is what actually insists on them.
+ */
 export const registrationReplySchema = z.object({
   v: z.number().optional(),
   ok: z.boolean(),
   key_id: z.string().optional(),
   error: z.string().optional(),
+  nonce: z.string().optional(),
+  ts: z.number().optional(),
+  server_key: z.string().optional(),
+  sig: z.string().optional(),
 });
+
+export type RegistrationReply = z.infer<typeof registrationReplySchema>;
 
 /**
  * POST /api/decision. `updated_input` is honored only on allow (§7).

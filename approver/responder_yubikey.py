@@ -92,14 +92,19 @@ def config_from_derivation(
     derived: yubikey.DerivedKey,
     *,
     rp_id: str = DEFAULT_RP_ID,
+    server_key: str | None = None,
 ) -> dict:
     """The responder-yubikey config for a freshly derived key.
 
     Deliberately holds no private key: ``credential`` + ``ctx`` + ``ikm`` re-derive
     the public half offline, and the YubiKey reconstructs the private half from the
     key handle when it signs.
+
+    ``server_key`` is the registration handler's public key, pinned at registration
+    exactly as the software responder pins it (§6) - it is public material, and it
+    is what makes the next registration answerable only by the same handler.
     """
-    return {
+    config = {
         "v": protocol.PROTOCOL_VERSION,
         "key_id": key_id,
         "key_type": crypto.P256,
@@ -109,6 +114,9 @@ def config_from_derivation(
         "rp_id": rp_id,
         "credential": yubikey.result_to_dict(result),
     }
+    if server_key:
+        config["server_key"] = server_key
+    return config
 
 
 def derived_from_config(
@@ -225,8 +233,9 @@ async def register(
     handler's reply dict.
 
     Raises ``ValueError`` on a malformed token, :class:`NotAYubiKey` on a rejected
-    attestation, ``lib.yubikey.YubiKeyError`` on device/credential problems and
-    ``bus.BusError`` on transport failure.
+    attestation, ``lib.yubikey.YubiKeyError`` on device/credential problems,
+    ``bus.BusError`` on transport failure and ``responder.ServerReplyError`` when
+    the reply is not the registration handler's.
     """
     key_id = responder.parse_key_id(token)
 
@@ -249,19 +258,29 @@ async def register(
             raise NotAYubiKey(check)
 
     derived = yubikey.seed_public_key(result, ctx=ctx.encode("utf-8"), ikm=ikm)
+    nonce = responder.new_nonce()
     request = responder.build_registration_request(
         token,
         yubikey.p256_public_b64(derived),
         int(time.time()),
         key_type=crypto.P256,
+        nonce=nonce,
     )
+    pinned = responder.pinned_server_key(config_path)
 
     async with bus.connect(servers) as b:
         reply = await b.request("registrations", request, timeout=timeout)
 
+    # Same check the software responder makes: an unsigned or foreign-signed answer
+    # is not the allowlist owner's, whatever it says (§6).
+    server_key = responder.verify_server_reply(reply, nonce=nonce, pinned_pubkey=pinned)
+
     if reply.get("ok"):
         configlib.Config(
-            config_path, config_from_derivation(key_id, result, derived, rp_id=rp_id)
+            config_path,
+            config_from_derivation(
+                key_id, result, derived, rp_id=rp_id, server_key=server_key
+            ),
         ).save()
     return reply
 
@@ -453,6 +472,7 @@ def main(argv=None) -> int:
         yubikey.YubiKeyError,
         configlib.ConfigError,
         bus.BusError,
+        responder.ServerReplyError,
         ValueError,
         TypeError,
     )

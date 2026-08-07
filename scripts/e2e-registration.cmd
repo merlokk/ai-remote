@@ -51,9 +51,11 @@ if not defined REGOK (
 echo    registered.
 
 echo [4/4] verifying handler allowlist against responder key ...
-py -c "import json,sys; k=sys.argv[1]; h=json.load(open(sys.argv[2],encoding='utf-8')); r=json.load(open(sys.argv[3],encoding='utf-8')); c=h.get('clients',{}).get(k); ok=bool(c) and c.get('pubkey')==r.get('public_key') and h.get('pending_tokens')==[]; print('    handler pubkey :', c and c.get('pubkey')); print('    responder pub  :', r.get('public_key')); print('    pending_tokens :', h.get('pending_tokens')); sys.exit(0 if ok else 1)" %KEYID% "%HCFG%" "%RCFG%"
+REM Also checks the server key (6): the responder must have pinned exactly the
+REM public half the handler signed its reply with.
+py -c "import json,sys; k=sys.argv[1]; h=json.load(open(sys.argv[2],encoding='utf-8')); r=json.load(open(sys.argv[3],encoding='utf-8')); c=h.get('clients',{}).get(k); s=h.get('server_key',{}).get('public_key'); ok=bool(c) and c.get('pubkey')==r.get('public_key') and h.get('pending_tokens')==[] and bool(s) and r.get('server_key')==s; print('    handler pubkey :', c and c.get('pubkey')); print('    responder pub  :', r.get('public_key')); print('    pending_tokens :', h.get('pending_tokens')); print('    server key     :', s); print('    pinned by resp :', r.get('server_key')); sys.exit(0 if ok else 1)" %KEYID% "%HCFG%" "%RCFG%"
 if errorlevel 1 (
-    echo    FAIL: allowlist does not match the responder key
+    echo    FAIL: allowlist does not match the responder key, or the server key was not pinned
     goto :cleanup
 )
 set "RC=0"

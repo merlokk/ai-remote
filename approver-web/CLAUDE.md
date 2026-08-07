@@ -100,11 +100,12 @@ operator on a phone is trusting the host in a way they would not with `nats.ws`.
 ```
 config.json              runtime config (git-ignored; config.example.json is the reference)
 src/lib/
-  protocol.ts            port of approver/protocol.py — canonical JSON, sha256, signing bytes
+  protocol.ts            port of approver/protocol.py — canonical JSON, sha256, both signing-bytes shapes
   protocol.test.ts       cross-language parity vectors (node:test)
-  schemas.ts             every zod schema: config, bus request, token, both POSTs
+  keys.test.ts           parity vectors for the handler's ed25519 replies (node:test)
+  schemas.ts             every zod schema: config, bus request, token, both POSTs, the registration reply
   config.ts              config.json loader + atomic save (server)
-  keys.ts                verify a P-256 DER signature (server) — it cannot sign
+  keys.ts                verify a P-256 DER signature and an ed25519 one (server) — it cannot sign
   browser-key.ts         the key itself: generate, IndexedDB, sign (client only)
   browser-key-context.tsx  shares that key between the register panel and the cards
   reply.ts               signing bytes + reply assembly, used by BOTH sides
@@ -142,7 +143,7 @@ both sides compute them with one implementation — which is also why
 |-------|-------|
 | `GET /api/stream` | `text/event-stream`. Every frame is a **whole** `{status, requests}` snapshot, so a reconnect needs no resync. `: ping` every 15 s. Opening the stream is what triggers the NATS connect — there is no connect button, because having the page open *is* being a responder. |
 | `POST /api/decision` | `{nonce, behavior, reason, updated_input?, sig}` → `{ok}`. The signature is made in the browser; the server re-derives the signing bytes **from the pending request it holds** and verifies before answering, so a caller cannot post one decision with a signature over another. `409` = gone (expired/answered), no key registered, or the signature does not match. |
-| `POST /api/register` | `{token, public_key, public_key_raw}` → `{ok, key_id}` \| `{ok:false, error}`. Only public material crosses; the private half never leaves the browser. `409` = the handler or the bus said no (bad/spent token, nothing listening) and **nothing was persisted**. |
+| `POST /api/register` | `{token, public_key, public_key_raw}` → `{ok, key_id}` \| `{ok:false, error}`. Only public material crosses; the private half never leaves the browser. `409` = the handler or the bus said no (bad/spent token, nothing listening), or the answer was not the registration handler's (unsigned, replayed, or signed by a key other than the pinned one) — and **nothing was persisted**. |
 
 `nonce` is the entry id: it is unique per request and already on the wire.
 
@@ -152,12 +153,15 @@ both sides compute them with one implementation — which is also why
 { "v": 1, "servers": "nats://127.0.0.1:4222", "subject": "approvals.*",
   "queue": "approvers", "key_id": "approver-web", "key_type": "p256",
   "request_ttl": 120,
-  "public_key": "<b64 33-byte compressed>", "public_key_raw": "<b64 65-byte>" }
+  "public_key": "<b64 33-byte compressed>", "public_key_raw": "<b64 65-byte>",
+  "server_key": "<b64 32-byte ed25519 — the registration handler>" }
 ```
 
 **Public material only** — there is no private key to store. `public_key` is what
 the allowlist holds; `public_key_raw` exists solely so the server can verify a
-signature without recovering `y` from a compressed point (a modular square root).
+signature without recovering `y` from a compressed point (a modular square root);
+`server_key` is the registration handler's own public key, pinned at registration
+(root §6) so a later registration can only be answered by the same handler.
 
 Every field has a default, so the app runs with **no config file at all**;
 `register` then writes it atomically (temp + fsync + rename, the way
@@ -562,10 +566,25 @@ from `py approver/registration_handler.py --get-token approver-web` and runs the
 2. It generates the P-256 pair **in the browser**, `extractable: false`, and
    `POST /api/register` carries only the two public encodings.
 3. `responder.register()` publishes the public half over `registrations` with
-   `key_type: "p256"` and, only on `ok: true`, writes `config.json`.
+   `key_type: "p256"` and a fresh 32-byte `nonce`, then **verifies the handler's
+   signature over the answer** before reading the verdict, and only on `ok: true`
+   writes `config.json`.
 4. Only then does the browser put the `CryptoKey` in IndexedDB. A rejected
    registration leaves the old key untouched on both sides — the same ordering
    both Python responders use, for the same reason.
+
+**Why step 3 verifies before it believes.** `registrations` is an open subject, so
+an unsigned `{"ok": false, "error": "expired"}` from anyone on the bus would read
+as a rejection and send the operator hunting a problem that does not exist — which
+is why the handler signs rejections too, and why `verifyRegistrationReply` runs
+before `reply.ok` is looked at. It is a port of
+`responder.verify_server_reply`: version, `nonce` echo, and an Ed25519 signature
+over `registrationReplySigningBytes` (`keys.verifyEd25519`; the bare 32-byte key
+is wrapped in its SPKI prefix because `node:crypto` will not import a raw one).
+The handler's key is pinned in `config.json` on first use and required to match
+after that. The first registration is trust-on-first-use — the panel prints
+`handler key <b64>` so it can be compared with the `server key (ed25519): …` line
+the handler prints on startup.
 
 The token is a bearer credential for one `key_id`: it is not kept in component
 state after the request and the form clears it on success. Re-registering rotates

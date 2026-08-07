@@ -3,5 +3,6 @@
   "key_id": "approver-1",
   "key_type": "ed25519",
   "private_key": "<base64 private key — SECRET, never commit; ed25519=32B scalar, p256=32B scalar>",
-  "public_key": "<base64 public key; ed25519=32B, p256=33B compressed point>"
+  "public_key": "<base64 public key; ed25519=32B, p256=33B compressed point>",
+  "server_key": "<base64 32B ed25519 public key of the registration handler, pinned at registration>"
 }

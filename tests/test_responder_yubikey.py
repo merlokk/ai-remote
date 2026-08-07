@@ -22,6 +22,7 @@ from cryptography.hazmat.primitives import hashes  # noqa: E402
 from cryptography.hazmat.primitives.asymmetric import ec  # noqa: E402
 
 from approver import hook, protocol, responder, responder_yubikey  # noqa: E402
+from approver import registration_handler  # noqa: E402
 from lib import config as configlib  # noqa: E402
 from lib import crypto, yubikey  # noqa: E402
 from tests.conftest import requires_nats, run_async  # noqa: E402
@@ -398,6 +399,21 @@ def test_full_approval_handler_reply_passes_the_hook():
 
 
 # --- registration --------------------------------------------------------------
+#: A stand-in registration handler's identity. The replies below go through the
+#: real ``sign_reply``, so what register() verifies here is what it verifies live.
+_SERVER_DATA: dict = {}
+registration_handler.ensure_server_key(_SERVER_DATA)
+
+
+def _signed_reply(request, *, ok=True, error="", data=_SERVER_DATA):
+    reply = (
+        {"v": protocol.PROTOCOL_VERSION, "ok": True, "key_id": request["key_id"]}
+        if ok
+        else {"v": protocol.PROTOCOL_VERSION, "ok": False, "error": error}
+    )
+    return registration_handler.sign_reply(data, reply, request, now=int(time.time()))
+
+
 def test_register_refuses_a_malformed_token(tmp_path):
     cfg_path = tmp_path / "responder-yubikey-config.json"
     with pytest.raises(ValueError):
@@ -443,7 +459,7 @@ def test_register_accepts_a_credential_attested_against_supplied_roots(tmp_path,
     async def fake_request(subject, payload, timeout=None):
         sent["subject"] = subject
         sent["payload"] = payload
-        return {"v": protocol.PROTOCOL_VERSION, "ok": True, "key_id": payload["key_id"]}
+        return _signed_reply(payload)
 
     _patch_bus(monkeypatch, fake_request)
 
@@ -488,7 +504,7 @@ def test_register_persists_the_config_on_ack(tmp_path, monkeypatch):
 
     async def fake_request(subject, payload, timeout=None):
         sent.update(payload)
-        return {"v": protocol.PROTOCOL_VERSION, "ok": True, "key_id": payload["key_id"]}
+        return _signed_reply(payload)
 
     _patch_bus(monkeypatch, fake_request)
 
@@ -519,7 +535,7 @@ def test_register_does_not_persist_on_rejection(tmp_path, monkeypatch):
     cfg_path = tmp_path / "responder-yubikey-config.json"
 
     async def fake_request(subject, payload, timeout=None):
-        return {"v": protocol.PROTOCOL_VERSION, "ok": False, "error": "expired"}
+        return _signed_reply(payload, ok=False, error="expired")
 
     _patch_bus(monkeypatch, fake_request)
 
@@ -541,7 +557,7 @@ def test_register_generates_a_fresh_ikm_by_default(tmp_path, monkeypatch):
     _, cred_path = _saved_credential(tmp_path)
 
     async def fake_request(subject, payload, timeout=None):
-        return {"v": protocol.PROTOCOL_VERSION, "ok": True, "key_id": payload["key_id"]}
+        return _signed_reply(payload)
 
     _patch_bus(monkeypatch, fake_request)
 
@@ -577,7 +593,7 @@ def test_register_round_trips_over_nats(tmp_path):
         async with connect() as handler_bus:
             async def handler(req):
                 seen.update(req)
-                return {"v": protocol.PROTOCOL_VERSION, "ok": True, "key_id": req["key_id"]}
+                return _signed_reply(req)
 
             await handler_bus.reply("registrations", handler)
             return await responder_yubikey.register(

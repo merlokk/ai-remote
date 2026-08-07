@@ -21,16 +21,22 @@ import {
   type Subscription,
 } from "@nats-io/transport-node";
 
+import { randomBytes } from "node:crypto";
+
 import { loadConfig, saveConfig } from "./config";
-import { verifyP256 } from "./keys";
-import { PROTOCOL_VERSION } from "./protocol";
+import { verifyEd25519, verifyP256 } from "./keys";
+import { PROTOCOL_VERSION, registrationReplySigningBytes } from "./protocol";
 import {
   assembleReply,
   type Decision,
   decisionSigningBytes,
   type SignedReply,
 } from "./reply";
-import { permissionRequestSchema, registrationReplySchema } from "./schemas";
+import {
+  permissionRequestSchema,
+  type RegistrationReply,
+  registrationReplySchema,
+} from "./schemas";
 import type { PendingRequest, ResponderStatus, SigningMode, Snapshot } from "./types";
 
 const decoder = new TextDecoder();
@@ -48,6 +54,58 @@ export class RegistrationError extends Error {}
 
 const REGISTRATION_SUBJECT = "registrations";
 const REGISTRATION_TIMEOUT_MS = 10_000;
+const NONCE_BYTES = 32;
+
+/**
+ * Check the registration handler's signature over its reply; return its key.
+ *
+ * A port of `responder.verify_server_reply` (root CLAUDE.md §6), and the reason
+ * this app can believe an answer at all: `registrations` is an open subject, so
+ * without this any client on the bus could ack a registration — or, worse, deny
+ * one and be believed.
+ *
+ * `pinned` is the key already in `config.json`. When present the reply must be
+ * signed by exactly it: a good signature by a *different* key is precisely the
+ * takeover the pin exists for. On the first registration there is nothing to
+ * pin against, so the key is taken on trust and pinned from then on — compare
+ * it once with what the handler printed when it started.
+ */
+function verifyRegistrationReply(
+  reply: RegistrationReply,
+  { nonce, pinned }: { nonce: string; pinned?: string },
+): string {
+  if (reply.v !== PROTOCOL_VERSION) throw new RegistrationError("unexpected protocol version");
+
+  const serverKey = reply.server_key;
+  if (!serverKey) {
+    throw new RegistrationError(
+      "the reply carries no server key — is the registration handler up to date?",
+    );
+  }
+  if (pinned && serverKey !== pinned) {
+    throw new RegistrationError(
+      "the reply is signed by a different key than the registration handler this app " +
+        "already trusts — refusing to re-pin it",
+    );
+  }
+  if (reply.nonce !== nonce) {
+    throw new RegistrationError("the reply does not match this request (a replayed reply?)");
+  }
+  if (typeof reply.ts !== "number") throw new RegistrationError("the reply has no timestamp");
+
+  const bytes = registrationReplySigningBytes({
+    v: PROTOCOL_VERSION,
+    ok: reply.ok,
+    key_id: reply.key_id ?? "",
+    nonce,
+    ts: reply.ts,
+    error: reply.error ?? "",
+  });
+  if (!reply.sig || !verifyEd25519(serverKey, bytes, reply.sig)) {
+    throw new RegistrationError("the registration handler's signature does not verify");
+  }
+  return serverKey;
+}
 
 class Responder {
   private entries = new Map<string, Entry>();
@@ -195,8 +253,9 @@ class Responder {
    *
    * The key pair itself is generated in the browser; only the public halves
    * arrive here. Order mirrors both Python responders: publish the public key →
-   * **persist only on `ok:true`**. A rejected registration must not clobber a
-   * key that still works.
+   * verify the handler's signature over the answer → **persist only on
+   * `ok:true`**. A rejected registration must not clobber a key that still
+   * works, and an unsigned answer is not a registration at all.
    */
   async register(token: string, publicB64: string, publicRawB64: string): Promise<string> {
     const keyId = token.split(".", 1)[0];
@@ -208,12 +267,16 @@ class Responder {
       throw new RegistrationError(this.error ?? "not connected to NATS");
     }
 
+    // Echoed inside the handler's signature, so its reply is good for this
+    // exchange only.
+    const nonce = randomBytes(NONCE_BYTES).toString("base64");
     const request = {
       v: PROTOCOL_VERSION,
       token,
       key_id: keyId,
       pubkey: publicB64,
       key_type: "p256" as const,
+      nonce,
       ts: Math.floor(Date.now() / 1000),
     };
 
@@ -235,6 +298,13 @@ class Responder {
 
     const reply = registrationReplySchema.safeParse(payload);
     if (!reply.success) throw new RegistrationError("the handler sent a reply we cannot read");
+
+    // Before the verdict is read, not after: an unsigned "rejected" is worth no
+    // more than an unsigned "ok".
+    const serverKey = verifyRegistrationReply(reply.data, {
+      nonce,
+      pinned: this.loaded.config.server_key,
+    });
     if (!reply.data.ok) throw new RegistrationError(reply.data.error ?? "registration rejected");
 
     this.loaded.config = {
@@ -243,6 +313,7 @@ class Responder {
       key_type: "p256",
       public_key: publicB64,
       public_key_raw: publicRawB64,
+      server_key: serverKey,
     };
     saveConfig(this.loaded.config, this.loaded.path);
     this.loaded.fromFile = true;
@@ -261,6 +332,7 @@ class Responder {
       signing_mode: this.signingMode,
       registered: this.signingMode !== "unsigned",
       public_key: this.loaded.config.public_key ?? null,
+      server_key: this.loaded.config.server_key ?? null,
       config_path: this.loaded.path,
       config_from_file: this.loaded.fromFile,
       error: this.error,

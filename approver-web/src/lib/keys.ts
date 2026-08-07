@@ -54,3 +54,33 @@ export function verifyP256(publicRawB64: string, data: Uint8Array, sigB64: strin
     return false;
   }
 }
+
+/**
+ * SPKI wrapper for a bare Ed25519 public key: `SEQUENCE { AlgorithmIdentifier
+ * { 1.3.101.112 }, BIT STRING }`. Fixed for every 32-byte key, so prefixing is
+ * the whole conversion — `node:crypto` will not import a raw one, while the
+ * §6 wire format (and `lib/crypto.py`) is base64 of exactly those 32 bytes.
+ */
+const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
+
+/**
+ * Verify an Ed25519 signature — the scheme the registration handler signs its
+ * replies with (`lib/crypto.verify(..., "ed25519")`).
+ *
+ * Ed25519 hashes internally, so `data` is the signing bytes themselves. Same
+ * fail-safe contract as {@link verifyP256}: malformed input is `false`.
+ */
+export function verifyEd25519(publicB64: string, data: Uint8Array, sigB64: string): boolean {
+  try {
+    const raw = Buffer.from(publicB64, "base64");
+    if (raw.length !== 32) return false;
+    const key = createPublicKey({
+      key: Buffer.concat([ED25519_SPKI_PREFIX, raw]),
+      format: "der",
+      type: "spki",
+    });
+    return nodeVerify(null, data, key, Buffer.from(sigB64, "base64"));
+  } catch {
+    return false;
+  }
+}

@@ -18,6 +18,17 @@ Owner of the allowlist stored in ``handler-config.json`` (the ``clients`` map th
                          successful registration instead of running forever
                          (scripted e2e runs need no process to kill).
 
+  --new-server-key       Generate the handler's own signing key, replacing the
+                         current one if there is one, print the new public half
+                         and exit. Every approver pinned to the old key then has
+                         to register again.
+
+The handler has an Ed25519 key of its own, generated into ``handler-config.json``
+on first use and rotated only when ``--new-server-key`` says so. **Every reply it
+sends is signed with it**, acceptances and rejections alike, and each approver
+pins the public half at registration - so an approver can tell the allowlist owner
+apart from anyone else who can publish on the open ``registrations`` subject.
+
 Run with the `py` launcher (CLAUDE.md §5):
   py approver/registration_handler.py --get-token approver-1
   py approver/registration_handler.py [--once]
@@ -58,6 +69,140 @@ def _save_data(config_path: Path | str, data: dict) -> None:
     configlib.Config(config_path, data).save()
 
 
+# --- the server's own key ------------------------------------------------------
+# The handler signs everything it says, so an approver can tell an answer from the
+# allowlist owner apart from an answer by anyone else who happens to be on the bus
+# (`registrations` is an open subject). The key is generated on first use and then
+# never rotates on its own: approvers pin the public half at registration, and a
+# silent rotation would lock every one of them out.
+def _server_key_pair(record: object) -> tuple[str, str]:
+    """Validate a stored ``server_key`` record; return ``(private_b64, public_b64)``.
+
+    Raises ``ConfigError`` rather than regenerating: a corrupt record means the
+    identity approvers pinned is gone, and quietly minting a new one would turn
+    that into a mystery instead of a message.
+    """
+    if not isinstance(record, dict):
+        raise configlib.ConfigError("'server_key' must be a JSON object")
+
+    key_type = record.get("key_type", protocol.SERVER_KEY_TYPE)
+    if key_type != protocol.SERVER_KEY_TYPE:
+        raise configlib.ConfigError(
+            f"'server_key' has key_type {key_type!r}, expected {protocol.SERVER_KEY_TYPE!r}"
+        )
+
+    private_b64, public_b64 = record.get("private_key"), record.get("public_key")
+    if not isinstance(private_b64, str) or not isinstance(public_b64, str):
+        raise configlib.ConfigError("'server_key' needs both 'private_key' and 'public_key'")
+
+    try:
+        derived = crypto.KeyPair.from_private_b64(private_b64, key_type).public_b64()
+    except Exception as e:  # noqa: BLE001 - bad base64 / wrong length / anything else
+        raise configlib.ConfigError(f"'server_key' private key is unusable: {e}") from e
+    if derived != public_b64:
+        raise configlib.ConfigError(
+            "'server_key' public_key is not the one its private_key produces - the config "
+            "has been edited or corrupted; approvers pinned the published half"
+        )
+    return private_b64, public_b64
+
+
+def _new_server_key_record() -> dict:
+    keypair = crypto.generate_keypair(protocol.SERVER_KEY_TYPE)
+    return {
+        "key_type": protocol.SERVER_KEY_TYPE,
+        "private_key": keypair.private_b64(),
+        "public_key": keypair.public_b64(),
+    }
+
+
+def ensure_server_key(data: dict) -> bool:
+    """Give ``data`` a server signing key if it has none. True iff one was generated.
+
+    The caller persists ``data`` when this returns True.
+    """
+    record = data.get("server_key")
+    if record is None:
+        data["server_key"] = _new_server_key_record()
+        return True
+    _server_key_pair(record)  # validate an existing one, never replace it
+    return False
+
+
+def regenerate_server_key(data: dict) -> tuple[str, str | None]:
+    """Replace ``data``'s server key with a fresh pair, whatever was there before.
+
+    Returns ``(new_public_b64, previous_public_b64 or None)``. The only path that
+    discards a working key, so it is never reached by accident: ``ensure_server_key``
+    keeps what it finds, and this runs only when the operator asks for it
+    (``--new-server-key``). It is also the repair for a corrupt record, which is why
+    it does not validate what it overwrites.
+
+    Every approver holding the old key must register again - a rotation invalidates
+    the pin, by design.
+    """
+    previous = data.get("server_key")
+    previous_public = previous.get("public_key") if isinstance(previous, dict) else None
+    data["server_key"] = _new_server_key_record()
+    return data["server_key"]["public_key"], previous_public
+
+
+def load_server_key(config_path: Path | str) -> str:
+    """Ensure the handler has a signing key on disk; return its public half."""
+    data = _load_data(config_path)
+    if ensure_server_key(data):
+        _save_data(config_path, data)
+    return data["server_key"]["public_key"]
+
+
+def rotate_server_key(config_path: Path | str) -> tuple[str, str | None]:
+    """Generate a fresh server key into the config; return ``(new, previous)``.
+
+    Touches nothing else: the ``clients`` allowlist and any live ``pending_tokens``
+    are about responder keys, and a new handler identity says nothing about those.
+    """
+    data = _load_data(config_path)
+    new_public, previous_public = regenerate_server_key(data)
+    _save_data(config_path, data)
+    return new_public, previous_public
+
+
+def request_nonce(request: object) -> str:
+    """The nonce to echo back, or ``""`` — junk on an open subject must still sign."""
+    if isinstance(request, dict):
+        nonce = request.get("nonce")
+        if isinstance(nonce, str):
+            return nonce
+    return ""
+
+
+def sign_reply(data: dict, reply: dict, request: object, now: int) -> dict:
+    """Stamp a reply with the echoed nonce, ``ts``, the server key and its signature.
+
+    Every reply is signed, rejections included: "token unknown" is exactly the
+    answer an attacker would want to forge (or suppress and replace), and an
+    approver that only checked acceptances would still act on a lie.
+    """
+    private_b64, public_b64 = _server_key_pair(data.get("server_key"))
+    signed = dict(reply)
+    signed["nonce"] = request_nonce(request)
+    signed["ts"] = now
+    signed["server_key"] = public_b64
+    signed["sig"] = crypto.sign(
+        private_b64,
+        protocol.registration_reply_signing_bytes(
+            v=signed.get("v", protocol.PROTOCOL_VERSION),
+            ok=bool(signed.get("ok")),
+            key_id=signed.get("key_id", ""),
+            nonce=signed["nonce"],
+            ts=now,
+            error=signed.get("error", ""),
+        ),
+        protocol.SERVER_KEY_TYPE,
+    )
+    return signed
+
+
 # --- token minting -------------------------------------------------------------
 def validate_key_id(key_id: str) -> None:
     """A key_id must be non-empty and contain no '.' (the token separator, §6)."""
@@ -96,6 +241,7 @@ def get_token(
     """Mint a token for ``key_id``, persist it, and return it."""
     validate_key_id(key_id)
     data = _load_data(config_path)
+    ensure_server_key(data)  # minting is the handler's first run as often as not
     sweep_expired(data, now)
     token = add_pending_token(data, key_id, now, ttl=ttl)
     _save_data(config_path, data)
@@ -173,11 +319,13 @@ def make_handler(config_path: Path | str, *, lock: asyncio.Lock | None = None):
 
     async def handler(request):
         async with lock:
+            now = int(time.time())
             data = _load_data(config_path)
-            reply, changed = handle_registration(data, request, int(time.time()))
-            if changed:
+            minted = ensure_server_key(data)  # e.g. the config was deleted under us
+            reply, changed = handle_registration(data, request, now)
+            if minted or changed:
                 _save_data(config_path, data)
-            return reply
+            return sign_reply(data, reply, request, now)
 
     return handler
 
@@ -191,7 +339,9 @@ async def serve(
 ) -> None:
     """Listen for registrations. Runs until interrupted, or until the first
     successful registration when ``once`` is set (useful for scripted e2e runs)."""
-    _load_data(config_path)  # fail fast on an unreadable / wrong-version config
+    # Fails fast on an unreadable / wrong-version config, and mints the signing key
+    # on a first run so the identity approvers pin exists before anyone can ask.
+    server_key = load_server_key(config_path)
     base_handler = make_handler(config_path)
     stop = asyncio.Event()
 
@@ -209,6 +359,8 @@ async def serve(
             f"(config: {config_path}) — Ctrl+C to stop",
             file=sys.stderr,
         )
+        # Printed so it can be compared out of band with what an approver pinned.
+        print(f"server key ({protocol.SERVER_KEY_TYPE}): {server_key}", file=sys.stderr)
         await stop.wait()  # never set unless once → same as run-forever otherwise
         if once:
             await b.flush()  # ensure the final reply is on the wire before draining
@@ -221,6 +373,15 @@ def _build_parser() -> argparse.ArgumentParser:
         "--get-token",
         metavar="KEY_ID",
         help="mint a one-time token for KEY_ID and print it (otherwise: serve)",
+    )
+    parser.add_argument(
+        "--new-server-key",
+        action="store_true",
+        help=(
+            "generate the handler's own signing key - replacing the current one if "
+            "there is one - print the new public half and exit. Every approver has "
+            "to register again afterwards"
+        ),
     )
     parser.add_argument("--config", default=str(DEFAULT_CONFIG))
     parser.add_argument("--servers", default=bus.DEFAULT_SERVERS)
@@ -236,16 +397,47 @@ def _build_parser() -> argparse.ArgumentParser:
 def main(argv=None) -> int:
     args = _build_parser().parse_args(argv)
 
+    if args.new_server_key:
+        try:
+            data = _load_data(Path(args.config))
+            new_public, previous = regenerate_server_key(data)
+            clients = sorted(data.get("clients", {}))
+            _save_data(Path(args.config), data)
+        except configlib.ConfigError as e:
+            print(f"cannot write the server key: {e}", file=sys.stderr)
+            return 1
+
+        print(new_public)  # stdout = the key only, so it can be piped
+        print(
+            f"new server key ({protocol.SERVER_KEY_TYPE}) in {args.config}", file=sys.stderr
+        )
+        if previous:
+            print(f"replaced {previous}", file=sys.stderr)
+            # The pin is what makes rotation cost something; say so plainly rather
+            # than letting it surface as an unexplained registration failure.
+            print(
+                "every approver pinned to the old key must register again with a fresh "
+                "token; until then its 'register' fails with a key-mismatch error",
+                file=sys.stderr,
+            )
+            if clients:
+                print(f"registered approvers: {', '.join(clients)}", file=sys.stderr)
+        return 0
+
     if args.get_token is not None:
         try:
             token = get_token(
                 args.get_token, config_path=Path(args.config), ttl=args.ttl, now=int(time.time())
             )
-        except ValueError as e:
+            server_key = load_server_key(Path(args.config))
+        except (ValueError, configlib.ConfigError) as e:
             print(f"cannot mint token: {e}", file=sys.stderr)
             return 1
         print(token)  # stdout = token only, so it can be piped
         print(f"expires in {args.ttl}s (config: {args.config})", file=sys.stderr)
+        # The approver pins this at registration; hand it over with the token if the
+        # two travel by different routes.
+        print(f"server key ({protocol.SERVER_KEY_TYPE}): {server_key}", file=sys.stderr)
         return 0
 
     try:

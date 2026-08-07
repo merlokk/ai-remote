@@ -42,7 +42,8 @@ Claude Code ──stdin──▶ hook.py ──approvals.<sid>──▶ NATS ─
      └──── allow/deny ────┘◀──────────── signed reply ──────────────┘   + touch → ARKG P-256 sign)
                           (hook verifies sig against the allowlist)
 
-registration_handler.py  ──▶ owns handler-config.json (the allowlist `clients` + one-time `pending_tokens`)
+registration_handler.py  ──▶ owns handler-config.json (the allowlist `clients` + one-time `pending_tokens`
+                             + its own ed25519 `server_key`: every reply it sends is signed with it)
 responder.py             ──▶ software stand-in for the same role, key on disk (Ed25519/P-256):
                              used by the automated e2e checks and for hardware-free development
 ```
@@ -59,8 +60,8 @@ it exists so the flow can be tested and developed without hardware in the loop
 | `approver/hook.py` | Claude Code `PermissionRequest` hook. Sends the request, verifies the signed reply against the allowlist, prints the decision. Fail-safe.                                      |
 | `approver/responder_yubikey.py` | **The primary responder.** The human side with the key on a **YubiKey**: no private key on disk, every decision costs a touch. Needs the `yubikey` v5.8 extra.                 |
 | `approver/responder.py` | The software stand-in for the same role (key on disk, Ed25519/P-256) — for tests, the e2e scripts, and hardware-free development.                                              |
-| `approver/registration_handler.py` | Owns the allowlist (`handler-config.json`). Mints one-time tokens and registers responder public keys.                                                                         |
-| `approver/protocol.py` | Shared wire-format: canonical JSON, hashes, and the exact "signing bytes" both sides assemble identically.                                                                     |
+| `approver/registration_handler.py` | Owns the allowlist (`handler-config.json`). Mints one-time tokens and registers responder public keys. Signs every reply with its own Ed25519 key, which each approver pins.  |
+| `approver/protocol.py` | Shared wire-format: canonical JSON, hashes, and the exact "signing bytes" both sides assemble identically — for approvals (§7) and for registration replies (§6).              |
 | `lib/bus.py` | Thin async JSON request-reply wrapper over `nats-py`.                                                                                                                          |
 | `lib/config.py` | Versioned, atomic JSON config store.                                                                                                                                           |
 | `lib/crypto.py` | Ed25519 / ECDSA P-256 keygen / sign / verify (fail-safe verify; scheme picked by `key_type`).                                                                                  |
@@ -179,8 +180,9 @@ py approver/registration_handler.py --get-token approver-1
 # register: generates a fresh key pair (Ed25519 by default) and sends the public
 # half to the handler, which — on success — writes it into its own
 # approver/handler-config.json -> clients["approver-1"]. The private key is saved
-# to approver/responder-config.json only after that ack, so a rejected
-# registration never clobbers a working config.
+# to approver/responder-config.json only after that ack — and only after the
+# handler's signature over it verifies — so neither a rejected registration nor an
+# answer from someone else on the bus can clobber a working config.
 py approver/responder.py register "approver-1.<secret>"
 
 # want ECDSA P-256 instead of the default Ed25519? add --key-type p256
@@ -188,6 +190,22 @@ py approver/responder.py register "approver-1.<secret>" --key-type p256
 ```
 
 Terminal A exits (`--once`) once registration succeeds.
+
+> **The handler signs its answers.** On its first run it mints an Ed25519
+> `server_key` into `handler-config.json` and prints the public half
+> (`server key (ed25519): …`) — `--get-token` prints it too. Every reply it
+> sends is signed with that key, rejections included, and `register` verifies
+> the signature before believing the verdict, then pins the key in
+> `responder-config.json`. The first registration takes the key on trust; every
+> one after it must come from the same handler, or `register` refuses and
+> changes nothing. `registrations` is an open subject, so without this any
+> client on the bus could ack a registration — or deny one and be believed.
+>
+> To roll that identity over, run `py approver/registration_handler.py
+> --new-server-key`. It prints the new public key and names the approvers that
+> must register again: each of them refuses a handler it does not recognise, so
+> delete the pinned `server_key` from its config (or the config itself) and
+> re-register with a fresh token.
 
 **Step 2 — run the responder.** In **Terminal B**, become the human approver:
 
@@ -523,6 +541,7 @@ get the read-only tier (enumeration, firmware, `getInfo`) if a key is plugged in
 | `scripts\e2e-registration.cmd` | End-to-end registration check (Windows) |
 | `scripts\e2e-approval.cmd` | End-to-end approval-loop check (Windows) |
 | `py approver/registration_handler.py --get-token <key_id>` | Mint a one-time registration token (TTL 15 min) |
+| `py approver/registration_handler.py --new-server-key` | Generate — or **replace** — the handler's own signing key (every approver must then register again) |
 | `py approver/registration_handler.py [--once]` | Serve the `registrations` subject (allowlist owner) |
 | `py approver/responder_yubikey.py register <token> [--credential FILE] [--require-yubikey]` | **Primary:** register an ARKG key derived from a YubiKey (`key_type=p256`) |
 | `py approver/responder_yubikey.py serve` | **Primary:** answer approval requests, signing each decision on the YubiKey (elevated console) |
@@ -534,7 +553,8 @@ get the read-only tier (enumeration, firmware, `getInfo`) if a key is plugged in
 
 - **Runtime configs hold secrets** and are git-ignored:
   `approver/responder-config.json` (the private key) and
-  `approver/handler-config.json` (live token secrets in `pending_tokens`).
+  `approver/handler-config.json` (live token secrets in `pending_tokens`, plus the
+  private half of the handler's own `server_key`).
   `approver/responder-yubikey-config.json` is git-ignored too — it holds no private key
   (that never leaves the YubiKey), but it identifies the credential behind a
   registered key.

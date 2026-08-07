@@ -17,6 +17,15 @@
 
 export const PROTOCOL_VERSION = 1;
 
+/**
+ * The registration handler's own key scheme (root CLAUDE.md §6 "server key").
+ * Fixed, never taken from a reply: this app pins one key *and* one algorithm.
+ */
+export const SERVER_KEY_TYPE = "ed25519";
+
+/** Domain separator on every registration-reply signature — see {@link registrationReplySigningBytes}. */
+export const REGISTRATION_REPLY_CONTEXT = "registration-reply";
+
 /** Matches every code unit Python's ensure_ascii=True would escape. */
 const NON_ASCII = /[\u0080-\uffff]/g;
 
@@ -82,6 +91,37 @@ export interface SigningFields {
  * Layout (`\n`-joined, utf-8): v, session_id, nonce, tool_name, input_sha256,
  * behavior, updated_input_sha256, ts, reason.
  */
+export interface RegistrationReplyFields {
+  v: number;
+  ok: boolean;
+  key_id: string;
+  nonce: string;
+  ts: number;
+  error: string;
+}
+
+/**
+ * The bytes the registration handler signs over its reply — a port of
+ * `protocol.registration_reply_signing_bytes` (§6).
+ *
+ * Layout (`\n`-joined, utf-8): the context string, v, ok (`"true"`/`"false"`),
+ * key_id, nonce, ts, error. The nonce is the one this app sent, so a reply is
+ * good for exactly one exchange; `error` is last because it is the free-text
+ * field.
+ */
+export function registrationReplySigningBytes(f: RegistrationReplyFields): Uint8Array {
+  const parts = [
+    REGISTRATION_REPLY_CONTEXT,
+    String(f.v),
+    f.ok ? "true" : "false",
+    f.key_id,
+    f.nonce,
+    String(f.ts),
+    f.error,
+  ];
+  return new TextEncoder().encode(parts.join("\n"));
+}
+
 export function signingBytes(f: SigningFields): Uint8Array {
   const parts = [
     String(f.v),

@@ -7,7 +7,10 @@ Two commands:
                      registration handler over ``registrations`` using a one-time
                      token, and store the pair in responder-config.json. The key is
                      persisted only if the handler acks ``ok:true``, so a rejected
-                     registration never clobbers a working config.
+                     registration never clobbers a working config. The handler
+                     signs its reply with the server key (§6); that signature is
+                     verified first and the key is pinned in the config, so no one
+                     else on the open ``registrations`` subject can answer for it.
 
   serve              Subscribe to ``approvals.*``, present each request to the
                      operator, sign the decision with the config's ``key_type``
@@ -20,7 +23,9 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
 import json
+import secrets
 import sys
 import time
 from collections.abc import Callable
@@ -39,9 +44,28 @@ DEFAULT_CONFIG = Path(__file__).resolve().parent / "responder-config.json"
 DEFAULT_SUBJECT = "approvals.*"
 DEFAULT_QUEUE = "approvers"
 _BEHAVIORS = ("allow", "deny")
+_NONCE_BYTES = 32
+
+
+class ServerReplyError(Exception):
+    """A reply from the registration handler could not be trusted (§6).
+
+    Raised instead of returning it: an unsigned, mis-signed or replayed answer is
+    not a rejection to report, it is an answer from someone who is not the
+    allowlist owner — and acting on it (in either direction) is the mistake.
+    """
 
 
 # --- pure helpers --------------------------------------------------------------
+def new_nonce() -> str:
+    """A fresh registration nonce (base64, 32 random bytes).
+
+    Echoed by the handler inside its signature, so an old reply cannot be replayed
+    at a later registration.
+    """
+    return base64.b64encode(secrets.token_bytes(_NONCE_BYTES)).decode("ascii")
+
+
 def parse_key_id(token: str) -> str:
     """Extract ``key_id`` from a ``<key_id>.<secret>`` token (§6). First dot splits."""
     if "." not in token:
@@ -53,12 +77,19 @@ def parse_key_id(token: str) -> str:
 
 
 def build_registration_request(
-    token: str, pubkey_b64: str, ts: int, key_type: str = crypto.DEFAULT_KEY_TYPE
+    token: str,
+    pubkey_b64: str,
+    ts: int,
+    key_type: str = crypto.DEFAULT_KEY_TYPE,
+    nonce: str = "",
 ) -> dict:
     """Assemble the ``registrations`` request; ``key_id`` comes from the token (§6).
 
     ``key_type`` (``ed25519``/``p256``) tells the handler which algorithm to pin
     for this key in the allowlist; the hook then verifies with that same scheme.
+
+    ``nonce`` comes back inside the handler's signature over its reply, which is
+    what makes that reply usable exactly once, for this exchange.
     """
     return {
         "v": protocol.PROTOCOL_VERSION,
@@ -66,8 +97,84 @@ def build_registration_request(
         "key_id": parse_key_id(token),
         "pubkey": pubkey_b64,
         "key_type": key_type,
+        "nonce": nonce,
         "ts": ts,
     }
+
+
+def verify_server_reply(reply, *, nonce: str, pinned_pubkey: str | None = None) -> str:
+    """Check the registration handler's signature over ``reply``; return its key.
+
+    ``registrations`` is an open subject, so a reply is only worth reading once it
+    is known to come from the allowlist owner. Checked here: the protocol version,
+    the ``nonce`` echo (this exchange, not an old one), and an Ed25519 signature
+    over :func:`approver.protocol.registration_reply_signing_bytes` — which covers
+    ``ok``, ``key_id`` and ``error``, so a rejection cannot be turned into an
+    acceptance or the other way round.
+
+    ``pinned_pubkey`` is the key this approver already trusts (from its own
+    config). When set, the reply must be signed by exactly that key: a valid
+    signature by a *different* key is the takeover this pinning exists to stop.
+    Without it — the first registration — the key is taken on trust and pinned for
+    every registration after; compare it once with what the handler printed.
+
+    Raises :class:`ServerReplyError` on anything it cannot vouch for.
+    """
+    if not isinstance(reply, dict):
+        raise ServerReplyError("reply is not an object")
+    if reply.get("v") != protocol.PROTOCOL_VERSION:
+        raise ServerReplyError("unexpected protocol version")
+
+    ok = reply.get("ok")
+    if not isinstance(ok, bool):
+        raise ServerReplyError("reply has no 'ok' flag")
+
+    server_key = reply.get("server_key")
+    if not isinstance(server_key, str) or not server_key:
+        raise ServerReplyError(
+            "reply carries no server key - is the registration handler up to date?"
+        )
+    if pinned_pubkey and server_key != pinned_pubkey:
+        raise ServerReplyError(
+            "the reply is signed by a different key than the registration handler this "
+            "approver already trusts - refusing to re-pin it"
+        )
+
+    if reply.get("nonce") != nonce:
+        raise ServerReplyError("nonce does not match the request (a replayed reply?)")
+
+    ts = reply.get("ts")
+    if isinstance(ts, bool) or not isinstance(ts, int):
+        raise ServerReplyError("reply has no timestamp")
+
+    key_id, error = reply.get("key_id", ""), reply.get("error", "")
+    if not isinstance(key_id, str) or not isinstance(error, str):
+        raise ServerReplyError("reply has a non-string 'key_id'/'error'")
+
+    sig = reply.get("sig")
+    signing_bytes = protocol.registration_reply_signing_bytes(
+        v=protocol.PROTOCOL_VERSION, ok=ok, key_id=key_id, nonce=nonce, ts=ts, error=error
+    )
+    if not isinstance(sig, str) or not crypto.verify(
+        server_key, signing_bytes, sig, protocol.SERVER_KEY_TYPE
+    ):
+        raise ServerReplyError("the registration handler's signature does not verify")
+
+    return server_key
+
+
+def pinned_server_key(config_path: Path | str) -> str | None:
+    """The handler public key this approver already trusts, or None if it has none.
+
+    Reads any approver config (they all store it under the same key), and treats an
+    unreadable one as "nothing pinned" — registration is about to overwrite it.
+    """
+    try:
+        cfg = configlib.Config.load(config_path)
+    except configlib.ConfigError:
+        return None
+    server_key = cfg.get("server_key")
+    return server_key if isinstance(server_key, str) and server_key else None
 
 
 def build_signed_reply(
@@ -171,17 +278,27 @@ async def register(
     ``key_type`` (``ed25519``/``p256``) picks the scheme for the freshly generated
     pair and is announced to the handler so it pins the same algorithm.
 
-    Returns the handler's reply dict. Raises ``ValueError`` on a malformed token
-    and ``bus.BusError`` on transport failure (no handler / timeout).
+    The handler's own signature over the reply is verified before anything is
+    believed or written, against the server key already in the config if there is
+    one (§6). The verified key is stored alongside the pair, so every later
+    registration is pinned to the same handler.
+
+    Returns the handler's reply dict. Raises ``ValueError`` on a malformed token,
+    ``bus.BusError`` on transport failure (no handler / timeout) and
+    :class:`ServerReplyError` when the answer is not the handler's.
     """
     key_id = parse_key_id(token)
     keypair = crypto.generate_keypair(key_type)
+    nonce = new_nonce()
     req = build_registration_request(
-        token, keypair.public_b64(), int(time.time()), key_type=key_type
+        token, keypair.public_b64(), int(time.time()), key_type=key_type, nonce=nonce
     )
+    pinned = pinned_server_key(config_path)
 
     async with bus.connect(servers) as b:
         reply = await b.request("registrations", req, timeout=timeout)
+
+    server_key = verify_server_reply(reply, nonce=nonce, pinned_pubkey=pinned)
 
     if reply.get("ok"):
         cfg = configlib.Config(
@@ -192,6 +309,7 @@ async def register(
                 "key_type": key_type,
                 "private_key": keypair.private_b64(),
                 "public_key": keypair.public_b64(),
+                "server_key": server_key,
             },
         )
         cfg.save()
@@ -361,7 +479,7 @@ def main(argv=None) -> int:
                     timeout=args.timeout,
                 )
             )
-        except (ValueError, bus.BusError) as e:
+        except (ValueError, bus.BusError, ServerReplyError) as e:
             print(f"registration failed: {e}", file=sys.stderr)
             return 1
         if reply.get("ok"):

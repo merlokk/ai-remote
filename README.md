@@ -30,7 +30,9 @@ Claude Code ──stdin──▶ hook.py ──approvals.<session>──▶ NATS
   nonce, the verdict and the timestamp. It cannot be replayed onto another
   command, another session, or flipped from deny to allow.
 - Responder keys reach the allowlist through a one-time-token registration flow,
-  never by hand-pasting a public key.
+  never by hand-pasting a public key. That flow is authenticated both ways: the
+  token proves the approver, and the registration handler signs every reply with
+  its own Ed25519 key, which each approver pins on first registration.
 - **Fail-safe:** bus down, timeout, bad signature, unknown key, missed touch →
   Claude Code falls back to its own prompt. There is never a silent allow.
 

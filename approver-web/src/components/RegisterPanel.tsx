@@ -131,6 +131,12 @@ export function RegisterPanel({ status }: { status: ResponderStatus | null }) {
                 </Text>
               ) : null}
 
+              {status?.server_key ? (
+                <Text fontSize="xs" color="fg.subtle" fontFamily="mono" wordBreak="break-all">
+                  handler key {status.server_key}
+                </Text>
+              ) : null}
+
               <HStack>
                 <Button colorPalette="brand" loading={isSubmitting} onClick={onSubmit}>
                   {registered ? "Rotate key" : "Register"}

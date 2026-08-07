@@ -36,6 +36,45 @@ def test_signing_bytes_exact_layout():
     assert sb == b"1\ns\nn\nBash\nih\nallow\n\n42\nok"
 
 
+def test_registration_reply_signing_bytes_exact_layout():
+    sb = protocol.registration_reply_signing_bytes(
+        v=1, ok=True, key_id="approver-1", nonce="bm9uY2U=", ts=42, error=""
+    )
+    assert sb == b"registration-reply\n1\ntrue\napprover-1\nbm9uY2U=\n42\n"
+
+
+def test_registration_reply_signing_bytes_error_is_last():
+    sb = protocol.registration_reply_signing_bytes(
+        v=1, ok=False, key_id="", nonce="bm9uY2U=", ts=42, error="token unknown"
+    )
+    assert sb == b"registration-reply\n1\nfalse\n\nbm9uY2U=\n42\ntoken unknown"
+
+
+def test_registration_reply_signing_bytes_are_domain_separated():
+    """A server signature must never be mistakable for an approval signature (§6/§7).
+
+    Both are made over ``\\n``-joined fields; only the leading context string keeps
+    a reply of one kind from ever being a valid message of the other.
+    """
+    server = protocol.registration_reply_signing_bytes(
+        v=1, ok=True, key_id="k", nonce="n", ts=1, error=""
+    )
+    approval = protocol.signing_bytes(
+        v=1,
+        session_id="k",
+        nonce="n",
+        tool_name="Bash",
+        input_sha256="ih",
+        behavior="allow",
+        updated_input_sha256="",
+        ts=1,
+        reason="",
+    )
+    assert server != approval
+    assert server.startswith(protocol.REGISTRATION_REPLY_CONTEXT.encode())
+    assert not approval.startswith(protocol.REGISTRATION_REPLY_CONTEXT.encode())
+
+
 def test_signing_bytes_reason_is_last_and_preserves_newlines():
     sb = protocol.signing_bytes(
         v=1,

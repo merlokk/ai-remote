@@ -3,6 +3,7 @@
   "key_id": "approver-yk",
   "key_type": "p256",
   "public_key": "<base64 33B compressed P-256 point — the ARKG-derived key registered in the allowlist>",
+  "server_key": "<base64 32B ed25519 public key of the registration handler, pinned at registration>",
   "ctx": "ai-remote-approvals",
   "ikm": "<64 hex chars = the 32 bytes of input keying material the key was derived from>",
   "rp_id": "example.com",

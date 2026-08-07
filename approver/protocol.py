@@ -12,6 +12,17 @@ from typing import Any
 
 PROTOCOL_VERSION = 1
 
+#: Signature scheme of the registration handler's own key (CLAUDE.md §6 "server
+#: key"). Fixed rather than negotiated: an approver pins one key *and* one
+#: algorithm at registration, so nothing a reply carries can select either.
+SERVER_KEY_TYPE = "ed25519"
+
+#: Domain separator leading every registration-reply signature. The server key
+#: signs a different kind of message from the responder keys, and both are
+#: ``\n``-joined field lists — this prefix is what makes one impossible to
+#: replay as the other.
+REGISTRATION_REPLY_CONTEXT = "registration-reply"
+
 
 def canonical_json(obj: Any) -> str:
     """Canonical JSON for hashing: sorted keys, no whitespace (§7)."""
@@ -58,5 +69,37 @@ def signing_bytes(
         updated_input_sha256,
         str(ts),
         reason,
+    ]
+    return "\n".join(parts).encode("utf-8")
+
+
+def registration_reply_signing_bytes(
+    *,
+    v: int,
+    ok: bool,
+    key_id: str,
+    nonce: str,
+    ts: int,
+    error: str,
+) -> bytes:
+    """The bytes the registration handler signs over its reply (§6 "server key").
+
+    Layout (``\\n``-joined, utf-8)::
+
+        "registration-reply", v, ok ("true"/"false"), key_id, nonce, ts, error
+
+    ``nonce`` is echoed from the request, which binds the reply to the exchange
+    that asked for it — an old ``ok:true`` cannot be replayed at a later
+    registration. ``error`` is last for the same reason ``reason`` is last in
+    :func:`signing_bytes`: it is the only free-text field.
+    """
+    parts = [
+        REGISTRATION_REPLY_CONTEXT,
+        str(v),
+        "true" if ok else "false",
+        key_id,
+        nonce,
+        str(ts),
+        error,
     ]
     return "\n".join(parts).encode("utf-8")

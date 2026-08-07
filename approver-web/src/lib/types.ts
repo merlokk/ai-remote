@@ -35,6 +35,12 @@ export interface ResponderStatus {
   registered: boolean;
   /** The registered public key (base64 compressed point), or null. */
   public_key: string | null;
+  /**
+   * The registration handler's public key, pinned when this app registered
+   * (§6). Shown so it can be compared with what the handler printed — that
+   * comparison is the only check on the first, trust-on-first-use registration.
+   */
+  server_key: string | null;
   config_path: string;
   config_from_file: boolean;
   /** Last connection/subscription error, for the status bar. */
