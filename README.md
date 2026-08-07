@@ -5,7 +5,8 @@ question onto a message bus and answers it with a **YubiKey touch**, then
 cryptographically verifies the answer before the tool runs.
 
 > This is the hackathon short form. The full protocol, contracts and design
-> rationale are in [`full-readme.md`](full-readme.md) and [`CLAUDE.md`](CLAUDE.md).
+> rationale are in [`full-readme.md`](full-readme.md) and the per-folder
+> `CLAUDE.md` files ([`CLAUDE.md`](CLAUDE.md) §2 maps them).
 
 ## The problem & the solution
 

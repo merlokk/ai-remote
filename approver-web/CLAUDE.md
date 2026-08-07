@@ -1,7 +1,8 @@
 # approver-web — the responder as a web page
 
-A third responder for the approval flow described in the repository-root
-`CLAUDE.md` §6/§7, alongside `approver/responder.py` (software key) and
+A third responder for the approval flow described in
+[`../approver/CLAUDE.md`](../approver/CLAUDE.md) §6/§7, alongside
+`approver/responder.py` (software key) and
 `approver/responder_yubikey.py` (key on a YubiKey, the primary one). Same
 subjects, same `handler-config.json` allowlist, same signing bytes — the hook,
 the protocol module and the registration handler know nothing about this app and
@@ -161,7 +162,7 @@ both sides compute them with one implementation — which is also why
 the allowlist holds; `public_key_raw` exists solely so the server can verify a
 signature without recovering `y` from a compressed point (a modular square root);
 `server_key` is the registration handler's own public key, pinned at registration
-(root §6) so a later registration can only be answered by the same handler.
+(§6) so a later registration can only be answered by the same handler.
 
 Every field has a default, so the app runs with **no config file at all**;
 `register` then writes it atomically (temp + fsync + rename, the way

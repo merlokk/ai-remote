@@ -18,7 +18,7 @@
 export const PROTOCOL_VERSION = 1;
 
 /**
- * The registration handler's own key scheme (root CLAUDE.md §6 "server key").
+ * The registration handler's own key scheme (`approver/CLAUDE.md` §6 "server key").
  * Fixed, never taken from a reply: this app pins one key *and* one algorithm.
  */
 export const SERVER_KEY_TYPE = "ed25519";
@@ -91,6 +91,21 @@ export interface SigningFields {
  * Layout (`\n`-joined, utf-8): v, session_id, nonce, tool_name, input_sha256,
  * behavior, updated_input_sha256, ts, reason.
  */
+export function signingBytes(f: SigningFields): Uint8Array {
+  const parts = [
+    String(f.v),
+    f.session_id,
+    f.nonce,
+    f.tool_name,
+    f.input_sha256,
+    f.behavior,
+    f.updated_input_sha256,
+    String(f.ts),
+    f.reason,
+  ];
+  return new TextEncoder().encode(parts.join("\n"));
+}
+
 export interface RegistrationReplyFields {
   v: number;
   ok: boolean;
@@ -118,21 +133,6 @@ export function registrationReplySigningBytes(f: RegistrationReplyFields): Uint8
     f.nonce,
     String(f.ts),
     f.error,
-  ];
-  return new TextEncoder().encode(parts.join("\n"));
-}
-
-export function signingBytes(f: SigningFields): Uint8Array {
-  const parts = [
-    String(f.v),
-    f.session_id,
-    f.nonce,
-    f.tool_name,
-    f.input_sha256,
-    f.behavior,
-    f.updated_input_sha256,
-    String(f.ts),
-    f.reason,
   ];
   return new TextEncoder().encode(parts.join("\n"));
 }

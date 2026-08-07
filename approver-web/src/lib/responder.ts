@@ -59,7 +59,7 @@ const NONCE_BYTES = 32;
 /**
  * Check the registration handler's signature over its reply; return its key.
  *
- * A port of `responder.verify_server_reply` (root CLAUDE.md §6), and the reason
+ * A port of `responder.verify_server_reply` (`approver/CLAUDE.md` §6), and the reason
  * this app can believe an answer at all: `registrations` is an open subject, so
  * without this any client on the bus could ack a registration — or, worse, deny
  * one and be believed.

@@ -9,7 +9,8 @@ responder (P-256 or Ed25519 on disk) exists for tests and for developing without
 hardware.
 
 > Full protocol, message contracts and design rationale live in
-> [`CLAUDE.md`](CLAUDE.md) §6–§7. This README is the practical "what it is / how
+> [`approver/CLAUDE.md`](approver/CLAUDE.md) §6–§7 (the folder docs; the map is in
+> [`CLAUDE.md`](CLAUDE.md) §2). This README is the practical "what it is / how
 > to run it / how to check it works" guide.
 
 ## Why
@@ -280,7 +281,7 @@ Code would show is instead answered by the remote operator — with
 
 `lib/yubikey.py` wraps a YubiKey's ARKG support (CTAP2 `previewSign`). It is usable on
 its own, and it is what backs the primary responder further down. Full details in
-[`CLAUDE.md`](CLAUDE.md) §8.
+[`lib/CLAUDE.md`](lib/CLAUDE.md) §8.
 
 ARKG in one line: the key holds one *seed* pair; anyone with the seed **public** key
 can derive unlimited fresh, mutually unlinkable public keys **offline**, while only
@@ -561,6 +562,6 @@ get the read-only tier (enumeration, firmware, `getInfo`) if a key is plugged in
 - **`tool_input` travels on the bus as-is** — for `Bash` that's the full command,
   for `Write` the file contents. Restrict access to NATS and the
   `approvals.<session_id>` subject; do not connect untrusted subscribers
-  (`CLAUDE.md` §7, "Privacy").
+  (`approver/CLAUDE.md` §7, "Privacy").
 - **Run one responder at a time**, or run several under the `approvers` queue
-  group so each request is answered exactly once (`CLAUDE.md` §6).
+  group so each request is answered exactly once (`approver/CLAUDE.md` §6).

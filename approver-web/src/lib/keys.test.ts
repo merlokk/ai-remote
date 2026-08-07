@@ -3,7 +3,7 @@
  *
  * The vectors are Ed25519 signatures produced by `lib/crypto.py` over bytes
  * built by `approver/protocol.py` — the registration handler's own key and its
- * own reply format (root CLAUDE.md §6). If this goes red, `register` will
+ * own reply format (`approver/CLAUDE.md` §6). If this goes red, `register` will
  * reject every answer the real handler sends.
  *
  * Run: npm test
