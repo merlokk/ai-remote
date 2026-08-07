@@ -556,8 +556,11 @@ responder does not see.
 
 ### The `Register` panel
 
-Top of the page, collapsed once **this browser** holds a key, open while it does
-not — because until then it cannot answer anything. It takes the one-time token
+**Below** the requests, collapsed once **this browser** holds a key and open
+while it does not — because until then it cannot answer anything. It sits under
+the cards rather than above them (with the status bar last) so that registering,
+a once-per-browser errand, does not push every request down the page: what the
+page is watched for is what you see without scrolling. It takes the one-time token
 from `py approver/registration_handler.py --get-token approver-web` and runs the
 §6 exchange:
 

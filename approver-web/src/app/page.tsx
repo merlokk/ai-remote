@@ -43,10 +43,10 @@ export default function Page() {
           </Text>
         </Stack>
 
-        <RegisterPanel status={snapshot?.status ?? null} />
-
-        <StatusBar status={snapshot?.status ?? null} streamOpen={streamOpen} />
-
+        {/* The requests come first: they are what the page is watched for, and
+            they are the only part that changes. Registration is a once-per-browser
+            errand and the status bar is reference material, so both sit below
+            rather than pushing every card down the page. */}
         {requests.length === 0 ? (
           <Card.Root variant="subtle">
             <Card.Body paddingY={16}>
@@ -65,6 +65,10 @@ export default function Page() {
             ))}
           </Stack>
         )}
+
+        <RegisterPanel status={snapshot?.status ?? null} />
+
+        <StatusBar status={snapshot?.status ?? null} streamOpen={streamOpen} />
       </Stack>
     </Container>
   );
