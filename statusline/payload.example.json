@@ -1,0 +1,44 @@
+{
+  "session_id": "00000000-0000-0000-0000-000000000000",
+  "transcript_path": "C:\\Users\\User\\.claude\\projects\\E--projects-ai-remote\\session.jsonl",
+  "cwd": "E:\\projects\\ai-remote",
+  "prompt_id": "00000000-0000-0000-0000-000000000000",
+  "effort": { "level": "high" },
+  "session_name": "statusline in rust",
+  "model": { "id": "claude-opus-5[1m]", "display_name": "Opus 5 (1M context)" },
+  "workspace": {
+    "current_dir": "E:\\projects\\ai-remote",
+    "project_dir": "E:\\projects\\ai-remote",
+    "added_dirs": [],
+    "repo": { "host": "github.com", "owner": "merlokk", "name": "ai-remote" }
+  },
+  "version": "2.1.224",
+  "output_style": { "name": "default" },
+  "cost": {
+    "total_cost_usd": 0.6508255,
+    "total_duration_ms": 266468,
+    "total_api_duration_ms": 66799,
+    "total_lines_added": 8,
+    "total_lines_removed": 1
+  },
+  "context_window": {
+    "total_input_tokens": 57740,
+    "total_output_tokens": 2,
+    "context_window_size": 1000000,
+    "current_usage": {
+      "input_tokens": 2,
+      "output_tokens": 2,
+      "cache_creation_input_tokens": 3204,
+      "cache_read_input_tokens": 54534
+    },
+    "used_percentage": 6,
+    "remaining_percentage": 94
+  },
+  "exceeds_200k_tokens": false,
+  "fast_mode": false,
+  "thinking": { "enabled": true },
+  "rate_limits": {
+    "five_hour": { "used_percentage": 44, "resets_at": 1786141200 },
+    "seven_day": { "used_percentage": 24, "resets_at": 1786510800 }
+  }
+}

@@ -1,0 +1,23 @@
+[package]
+name = "statusline"
+version = "0.1.0"
+edition = "2024"
+
+# No dependencies on purpose: the status line runs on every render, so it has to
+# start fast and build without touching the network. JSON is small and fully
+# specified by the payload we get, so `src/json.rs` parses it by hand.
+[dependencies]
+async-nats = "0.50.0"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+tokio = { version = "1.53.1", features = ["rt", "time", "macros"] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
+
+[dev-dependencies]
+futures = "0.3.33"

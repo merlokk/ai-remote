@@ -9,6 +9,15 @@ __pycache__/
 .pytest_cache/
 .pytest_tmp/
 
+# Rust build output (the status line binary, §9)
+statusline/target/
+
+# The status line's runtime config (§9.9). It lives next to the executable, so
+# `statusline/target/` above already covers the default location — this catches
+# a binary copied elsewhere in the tree. It holds no secrets; it is per-machine.
+# (`statusline-config.example.json` in the root carries the defaults and IS committed.)
+statusline-config.json
+
 # IDE
 .idea/
 

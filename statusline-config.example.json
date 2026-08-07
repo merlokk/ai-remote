@@ -1,0 +1,9 @@
+{
+  "v": 1,
+  "publish": true,
+  "url": "nats://127.0.0.1:4222",
+  "subject": "status",
+  "timeout_ms": 500,
+  "retry_after_s": 30,
+  "debug": false
+}
