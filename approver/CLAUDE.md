@@ -27,6 +27,10 @@ that root file. The YubiKey library the §8.7 responder is built on is §8 in
 
 ## The scripts that drive these flows
 
+How to run them — arguments, expected output, exit codes — is in
+[`scripts/README.md`](../scripts/README.md). What follows is why each one is
+built the way it is.
+
 ### `scripts/e2e-registration.cmd`
 
 A command-file e2e of registration (§6): mints a token → brings up the handler with `--once` (it exits itself after the first successful registration) → `responder register` (with retries until ready) → checks `clients[key_id].pubkey` against the responder's `public_key`, and the handler's `server_key.public_key` against the `server_key` the responder pinned. Throwaway configs in `%TEMP%`, does not touch the repository. Requires NATS on localhost and the `py` launcher. Exit 0 = PASS, 1 = FAIL. Run: `scripts\e2e-registration.cmd`.

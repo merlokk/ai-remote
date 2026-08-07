@@ -46,6 +46,9 @@ py tools/yubikey_exec.py verify --in cred.json --ikm <hex> \
 
 ## The scripts that wrap them
 
+How to run them is in [`scripts/README.md`](../scripts/README.md); below is why
+they look like this.
+
 ### `scripts/test-request.cmd`
 
 A launcher for `tools/test_request.py`: one permission request, one printed answer, with the hook's own verdict on it. Every option is forwarded, so `--help` there is authoritative. Deliberately thin — cmd cannot speak NATS, and `python -c "..."` mangles quotes here (the note in `yubikey-arkg.cmd`). It resolves the venv interpreter by path so it works from any console, needs **no elevation** (no FIDO device involved), and adds a one-line hint on failure: exit `1` says check that a responder and NATS are up, exit `3` says a responder answered but its key is not in this `--config`'s allowlist. CRLF and block-free, same reason as the other scripts.

@@ -30,7 +30,7 @@ wherever it lives.
 | `approver-web/` | a third client: the same responder as a web page (Next.js + Chakra UI — the only non-Python part of the repo) | [`approver-web/CLAUDE.md`](approver-web/CLAUDE.md) |
 | `lib/` | shared modules — `bus.py`, `config.py`, `crypto.py`, `yubikey.py`, and the pinned Yubico PEM bundles | [`lib/CLAUDE.md`](lib/CLAUDE.md) — **§8**–**§8.4**, **§8.6** (YubiKey / ARKG) |
 | `tools/` | command-line utilities — `test_request.py` (probe a responder), `yubikey_exec.py` (the ARKG CLI) | [`tools/CLAUDE.md`](tools/CLAUDE.md) — **§8.5** |
-| `scripts/` | Windows command files that drive the flows end to end | with the flow each drives: `e2e-registration` / `e2e-approval` / `yubikey-approval` in `approver/`, `test-request` / `yubikey-arkg` in `tools/` |
+| `scripts/` | Windows command files that drive the flows end to end | [`scripts/README.md`](scripts/README.md) — how to run each one; the rationale sits with the flow each drives (`e2e-registration` / `e2e-approval` / `yubikey-approval` in `approver/`, `test-request` / `yubikey-arkg` in `tools/`) |
 | `nats/` | docker-compose: the NATS server, dashboard and `nats-box` (CLI) | §3 below |
 
 `lib/` and `approver/` have an `__init__.py` so `import lib.bus` / `from approver
