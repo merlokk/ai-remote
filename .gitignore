@@ -18,6 +18,12 @@ statusline/target/
 # (`statusline-config.example.json` in the root carries the defaults and IS committed.)
 statusline-config.json
 
+# Claude Code, the per-machine half. Permissions granted on this machine and the
+# absolute path to the PermissionRequest hook's interpreter — nothing another
+# checkout can use. (`.claude/settings.json` is project-wide and IS committed:
+# it wires up the status line, §9.5.)
+.claude/settings.local.json
+
 # IDE
 .idea/
 
