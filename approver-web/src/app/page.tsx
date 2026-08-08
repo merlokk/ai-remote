@@ -6,6 +6,7 @@ import { RegisterPanel } from "@/components/RegisterPanel";
 import { RequestCard } from "@/components/RequestCard";
 import { SoundToggle } from "@/components/SoundToggle";
 import { StatusBar } from "@/components/StatusBar";
+import { StatuslinePlaque } from "@/components/StatuslinePlaque";
 import { useApprovalStream, useNow } from "@/lib/use-approval-stream";
 import { useRequestAlert } from "@/lib/use-request-alert";
 
@@ -42,6 +43,11 @@ export default function Page() {
             responder.
           </Text>
         </Stack>
+
+        {/* Above the cards because it is context for them: how much of the rate
+            limits is already spent is part of deciding whether to spend more.
+            Five short rows, no controls — see StatuslinePlaque. */}
+        <StatuslinePlaque doc={snapshot?.statusline ?? null} now={now} />
 
         {/* The requests come first: they are what the page is watched for, and
             they are the only part that changes. Registration is a once-per-browser

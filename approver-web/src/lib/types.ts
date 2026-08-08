@@ -5,6 +5,7 @@
  * pulling the NATS client into the browser bundle.
  */
 import type { KeyType, PermissionRequest } from "./schemas";
+import type { StatusDoc } from "./statusline";
 
 /**
  * Where the signing key lives. `browser` is the only signing mode: the private
@@ -28,6 +29,8 @@ export interface ResponderStatus {
   servers: string;
   subject: string;
   queue: string;
+  /** The status line's subject (§9.7) — watched, never answered. */
+  status_subject: string;
   key_id: string;
   key_type: KeyType;
   signing_mode: SigningMode;
@@ -50,6 +53,17 @@ export interface ResponderStatus {
 export interface Snapshot {
   status: ResponderStatus;
   requests: PendingRequest[];
+  /**
+   * The last document seen on the status line's subject (§9.7), or null while
+   * nothing has been published since this process started.
+   *
+   * A *current value*, not a queue: the newest message wins and nothing is kept
+   * behind it. Every Claude Code session on the machine publishes to the same
+   * subject, so with two of them running this is whichever rendered last — which
+   * is why the plaque shows the document's `cwd` and its age rather than implying
+   * it belongs to the request above it.
+   */
+  statusline: StatusDoc | null;
 }
 
 export interface RegisterResult {

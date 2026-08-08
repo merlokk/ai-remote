@@ -115,6 +115,8 @@ src/lib/
   use-approval-stream.ts client: EventSource -> snapshot, plus a ticking clock
   alert-sound.ts         the chirp, synthesised (client) — no asset, no dependency
   use-request-alert.ts   diffs snapshots for NEW nonces; sound + tab-title count
+  statusline.ts          the status line's document off `status` (§9.7): schema, gauge scales, countdown
+  statusline.test.ts     that wire format and the §9.2 scales, pinned
 src/app/
   layout.tsx providers.tsx page.tsx      the single page
   theme.ts               the whole visual system (see "Look and feel")
@@ -123,6 +125,7 @@ src/app/
   api/register/route.ts  POST — one-time token -> a registered key (§6)
 src/components/
   RegisterPanel.tsx StatusBar.tsx RequestCard.tsx DecisionForm.tsx SoundToggle.tsx
+  StatuslinePlaque.tsx   the model and the limits, read-only (see "The model and limits plaque")
 ```
 
 Mirrored from the Python side on purpose: `protocol.ts` ↔ `protocol.py`,
@@ -142,7 +145,7 @@ both sides compute them with one implementation — which is also why
 
 | Route | Shape |
 |-------|-------|
-| `GET /api/stream` | `text/event-stream`. Every frame is a **whole** `{status, requests}` snapshot, so a reconnect needs no resync. `: ping` every 15 s. Opening the stream is what triggers the NATS connect — there is no connect button, because having the page open *is* being a responder. |
+| `GET /api/stream` | `text/event-stream`. Every frame is a **whole** `{status, requests, statusline}` snapshot, so a reconnect needs no resync. `: ping` every 15 s. Opening the stream is what triggers the NATS connect — there is no connect button, because having the page open *is* being a responder. |
 | `POST /api/decision` | `{nonce, behavior, reason, updated_input?, sig}` → `{ok}`. The signature is made in the browser; the server re-derives the signing bytes **from the pending request it holds** and verifies before answering, so a caller cannot post one decision with a signature over another. `409` = gone (expired/answered), no key registered, or the signature does not match. |
 | `POST /api/register` | `{token, public_key, public_key_raw}` → `{ok, key_id}` \| `{ok:false, error}`. Only public material crosses; the private half never leaves the browser. `409` = the handler or the bus said no (bad/spent token, nothing listening), or the answer was not the registration handler's (unsigned, replayed, or signed by a key other than the pinned one) — and **nothing was persisted**. |
 
@@ -153,7 +156,7 @@ both sides compute them with one implementation — which is also why
 ```json
 { "v": 1, "servers": "nats://127.0.0.1:4222", "subject": "approvals.*",
   "queue": "approvers", "key_id": "approver-web", "key_type": "p256",
-  "request_ttl": 120,
+  "request_ttl": 120, "status_subject": "status",
   "public_key": "<b64 33-byte compressed>", "public_key_raw": "<b64 65-byte>",
   "server_key": "<b64 32-byte ed25519 — the registration handler>" }
 ```
@@ -180,6 +183,12 @@ visible.
 
 `request_ttl` should be ≥ the hook's own `timeout` in `handler-config.json`,
 otherwise a card disappears while Claude Code is still waiting.
+
+`status_subject` is the one field here that has nothing to do with approving
+anything — it is the status line's subject (`statusline/CLAUDE.md` §9.7) and must
+match `subject` in that binary's own `statusline-config.json` (§9.9). It exists as
+config for the same reason the subject above does: both are names on a shared bus,
+and neither is worth a rebuild to change.
 
 ## Rules this app inherits (do not soften them)
 
@@ -488,6 +497,85 @@ dispatches a real input event, unlocks it — worth knowing before concluding th
 audio is broken. With sound on, one new request produced exactly two oscillators
 (one two-note chirp) and six seconds of ordinary snapshot churn produced none.
 
+## The model and limits plaque
+
+The page also watches the **status line's** subject — `status`, the document in
+`statusline/CLAUDE.md` §9.7 — and draws it above the requests:
+
+```
+Opus 5 (1M context)  claude-opus-5[1m]                            2s
+5h   ▬▬▬▬▭▭▭▭▭▭   22%  4h22m
+7d   ▬▬▬▬▬▭▭▭▭▭   31%  3d20h
+ctx  ▬▬▬▭▭▭▭▭▭▭   15%
+E:\projects\ai-remote
+```
+
+**Nothing about the approval flow changed for it.** It is a second subscription on
+the connection that was already open, it is never answered, and the request path
+does not read it. Removing `StatuslinePlaque` from `page.tsx` would leave a
+working responder — which is the test for whether this stayed a readout.
+
+- **Why above the cards.** How much of the five-hour window is already gone is
+  *input to the decision on the card below*, not app trivia like the config path.
+  It costs five short rows — a name, three bars and a path — and the register
+  panel stays where it is: the ordering
+  rule ("what the page is watched for is visible without scrolling") is about
+  keeping the requests high, not about keeping the top of the page empty.
+- **Quiet by construction.** Thin bars capped at `14rem` rather than full-width,
+  small type, no control on it. Full-width bars were tried first and made three
+  green lines the loudest thing on the page — which loses to constraint 1 under
+  "Look and feel": the two buttons on a card must stay the heaviest elements.
+- **The traffic light is §9.2's, not a new one.** `GAUGE_SCALES` in
+  `statusline.ts` carries `render.rs`'s two scales — a rate-limit window is green
+  to 50% spent and yellow to 80%, the context window green to 20% and yellow to
+  45% — and a test pins both plus the fact that they cannot drift into each other,
+  mirroring the Rust test that does the same. Yellow maps to Chakra's `orange`,
+  the palette the status bar already uses for warnings: a literal yellow does not
+  survive a white card.
+- **The countdown is recomputed here.** `resets_in_text` arrives already resolved
+  against the publisher's clock at `ts`, which is right for a subscriber that
+  distrusts its own clock and wrong for a page left open for an hour. So the
+  plaque recomputes from `resets_at` against its ticking clock (the same `useNow`
+  the cards use) and keeps the published text only as the fallback for a window
+  that came with no reset time. `countdown()` is a port of `render.rs::countdown`,
+  tested against the same cases, so the two spell `1h59m` and `<1m` alike.
+- **Silence is not freshness.** The line publishes on every render and nothing is
+  persisted (§9.7: a current value, no stream), so an idle session simply stops
+  publishing and there is nothing to catch up on when this app starts. The plaque
+  therefore always shows the document's age, and past `STALE_AFTER_MS` (2 min) adds
+  a `stale` badge instead of dropping the numbers — a stale percentage is still
+  the best available answer, as long as it does not claim to be current.
+- **One subject, every session.** Every Claude Code session on the machine
+  publishes to `status`, so this is whichever rendered last, not the session that
+  sent the request below it. Hence the `cwd` line and the age: without them the
+  plaque would read as a header for the card under it. If that ever needs fixing
+  properly, the document carries `session_id` and so does every request — the
+  join exists, it is just not worth the state today.
+- **Junk is dropped, the last good document stays.** `status` is as open as
+  `approvals.*`: `statusDocSchema` rejects a non-JSON payload, a document missing
+  `ts`/`line` (the two fields §9.7 always sends — on an open subject that is the
+  cheapest way to tell it is ours) or a percentage that is not a number, with one
+  warning line, and the readout keeps what it had. Percentages are clamped 0–100
+  a second time here, because a bar drawn from someone else's `130` overflows its
+  track.
+- **No queue group on this subscription**, unlike `approvals.*`. A decision must
+  be made exactly once; a broadcast of a current value is meant to reach every
+  subscriber, and joining a group would mean sharing it with other watchers.
+
+Every status message calls `notify()`, so each one becomes an SSE frame with the
+whole snapshot. That is a handful of bytes on loopback at status-line cadence, and
+it keeps one rule: the browser never has a partial view.
+
+Verified live against the real publisher — this repo's own Claude Code session,
+whose status line was publishing to `status` throughout — with the app pointed at
+an isolated `approvals-verify.*` via `AI_REMOTE_WEB_CONFIG` so it could not steal
+that session's actual permission requests out of the `approvers` queue group.
+**Do that too when checking this**: the alternative is a page that catches your
+own prompts while you work. All five states were driven through a browser: a full
+document, a synthetic stale one at 95%/70%/60% (red, orange, red — and `stale`
+with a `10m` age), junk on the subject (warned, previous document kept), a
+`{ts, line}`-only document (`limits n/a`), and nothing published at all.
+
 ## Run — `run.cmd`
 
 The front door. It resolves its own directory first, so it works from anywhere:
@@ -534,7 +622,8 @@ documents at length.
 ## Testing
 
 ```powershell
-npm test        # protocol parity vs. the Python vectors — no NATS, no browser
+npm test        # protocol parity vs. the Python vectors, plus the §9.7 status
+                # document and the §9.2 gauge scales — no NATS, no browser
 npm run build   # type-checks everything, including the tests
 ```
 

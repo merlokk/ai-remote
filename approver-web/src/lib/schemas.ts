@@ -51,6 +51,13 @@ export const configSchema = z.object({
    * Code is still waiting.
    */
   request_ttl: z.number().positive().default(120),
+  /**
+   * Where the Rust status line publishes the model and the rate limits
+   * (`statusline/CLAUDE.md` §9.7). Read-only for this app, and unrelated to the
+   * approval flow: nothing here answers or depends on it, it only feeds the
+   * plaque. Must match `subject` in `statusline-config.json` (§9.9).
+   */
+  status_subject: z.string().min(1).default("status"),
 });
 
 export type Config = z.infer<typeof configSchema>;

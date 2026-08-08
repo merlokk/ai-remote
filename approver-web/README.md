@@ -4,6 +4,9 @@ Claude Code permission requests in a browser tab: the page lists what is waiting
 on the bus and answers it with a button, instead of the console prompt in
 `approver/responder.py`.
 
+Above the requests it also shows the model and how much of the 5h / 7d rate limits
+is spent, read off the same bus from the Rust status line in [`../statusline`](../statusline).
+
 The loop is closed: register a key with a one-time token from the page, and every
 allow/deny is signed so `hook.py` accepts it. The key is a **non-extractable
 WebCrypto key held by the browser** — no private key on disk, not even on this

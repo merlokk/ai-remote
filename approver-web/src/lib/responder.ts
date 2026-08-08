@@ -37,6 +37,7 @@ import {
   type RegistrationReply,
   registrationReplySchema,
 } from "./schemas";
+import { type StatusDoc, statusDocSchema } from "./statusline";
 import type { PendingRequest, ResponderStatus, SigningMode, Snapshot } from "./types";
 
 const decoder = new TextDecoder();
@@ -112,6 +113,9 @@ class Responder {
   private listeners = new Set<(snapshot: Snapshot) => void>();
   private nc: NatsConnection | null = null;
   private sub: Subscription | null = null;
+  /** The status line's subject (§9.7) — watched for the plaque, never answered. */
+  private statusSub: Subscription | null = null;
+  private statusDoc: StatusDoc | null = null;
   private starting: Promise<void> | null = null;
   private sweeper: ReturnType<typeof setInterval> | null = null;
   private error: string | null = null;
@@ -138,7 +142,7 @@ class Responder {
   }
 
   private async connectAndSubscribe(): Promise<void> {
-    const { servers, subject, queue } = this.config;
+    const { servers, subject, queue, status_subject } = this.config;
     const nc = await connect({ servers, name: "approver-web" });
     this.nc = nc;
     this.error = null;
@@ -146,11 +150,21 @@ class Responder {
     this.sub = nc.subscribe(subject, { queue });
     void this.consume(this.sub);
 
+    // No queue group, unlike the approvals subscription above: a decision must be
+    // made once, but the status line is a broadcast of a current value and every
+    // subscriber is meant to see every message.
+    this.statusSub = nc.subscribe(status_subject);
+    void this.consumeStatus(this.statusSub);
+
     void nc.closed().then((err) => {
       this.nc = null;
       this.sub = null;
+      this.statusSub = null;
       this.starting = null;
       if (err) this.error = err.message;
+      // The last document is deliberately kept: it is stamped with its own clock
+      // and shown with its age, so it degrades into history rather than vanishing
+      // because the bus blinked.
       this.notify();
     });
 
@@ -166,6 +180,37 @@ class Responder {
       } catch (err) {
         console.warn("[approver-web] dropped a message:", err);
       }
+    }
+  }
+
+  /**
+   * The status line's documents (`statusline/CLAUDE.md` §9.7) — the model, the 5h
+   * and 7d rate limits, the context window.
+   *
+   * Nothing here touches the approval flow: it is a read-only feed for the plaque
+   * on the page, it is never answered, and a subject with no publisher at all just
+   * means the plaque stays empty. Dropped like a malformed request, and for the
+   * same reason (`status` is as open as `approvals.*`): a stray `nats pub status
+   * hello` must not blank a readout that was correct a second ago.
+   */
+  private async consumeStatus(sub: Subscription): Promise<void> {
+    for await (const msg of sub) {
+      let payload: unknown;
+      try {
+        payload = JSON.parse(decoder.decode(msg.data));
+      } catch {
+        console.warn("[approver-web] ignoring a non-JSON message on", msg.subject);
+        continue;
+      }
+
+      const parsed = statusDocSchema.safeParse(payload);
+      if (!parsed.success) {
+        console.warn("[approver-web] ignoring a malformed status document:", parsed.error.message);
+        continue;
+      }
+
+      this.statusDoc = parsed.data;
+      this.notify();
     }
   }
 
@@ -327,6 +372,7 @@ class Responder {
       servers: this.config.servers,
       subject: this.config.subject,
       queue: this.config.queue,
+      status_subject: this.config.status_subject,
       key_id: this.loaded.config.key_id,
       key_type: this.loaded.config.key_type,
       signing_mode: this.signingMode,
@@ -345,6 +391,7 @@ class Responder {
       requests: [...this.entries.values()]
         .map((e) => e.pending)
         .sort((a, b) => a.received_at - b.received_at),
+      statusline: this.statusDoc,
     };
   }
 
