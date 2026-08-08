@@ -504,11 +504,16 @@ The page also watches the **status line's** subject — `status`, the document i
 panel:
 
 ```
-Opus 5 (1M context)  claude-opus-5[1m]                            2s
+Opus 5 (1M context)  (high)  claude-opus-5[1m]                    2s
 5h   ▬▬▬▬▭▭▭▭▭▭  22%  4h22m      7d  ▬▬▬▬▬▭▭▭▭▭  31%  3d20h
 ctx  ▬▬▬▭▭▭▭▭▭▭  15%
 E:\projects\ai-remote
 ```
+
+`(high)` is `effort.level` as a pill next to the name — the same pairing the
+terminal line makes with `· high`, since the effort is what *this* model is
+currently doing. On the wire it is a sibling of `model`, not a field inside it,
+because §9.7 keeps the payload's shape.
 
 **Nothing about the approval flow changed for it.** It is a second subscription on
 the connection that was already open, it is never answered, and the request path

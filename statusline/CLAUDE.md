@@ -19,6 +19,7 @@ binary reads — everything else in the payload is ignored:
 | Field | Used for |
 |-------|----------|
 | `model.display_name` | the name at the head of the line |
+| `effort.level` | the reasoning effort, hung off that name (`· high`) |
 | `rate_limits.five_hour.used_percentage` / `.resets_at` | the `5h` window: bar, percent spent, countdown |
 | `rate_limits.seven_day.used_percentage` / `.resets_at` | the `7d` window, same shape |
 | `context_window.used_percentage` | the trailing `ctx` gauge |
@@ -37,8 +38,13 @@ absent on its own. Missing both prints `limits n/a`.
 ### 9.2 The layout
 
 ```
-● Opus 5 (1M context) │ 5h ████░░░░ 44% · 2h14m │ 7d ██░░░░░░ 24% · 4d8h │ ctx ░░░░░░░░ 6%
+● Opus 5 (1M context) · high │ 5h ████░░░░ 44% · 2h14m │ 7d ██░░░░░░ 24% · 4d8h │ ctx ░░░░░░░░ 6%
 ```
+
+`· high` is `effort.level`, and it is deliberately **not** a `│`-separated field
+of its own: it is what that model is currently doing, so it hangs off the name and
+is muted, leaving the name as the thing the eye lands on. A payload without it —
+an older Claude Code — prints the name alone, with no dot and no trailing gap.
 
 The leading dot is the bus: **green — connected, red — not** (§9.8). It is not
 a `│`-separated segment on purpose — it reads as a lamp on the line rather than
@@ -237,10 +243,11 @@ that was not listening missed it, by design.
 ```json
 {
   "ts": 1786136782,
-  "line": "Opus 5 (1M context) │ 5h █████░░░ 65% · 1h13m │ 7d ██░░░░░░ 27% · 4d7h │ ctx █░░░░░░░ 12%",
+  "line": "Opus 5 (1M context) · high │ 5h █████░░░ 65% · 1h13m │ 7d ██░░░░░░ 27% · 4d7h │ ctx █░░░░░░░ 12%",
   "session_id": "7b463c0f-…",
   "cwd": "E:\\projects\\ai-remote",
   "model": {"id": "claude-opus-5[1m]", "display_name": "Opus 5 (1M context)"},
+  "effort": {"level": "high"},
   "rate_limits": {
     "five_hour": {"used_percentage": 65.0, "resets_at": 1786141200,
                   "resets_in": 4418, "resets_in_text": "1h13m"},
@@ -253,6 +260,9 @@ that was not listening missed it, by design.
 
 - It is a **projection** of the payload, not a copy — the fields §9.1 reads,
   and nothing else that arrives on stdin.
+- **Payload shape, not line shape.** `effort` is a sibling of `model` here because
+  that is where it sits on stdin; pairing the two is a decision the *line* makes
+  (§9.2), and a subscriber is free to make a different one.
 - `line` travels with the numbers, colours stripped, so a subscriber can render
   nothing at all and still show something correct.
 - `ts` is the clock the countdowns were resolved against, and `resets_in` /

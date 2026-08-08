@@ -51,7 +51,14 @@ const CONTEXT: Thresholds = Thresholds { green: 20.0, yellow: 45.0 };
 /// nothing for one to mean.
 pub fn render(data: &Json, now: u64, link: Link) -> String {
     let model = data.str_at("model.display_name").unwrap_or("?");
-    let mut segments = vec![format!("{BOLD}{TEXT}{model}{RESET}")];
+    let mut head = format!("{BOLD}{TEXT}{model}{RESET}");
+    // The reasoning effort is not a field of its own — it is what *that* model is
+    // currently doing, so it hangs off the name instead of becoming a fourth
+    // `│`-separated segment. Muted, so the name is still what the eye lands on.
+    if let Some(effort) = data.str_at("effort.level") {
+        head.push_str(&format!("{MUTED} · {effort}{RESET}"));
+    }
+    let mut segments = vec![head];
 
     let windows: Vec<String> = [("5h", "rate_limits.five_hour"), ("7d", "rate_limits.seven_day")]
         .into_iter()
@@ -148,6 +155,7 @@ mod tests {
     /// The real payload Claude Code sends, trimmed to the fields we read.
     const PAYLOAD: &str = r#"{
         "model": {"id": "claude-opus-5[1m]", "display_name": "Opus 5 (1M context)"},
+        "effort": {"level": "high"},
         "context_window": {"used_percentage": 6, "remaining_percentage": 94},
         "rate_limits": {
             "five_hour": {"used_percentage": 44, "resets_at": 1786141200},
@@ -168,8 +176,34 @@ mod tests {
     fn shows_the_model_and_both_windows_with_countdowns() {
         assert_eq!(
             plain(PAYLOAD, NOW),
-            "Opus 5 (1M context) │ 5h ████░░░░ 44% · 2h14m │ 7d ██░░░░░░ 24% · 4d8h │ ctx ░░░░░░░░ 6%"
+            "Opus 5 (1M context) · high │ 5h ████░░░░ 44% · 2h14m │ 7d ██░░░░░░ 24% · 4d8h │ ctx ░░░░░░░░ 6%"
         );
+    }
+
+    #[test]
+    fn the_effort_hangs_off_the_model_name() {
+        // It is what that model is currently doing, so it rides with the name
+        // rather than becoming a fourth `│`-separated field.
+        let with = r#"{"model": {"display_name": "Opus 5"}, "effort": {"level": "xhigh"}}"#;
+        assert_eq!(plain(with, NOW), "Opus 5 · xhigh │ limits n/a");
+
+        // Absent — an older Claude Code, or a payload that simply never had it:
+        // no dot and no trailing gap, the same rule as every other field (§9.3).
+        let without = r#"{"model": {"display_name": "Opus 5"}}"#;
+        assert_eq!(plain(without, NOW), "Opus 5 │ limits n/a");
+
+        // No model name but an effort: the placeholder still carries it.
+        assert_eq!(plain(r#"{"effort": {"level": "low"}}"#, NOW), "? · low │ limits n/a");
+
+        // A level that is not a string is not a level.
+        assert_eq!(plain(r#"{"effort": {"level": 3}}"#, NOW), "? │ limits n/a");
+    }
+
+    #[test]
+    fn the_effort_is_muted_so_the_model_name_still_reads_first() {
+        let line = render(&parse(PAYLOAD).unwrap(), NOW, Link::Off);
+        assert!(line.contains(&format!("{BOLD}{TEXT}Opus 5 (1M context){RESET}")));
+        assert!(line.contains(&format!("{MUTED} · high{RESET}")));
     }
 
     #[test]

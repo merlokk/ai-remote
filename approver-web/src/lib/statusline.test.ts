@@ -29,6 +29,7 @@ const PUBLISHED = `{
   "session_id": "7b463c0f",
   "cwd": "E:\\\\projects\\\\ai-remote",
   "model": {"id": "claude-opus-5[1m]", "display_name": "Opus 5 (1M context)"},
+  "effort": {"level": "high"},
   "rate_limits": {
     "five_hour": {"used_percentage": 65.0, "resets_at": 1786141200,
                   "resets_in": 4418, "resets_in_text": "1h13m"},
@@ -48,6 +49,9 @@ test("reads the document statusline/CLAUDE.md §9.7 documents", () => {
   assert.equal(doc.ts, 1786136782);
   assert.equal(doc.model?.display_name, "Opus 5 (1M context)");
   assert.equal(doc.model?.id, "claude-opus-5[1m]");
+  // A sibling of `model` on the wire, shown next to it — the same split the Rust
+  // side makes: the payload's shape is the contract, the pairing is presentation.
+  assert.equal(doc.effort?.level, "high");
   assert.equal(doc.cwd, "E:\\projects\\ai-remote");
   assert.equal(doc.session_id, "7b463c0f");
   assert.equal(doc.context_window?.used_percentage, 12);
@@ -67,6 +71,20 @@ test("a session with no rate limits still parses", () => {
   assert.equal(parsed.data.rate_limits, undefined);
   assert.equal(parsed.data.context_window, undefined);
   assert.equal(parsed.data.model, undefined);
+  assert.equal(parsed.data.effort, undefined);
+});
+
+test("an effort without a string level is not this publisher's document", () => {
+  // Absent is fine — an older status line simply has no `effort`. Present but
+  // malformed is not: our publisher omits the field rather than emitting a broken
+  // one, so `{"level": 3}` came from somewhere else, exactly like a `model` with a
+  // numeric name. Strict here for the same reason `ts`/`line` are required.
+  const effort = (value: string) => parse(`{"ts": 1, "line": "x", "effort": ${value}}`);
+  const good = effort(`{"level": "xhigh"}`);
+  assert.ok(good.success);
+  assert.equal(good.data.effort?.level, "xhigh");
+  assert.equal(effort(`{}`).success, false);
+  assert.equal(effort(`{"level": 3}`).success, false);
 });
 
 test("one window arriving alone leaves the other out", () => {

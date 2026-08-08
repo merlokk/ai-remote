@@ -130,6 +130,13 @@ export function StatuslinePlaque({ doc, now }: { doc: StatusDoc | null; now: num
           <HStack justify="space-between" wrap="wrap" gap={3}>
             <HStack gap={3} wrap="wrap">
               <Text fontWeight="semibold">{doc.model?.display_name ?? "unknown model"}</Text>
+              {/* Effort rides with the name, as it does on the terminal line: it is
+                  what this model is currently doing, not a field of its own. */}
+              {doc.effort ? (
+                <Badge variant="subtle" colorPalette="gray">
+                  {doc.effort.level}
+                </Badge>
+              ) : null}
               {doc.model?.id ? (
                 <Text fontSize="xs" fontFamily="mono" color="fg.subtle">
                   {doc.model.id}

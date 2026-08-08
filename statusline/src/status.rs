@@ -29,6 +29,13 @@ pub struct Status {
     pub cwd: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<Model>,
+    /// The reasoning effort the session is running at. Kept in the payload's own
+    /// shape rather than folded into `model` — this document is a projection of
+    /// the payload, and there `effort` is a sibling of `model`, not part of it.
+    /// The line puts them together anyway (§9.2), because that is a presentation
+    /// decision and this is the wire.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<Effort>,
     /// Absent exactly when the line prints `limits n/a`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rate_limits: Option<RateLimits>,
@@ -42,6 +49,14 @@ pub struct Model {
     pub id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
+}
+
+/// `low` … `max`, as the payload spells it — never interpreted here, because the
+/// set of levels is Claude Code's to grow and a name we do not know is still a
+/// name worth showing.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Effort {
+    pub level: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -98,6 +113,7 @@ impl Status {
             session_id: data.str_at("session_id").map(str::to_string),
             cwd: data.str_at("cwd").map(str::to_string),
             model: (model != Model::default()).then_some(model),
+            effort: data.str_at("effort.level").map(|level| Effort { level: level.to_string() }),
             rate_limits: (limits != RateLimits::default()).then_some(limits),
             context_window: data
                 .num_at("context_window.used_percentage")
@@ -144,6 +160,7 @@ mod tests {
         "session_id": "0000-1111",
         "cwd": "E:\\projects\\ai-remote",
         "model": {"id": "claude-opus-5[1m]", "display_name": "Opus 5 (1M context)"},
+        "effort": {"level": "high"},
         "context_window": {"used_percentage": 6, "remaining_percentage": 94},
         "rate_limits": {
             "five_hour": {"used_percentage": 44, "resets_at": 1786141200},
@@ -166,7 +183,7 @@ mod tests {
         assert_eq!(status.ts, NOW);
         assert_eq!(
             status.line,
-            "● Opus 5 (1M context) │ 5h ████░░░░ 44% · 2h14m │ 7d ██░░░░░░ 24% · 4d8h │ ctx ░░░░░░░░ 6%",
+            "● Opus 5 (1M context) · high │ 5h ████░░░░ 44% · 2h14m │ 7d ██░░░░░░ 24% · 4d8h │ ctx ░░░░░░░░ 6%",
             "the line travels with the numbers, and without escape codes"
         );
         assert_eq!(status.session_id.as_deref(), Some("0000-1111"));
@@ -175,6 +192,10 @@ mod tests {
         let model = status.model.unwrap();
         assert_eq!(model.id.as_deref(), Some("claude-opus-5[1m]"));
         assert_eq!(model.display_name.as_deref(), Some("Opus 5 (1M context)"));
+
+        // Structured as well as inside `line`, so a subscriber shows it beside the
+        // model name without parsing a terminal line back apart.
+        assert_eq!(status.effort.unwrap().level, "high");
 
         let five = status.rate_limits.unwrap().five_hour.unwrap();
         assert_eq!(five.used_percentage, 44.0);
@@ -193,6 +214,7 @@ mod tests {
         assert_eq!(back, status, "the wire format round-trips");
 
         let raw: Json = parse(&text).unwrap();
+        assert_eq!(raw.str_at("effort.level"), Some("high"));
         assert_eq!(raw.num_at("rate_limits.seven_day.used_percentage"), Some(24.0));
         assert_eq!(raw.str_at("rate_limits.seven_day.resets_in_text"), Some("4d8h"));
         assert_eq!(raw.str_at("model.display_name"), Some("Opus 5 (1M context)"));
@@ -206,10 +228,12 @@ mod tests {
         let status = status(r#"{"model": {"display_name": "Opus 5"}}"#, NOW);
         assert_eq!(status.rate_limits, None);
         assert_eq!(status.context_window, None);
+        assert_eq!(status.effort, None);
         assert_eq!(status.line, "● Opus 5 │ limits n/a");
 
         let text = serde_json::to_string(&status).unwrap();
         assert!(!text.contains("rate_limits"), "{text}");
+        assert!(!text.contains("effort"), "{text}");
         assert!(!text.contains("null"), "an absent field is omitted, never null: {text}");
         assert!(!text.contains("session_id"));
     }

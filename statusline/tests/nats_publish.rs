@@ -24,6 +24,7 @@ use statusline::status::Status;
 const PAYLOAD: &str = r#"{
     "session_id": "integration-test",
     "model": {"id": "claude-opus-5[1m]", "display_name": "Opus 5 (1M context)"},
+    "effort": {"level": "high"},
     "context_window": {"used_percentage": 6},
     "rate_limits": {
         "five_hour": {"used_percentage": 44, "resets_at": 1786141200},
@@ -91,13 +92,14 @@ async fn a_subscriber_on_status_receives_the_rendered_values() {
 
     let raw = json::parse(&text).expect("valid JSON");
     assert_eq!(raw.str_at("model.display_name"), Some("Opus 5 (1M context)"));
+    assert_eq!(raw.str_at("effort.level"), Some("high"));
     assert_eq!(raw.num_at("rate_limits.five_hour.used_percentage"), Some(44.0));
     assert_eq!(raw.str_at("rate_limits.five_hour.resets_in_text"), Some("2h14m"));
     assert_eq!(raw.num_at("context_window.used_percentage"), Some(6.0));
     assert_eq!(
         raw.str_at("line"),
         Some(
-            "● Opus 5 (1M context) │ 5h ████░░░░ 44% · 2h14m │ 7d ██░░░░░░ 24% · 4d8h │ ctx ░░░░░░░░ 6%"
+            "● Opus 5 (1M context) · high │ 5h ████░░░░ 44% · 2h14m │ 7d ██░░░░░░ 24% · 4d8h │ ctx ░░░░░░░░ 6%"
         )
     );
 }

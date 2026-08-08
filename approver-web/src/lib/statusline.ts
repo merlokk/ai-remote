@@ -54,6 +54,14 @@ export const statusDocSchema = z.object({
   model: z
     .object({ id: z.string().optional(), display_name: z.string().optional() })
     .optional(),
+  /**
+   * The reasoning effort the session runs at (`low` … `max`), a sibling of `model`
+   * on the wire because that is its shape in the payload — the line pairs the two
+   * for display (§9.2) and so does the plaque. Never matched against a known set:
+   * the levels are Claude Code's to grow, and a name we do not recognise is still
+   * worth showing.
+   */
+  effort: z.object({ level: z.string() }).optional(),
   rate_limits: z
     .object({ five_hour: windowSchema.optional(), seven_day: windowSchema.optional() })
     .optional(),
