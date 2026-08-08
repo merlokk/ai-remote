@@ -2,7 +2,7 @@
 
 The applied goal of the project is to move Claude Code's permission confirmation outside the terminal. Instead of the interactive permission prompt, the `PermissionRequest` hook sends a request into NATS (request-reply), an external human responder signs the decision with an Ed25519 key, and the hook verifies the signature and hands Claude Code an `allow`/`deny` verdict. Trusted responder keys are provisioned through a separate registration process using one-time tokens. The full protocol, message contracts, and fail-safe requirements live in [`approver/CLAUDE.md`](approver/CLAUDE.md) (§6–§7).
 
-A local sandbox for experimenting with [NATS](https://nats.io/) on Docker Desktop under Windows. The infrastructure comes up with a single `docker compose` (section 3): the NATS server itself with JetStream enabled, a web dashboard to observe the bus, and a `nats-box` container with the `nats` CLI for manual checks of publishes, streams, and subscriptions.
+It runs on a local [NATS](https://nats.io/) sandbox on Docker Desktop under Windows: the whole infrastructure comes up with a single `docker compose` — see [`nats/CLAUDE.md`](nats/CLAUDE.md) (§3–§4).
 
 ## 1. Repository rules
 
@@ -33,37 +33,26 @@ wherever it lives.
 | `tools/` | command-line utilities — `test_request.py` (probe a responder), `yubikey_exec.py` (the ARKG CLI) | [`tools/CLAUDE.md`](tools/CLAUDE.md) — **§8.5** |
 | `scripts/` | Windows command files that drive the flows end to end | [`scripts/README.md`](scripts/README.md) — how to run each one; the rationale sits with the flow each drives (`e2e-registration` / `e2e-approval` / `yubikey-approval` in `approver/`, `test-request` / `yubikey-arkg` in `tools/`) |
 | `statusline/` | the Claude Code status line in Rust — the model plus how much of the 5h / 7d rate limits is spent, on screen and published to NATS | [`statusline/CLAUDE.md`](statusline/CLAUDE.md) — **§9** the line, **§9.7** the `status` subject, **§9.8** the connection dot |
-| `nats/` | docker-compose: the NATS server, dashboard and `nats-box` (CLI) | §3 below |
+| `nats/` | docker-compose: the NATS server, dashboard and `nats-box` (CLI) | [`nats/CLAUDE.md`](nats/CLAUDE.md) — **§3** the compose file, **§4** NATS concepts the rest of the repo relies on |
+| `tests/` | the pytest suite (`test_*.py`) and the `conftest.py` markers that keep it green with no Docker and no hardware | [`tests/CLAUDE.md`](tests/CLAUDE.md) |
+| `screens/` | the screenshots `README.md` walks through — no docs of their own | — |
 
-`lib/` and `approver/` have an `__init__.py` so `import lib.bus` / `from approver
-import protocol` resolve; the scripts additionally prepend the repo root to
-`sys.path` so they also work when run directly by path.
+`lib/`, `approver/` and `tools/` have an `__init__.py` so `import lib.bus` /
+`from approver import protocol` resolve; the scripts additionally prepend the
+repo root to `sys.path` so they also work when run directly by path.
 
 Project-level files:
 
-- `tests/` — pytest tests (`test_*.py`), see §1. `conftest.py`: the `requires_nats` marker (skips integration tests when NATS is unreachable) and `run_async()` (drives async bodies via `asyncio.run` — we do not add `pytest-asyncio`). `test_yubikey.py` holds the YubiKey tests that need nothing external; `test_yubikey_fido2.py` guards the rest with `pytest.importorskip("fido2")` and fakes the hardware (synthetic ARKG seed key + throwaway attestation CA), so no YubiKey is required to run the suite. `test_responder_yubikey.py` covers §8.7 the same way — it imports `make_result` / `Chain` from `test_yubikey_fido2.py` rather than duplicating them, and stands in for the device with a P-256 pair whose private half it holds (see §8.4).
+- `README.md` — the short form: the problem, the solution, and the one command that runs the whole loop. `full-readme.md` — the long form: setup, the smoke tests, the command reference. Both are for a reader arriving at the repository; the `CLAUDE.md` files are for working inside it, and are the ones to keep authoritative.
 - `pyproject.toml` — project metadata and dependencies (runtime + dev group); the source of truth for dependencies. In `[tool.pytest.ini_options]`: `pythonpath=["."]` (importing `lib.*` in a non-package project), `testpaths=["tests"]`, `--basetemp=.pytest_tmp` (the default temp root is unavailable in this sandbox).
 - `uv.lock` — locked versions (uv), committed to the repository.
 - `statusline-config.example.json` — the defaults for the status line's runtime config (§9.9). The live copy lives next to the built binary, not here; this is the committed record of the format, and a test asserts it matches the defaults.
-- `.gitignore` — `__pycache__/` + `*.py[cod]`, `.venv/`, `.pytest_cache/`, `.pytest_tmp/`, `.idea/`, the secret-bearing runtime configs `approver/responder-config.json` / `approver/handler-config.json` / `approver/responder-yubikey-config.json` (their `*.example.json` siblings carry no secrets and **are** committed), and saved `yubikey-exec` credentials (`/cred.json`, `*-cred.json` — the filenames the §8.5 examples use).
+- `.claude/settings.json` — committed, project-wide: it wires the status line to the built binary (§9.5). `.claude/settings.local.json` is the per-machine half — granted permissions and the `PermissionRequest` hook with this machine's absolute interpreter path (§7) — and is git-ignored.
+- `.gitignore` — `__pycache__/` + `*.py[cod]`, `.venv/`, `.pytest_cache/`, `.pytest_tmp/`, `.idea/`, `statusline/target/` + `statusline-config.json` (§9.9), `.claude/settings.local.json`, the secret-bearing runtime configs `approver/responder-config.json` / `approver/handler-config.json` / `approver/responder-yubikey-config.json` (their `*.example.json` siblings carry no secrets and **are** committed), and saved `yubikey-exec` credentials (`/cred.json`, `*-cred.json` — the filenames the §8.5 examples use). `approver-web/` keeps its own `.gitignore` for the Node half (`node_modules/`, `.next/`, its `config.json`, and `.claude/skills/` — restored from the committed `skills-lock.json`).
 
-## 3. Infrastructure (`nats/docker-compose.yml`)
-
-Bring up: `cd nats && docker compose up -d`
-
-| Service          | Container        | Ports (host→container)          | Purpose                                                                   |
-|------------------|------------------|---------------------------------|---------------------------------------------------------------------------|
-| `nats`           | `nats-server`    | 4222→4222, 8222→8222, 6222→6222 | client; HTTP monitoring (8222 — `/varz`, `/jsz`, `/connz`); clustering    |
-| `nats-dashboard` | `nats-dashboard` | 8080→**80**                     | Web UI (http://localhost:8080/)                                           |
-| `nats-box`       | `nats-box`       | —                               | `nats` CLI (`docker exec -it nats-box sh`)                                |
-
-JetStream data lives on the named volume `nats_data` (mounted at `/data`, server started with `--store_dir=/data`), so streams survive `docker compose down`; `docker compose down -v` wipes them.
-
-
-## 4. NATS: key concepts
-- `-js` only **enables** JetStream, it does not turn on persistence globally.
-- Persistence is targeted: via a **stream** that captures the given subjects (`nats stream add ORDERS --subjects "orders.*"`). Subjects without a stream behave like Core NATS (fire-and-forget).
-- `nats pub` prints "Published" = confirmation of sending, NOT of delivery/storage.
+> §3 (the compose file) and §4 (NATS concepts) moved to
+> [`nats/CLAUDE.md`](nats/CLAUDE.md), keeping their numbers — `tests/conftest.py`
+> and `statusline/src/nats.rs` cite them.
 
 ## 5. Python (host)
 - Run via the **`py`** launcher (Python 3.14.6): `py script.py`, `py -m pytest`, `py -c "..."`.

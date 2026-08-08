@@ -4,7 +4,9 @@ out/
 next-env.d.ts
 *.tsbuildinfo
 
-# Runtime config: harmless today, but phase 2 puts key material next to it.
+# Runtime config. Public material only — key custody ended up in the browser, so
+# there is no private key here (CLAUDE.md, "Key custody"). Still per-machine
+# state, not a repository fact: config.example.json is the committed reference.
 config.json
 
 # Agent skills: third-party markdown, restored from skills-lock.json (which IS

@@ -22,6 +22,7 @@ binary reads — everything else in the payload is ignored:
 | `rate_limits.five_hour.used_percentage` / `.resets_at` | the `5h` window: bar, percent spent, countdown |
 | `rate_limits.seven_day.used_percentage` / `.resets_at` | the `7d` window, same shape |
 | `context_window.used_percentage` | the trailing `ctx N%` |
+| `model.id`, `session_id`, `cwd` | nothing on the line — they go only into the published document (§9.7) |
 
 `used_percentage` is 0–100 and counts what is **spent**; the line prints it as
 it comes, so every number on the row means the same thing — a bar that grows
@@ -67,9 +68,9 @@ underflowing.
 
 The bus obeys the same rule and then some: everything in §9.7–§9.8 happens
 *after* the line is printed, returns a `Result` that `main` discards, and can be
-switched off entirely with one environment variable. An unreachable server, an
-unwritable temp directory or a runtime that will not start all cost at most a
-red dot.
+switched off entirely with `"publish": false` (§9.9). A malformed config, an
+unreachable server, an unwritable temp directory or a runtime that will not start
+all cost at most a red dot.
 
 ### 9.4 Layout of the crate
 
@@ -77,15 +78,17 @@ A library plus a binary. `src/main.rs` is the Claude Code side and does nothing
 `src/lib.rs` does not expose, so anything else in the repo that wants these
 numbers links the library instead of parsing a terminal line back out of a pipe.
 
-- `src/main.rs` — the binary: stdin → parse → `render` → stdout → publish (§9.7).
-- `src/lib.rs` — the library root; the four modules below.
+- `src/main.rs` — the binary: config → stdin → parse → `render` → stdout → publish (§9.7).
+- `src/lib.rs` — the library root; the six modules below.
 - `src/json.rs` — the payload, read with `serde_json`. `Value` plus a `Lookup`
   trait adding `path("a.b.c")` / `str_at` / `num_at`: dotted paths because that
   is how §9.1 and the Claude Code reference name the fields, where `pointer()`
   would want `/a/b`. Object keys only — the payload holds no arrays we read.
-- `src/render.rs` — pure formatting. `render(&Json, now_epoch_secs) -> String`
-  takes the clock as an argument, so the countdowns are testable. `strip_ansi`
-  is the colourless version, for the bus and for the tests.
+- `src/render.rs` — pure formatting.
+  `render(&Json, now: u64, link: Link) -> String` takes both the clock and the
+  previous render's bus verdict as arguments, so the countdowns and the dot are
+  testable without a clock or a server. `strip_ansi` is the colourless version,
+  for the bus and for the tests.
 - `src/status.rs` — the published document as `serde` structs (§9.7).
 - `src/nats.rs` — the NATS client wrapper (§9.7).
 - `src/link.rs` — the cached reachability verdict behind the dot (§9.8).
@@ -175,9 +178,9 @@ The lookup tests cover missing steps, type mismatches and malformed input; the
 render tests pin the exact line for the real payload, and cover each degradation
 above — no `rate_limits`, one window only, no `resets_at`, a reset in the past,
 out-of-range percentages, and an empty payload. `src/status.rs` asserts the wire
-format field by field and round-trips it; `src/nats.rs` covers the environment
-parsing and the two failure paths that must not hang — publishing disabled, and
-a server that is not there; `src/link.rs` covers the backoff arithmetic and
+format field by field and round-trips it; `src/nats.rs` covers `Settings` and the
+two failure paths that must not hang — publishing disabled, and a server that is
+not there; `src/link.rs` covers the backoff arithmetic and
 every way the cache can be untrustworthy; `src/config.rs` covers a partial file,
 each way a file can be broken, and checks the committed example against the
 defaults.
@@ -253,9 +256,9 @@ that is down, slow, or simply not started must cost the user nothing:
   timeout, builds a current-thread runtime, uses it, drops it.
 - While the bus is known to be down it is not contacted at all — §9.8 is the
   part that actually makes an absent NATS free.
-- Failures are a `Result` that `main` throws away. Set
-  `AI_REMOTE_STATUS_DEBUG=1` to see them on stderr — off by default, because a
-  server that is not running is the normal case here, not an incident.
+- Failures are a `Result` that `main` throws away. Set `"debug": true` in
+  `statusline-config.json` (§9.9) to see them on stderr — off by default, because
+  a server that is not running is the normal case here, not an incident.
 - The flush is not optional: `nats pub` reporting success means "sent", not
   "delivered" (§4), and a one-shot process exits before an unflushed buffer
   drains — the same reason `registration_handler.py --once` flushes (§6).
@@ -263,8 +266,10 @@ that is down, slow, or simply not started must cost the user nothing:
 All of it is configurable — see §9.9.
 
 `src/nats.rs` is the access library, the Rust counterpart of `lib/bus.py`:
-`Bus::connect` / `publish_json` / `flush` / `client()` for the async side,
-`Settings::from_env` and `publish_blocking` for callers with no runtime.
+`Bus::connect` / `publish_json` / `flush` / `client()` for the async side, and
+`publish_blocking(&Settings, &value)` for callers with no runtime. `Settings`
+(url / subject / timeout / enabled) is the runtime shape; the file it comes from
+is `config::Config`, which builds one with `Config::settings()` (§9.9).
 Publishing only — nothing in the status line subscribes.
 
 ### 9.8 The dot, and why a dead NATS is free
@@ -281,9 +286,10 @@ alternative is a status line that blocks.
 **Not paying for a server that is not there.** Refused on localhost is instant,
 but a host that silently drops packets — a laptop off the VPN, a firewall —
 costs the full timeout on *every* render. So a failure is remembered and not
-retried for **30 s** (`RETRY_AFTER`). In between, publishing is skipped before
-any socket is opened and the render costs one small file read. Measured against
-an unroutable address:
+retried for **30 s** (`link::DEFAULT_RETRY_AFTER`, overridable with
+`retry_after_s` — §9.9). In between, publishing is skipped before any socket is
+opened and the render costs one small file read. Measured against an unroutable
+address:
 
 | Render | Cost |
 |--------|------|

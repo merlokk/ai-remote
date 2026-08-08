@@ -3,9 +3,12 @@ name = "statusline"
 version = "0.1.0"
 edition = "2024"
 
-# No dependencies on purpose: the status line runs on every render, so it has to
-# start fast and build without touching the network. JSON is small and fully
-# specified by the payload we get, so `src/json.rs` parses it by hand.
+# This crate started with none, on the theory that a binary running on every
+# render should carry no supply chain. Publishing to NATS ended that (CLAUDE.md
+# §9.4): `async-nats` is the official client, and reimplementing the protocol to
+# avoid it would be far worse than depending on it. `serde`/`serde_json` come in
+# with it anyway, which is why `src/json.rs` no longer parses the payload by hand.
+# The floor stays: nothing here is added for convenience. Root CLAUDE.md §1.
 [dependencies]
 async-nats = "0.50.0"
 serde = { version = "1.0.229", features = ["derive"] }

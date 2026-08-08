@@ -101,7 +101,7 @@ async fn a_subscriber_on_status_receives_the_rendered_values() {
 }
 
 #[tokio::test]
-async fn publishing_is_off_when_the_environment_says_so() {
+async fn publishing_is_off_when_the_config_says_so() {
     let Some(bus) = bus_or_skip("the disabled-publish check").await else { return };
 
     let subject = format!("{TEST_SUBJECT}.disabled");

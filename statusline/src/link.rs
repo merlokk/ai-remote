@@ -51,8 +51,9 @@ pub struct Cache {
     pub connected: bool,
     /// When that was decided, Unix epoch seconds.
     pub checked_at: u64,
-    /// Which server it was decided about. A different `AI_REMOTE_NATS_URL` —
-    /// another project, another machine — must not inherit this verdict.
+    /// Which server it was decided about. A different `url` in
+    /// `statusline-config.json` (§9.9) — another project, another machine —
+    /// must not inherit this verdict.
     pub url: String,
 }
 
