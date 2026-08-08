@@ -350,6 +350,22 @@ Conventions worth knowing before editing:
   extensions (Grammarly and friends) add attributes to `<body>` before React
   hydrates, and each one is reported as a mismatch nobody can fix from here. It
   suppresses exactly that element's attributes, not anything inside it.
+- **A hydration warning that is not a bug: emotion class names after a long dev
+  session.** A `next dev` left running for hours can serve HTML whose emotion class
+  differs from the one its freshly compiled client computes. React then reports
+  "some attributes of the server rendered HTML didn't match", pointing at whichever
+  `<Text>` renders first — which looks like a real mismatch in whatever component
+  you touched last. Measured here: server `css-ap60qa` = `{font-size; color}`,
+  client `css-1rb706t` = `{color; font-size}` — the **same two declarations in a
+  different order**, nothing rendering differently, and 38 of the page's 39 rules
+  byte-identical. Chakra's own `css()` normalises to `color` first in both its CJS
+  and ESM builds, and a **freshly started** dev server, `next start` on a
+  production build, and the browser all agree on `css-1rb706t`. So it is stale
+  module state: the emotion cache is a module-level singleton and survives Fast
+  Refresh — touching a file recompiles the component but does not clear it.
+  **Restart the dev server before investigating a class-name-only mismatch**, and
+  do not try to fix it by reordering style props: the order in the JSX is not what
+  ends up in the CSS.
 - `agentRules: false` in `next.config.ts`. Without it `next dev` appends a
   generated block to this file on every run. Its actual point is worth keeping,
   so: **Next 16 is not the Next.js most training data describes** — app router,
