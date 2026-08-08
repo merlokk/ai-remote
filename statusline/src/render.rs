@@ -20,6 +20,31 @@ const GREEN: &str = "\x1b[32m";
 const YELLOW: &str = "\x1b[33m";
 const RED: &str = "\x1b[31m";
 
+/// Where a gauge turns yellow and then red, in percent **spent**.
+struct Thresholds {
+    green: f64,
+    yellow: f64,
+}
+
+impl Thresholds {
+    fn color(&self, used: f64) -> &'static str {
+        match used {
+            u if u <= self.green => GREEN,
+            u if u <= self.yellow => YELLOW,
+            _ => RED,
+        }
+    }
+}
+
+/// A rate-limit window. Half of a five-hour window is a normal working state,
+/// so the warning comes late.
+const WINDOW: Thresholds = Thresholds { green: 50.0, yellow: 80.0 };
+
+/// The context window, on a deliberately tighter scale: it is not a budget you
+/// are allowed to spend down to nothing but a runway ending in a compact, and
+/// the useful moment to notice is well before it is full.
+const CONTEXT: Thresholds = Thresholds { green: 20.0, yellow: 45.0 };
+
 /// The whole line. `now` is Unix epoch seconds — passed in so the countdowns
 /// are testable. `link` is what the previous render found on the bus (§9.8);
 /// `Link::Off` draws no dot, because with publishing switched off there is
@@ -45,9 +70,10 @@ pub fn render(data: &Json, now: u64, link: Link) -> String {
         segments.extend(windows);
     }
 
-    // Spent, like the windows above — one line must not mix "left" and "used".
+    // Spent, like the windows above — one line must not mix "left" and "used" —
+    // and drawn the same way, so the eye reads the whole row with one habit.
     if let Some(used) = data.num_at("context_window.used_percentage") {
-        segments.push(format!("{MUTED}ctx{RESET} {TEXT}{}%{RESET}", used.round()));
+        segments.push(gauge("ctx", used, &CONTEXT));
     }
 
     let line = segments.join(&format!("{MUTED}{SEP}{RESET}"));
@@ -60,19 +86,22 @@ pub fn render(data: &Json, now: u64, link: Link) -> String {
     }
 }
 
-/// One rate-limit window: `5h ████░░░░ 44% · 2h14m`. The bar and the number
-/// both show what is **spent**, so the bar grows as the window fills up.
-fn window_segment(label: &str, used_percentage: f64, resets_at: Option<f64>, now: u64) -> String {
+/// One labelled bar: `5h ████░░░░ 44%`. The bar and the number both show what
+/// is **spent**, so the bar grows as the thing it measures fills up, and the
+/// colour is a traffic light on that same number — which is why the scale is a
+/// parameter: `ctx` and a rate-limit window fill up at very different costs.
+fn gauge(label: &str, used_percentage: f64, thresholds: &Thresholds) -> String {
     let used = used_percentage.clamp(0.0, 100.0);
     let filled = (used / 100.0 * BAR_WIDTH as f64).round() as usize;
     let bar: String = "█".repeat(filled) + &"░".repeat(BAR_WIDTH - filled);
-    let color = match used {
-        u if u <= 50.0 => GREEN,
-        u if u <= 80.0 => YELLOW,
-        _ => RED,
-    };
+    let color = thresholds.color(used);
 
-    let mut segment = format!("{MUTED}{label}{RESET} {color}{bar} {}%{RESET}", used.round());
+    format!("{MUTED}{label}{RESET} {color}{bar} {}%{RESET}", used.round())
+}
+
+/// A rate-limit window: a [`gauge`] plus how long until it rolls over.
+fn window_segment(label: &str, used_percentage: f64, resets_at: Option<f64>, now: u64) -> String {
+    let mut segment = gauge(label, used_percentage, &WINDOW);
     if let Some(resets_at) = resets_at {
         segment.push_str(&format!(" {MUTED}·{RESET} {TEXT}{}{RESET}", countdown(resets_at, now)));
     }
@@ -139,8 +168,41 @@ mod tests {
     fn shows_the_model_and_both_windows_with_countdowns() {
         assert_eq!(
             plain(PAYLOAD, NOW),
-            "Opus 5 (1M context) │ 5h ████░░░░ 44% · 2h14m │ 7d ██░░░░░░ 24% · 4d8h │ ctx 6%"
+            "Opus 5 (1M context) │ 5h ████░░░░ 44% · 2h14m │ 7d ██░░░░░░ 24% · 4d8h │ ctx ░░░░░░░░ 6%"
         );
+    }
+
+    #[test]
+    fn the_context_window_is_a_gauge_like_the_others() {
+        // Same shape as a rate-limit window, minus the countdown: a context
+        // window does not reset on a clock, it resets when the session does.
+        let ctx = |used: i32| {
+            plain(&format!(r#"{{"context_window": {{"used_percentage": {used}}}}}"#), NOW)
+        };
+        assert_eq!(ctx(50), "? │ limits n/a │ ctx ████░░░░ 50%");
+        assert_eq!(ctx(100), "? │ limits n/a │ ctx ████████ 100%");
+    }
+
+    #[test]
+    fn the_context_window_goes_red_earlier_than_a_rate_limit() {
+        // A tighter scale on purpose: 45% of a rate limit is an ordinary
+        // Tuesday, 45% of the context window is most of the way to a compact.
+        let raw = |used: i32| {
+            let payload = format!(r#"{{"context_window": {{"used_percentage": {used}}}}}"#);
+            render(&parse(&payload).unwrap(), NOW, Link::Off)
+        };
+        assert!(raw(20).contains(GREEN), "up to 20% spent is green");
+        assert!(!raw(20).contains(YELLOW) && !raw(20).contains(RED));
+
+        assert!(raw(45).contains(YELLOW), "up to 45% spent is yellow");
+        assert!(!raw(45).contains(RED));
+
+        assert!(raw(46).contains(RED), "past 45% spent is red");
+
+        // The same number on a rate-limit window is still green — the two
+        // scales are deliberately different, so one must not follow the other.
+        let window = r#"{"rate_limits": {"five_hour": {"used_percentage": 46}}}"#;
+        assert!(!render(&parse(window).unwrap(), NOW, Link::Off).contains(RED));
     }
 
     #[test]

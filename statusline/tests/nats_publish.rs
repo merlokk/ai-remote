@@ -96,7 +96,9 @@ async fn a_subscriber_on_status_receives_the_rendered_values() {
     assert_eq!(raw.num_at("context_window.used_percentage"), Some(6.0));
     assert_eq!(
         raw.str_at("line"),
-        Some("● Opus 5 (1M context) │ 5h ████░░░░ 44% · 2h14m │ 7d ██░░░░░░ 24% · 4d8h │ ctx 6%")
+        Some(
+            "● Opus 5 (1M context) │ 5h ████░░░░ 44% · 2h14m │ 7d ██░░░░░░ 24% · 4d8h │ ctx ░░░░░░░░ 6%"
+        )
     );
 }
 

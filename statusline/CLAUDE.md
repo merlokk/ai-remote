@@ -21,7 +21,7 @@ binary reads — everything else in the payload is ignored:
 | `model.display_name` | the name at the head of the line |
 | `rate_limits.five_hour.used_percentage` / `.resets_at` | the `5h` window: bar, percent spent, countdown |
 | `rate_limits.seven_day.used_percentage` / `.resets_at` | the `7d` window, same shape |
-| `context_window.used_percentage` | the trailing `ctx N%` |
+| `context_window.used_percentage` | the trailing `ctx` gauge |
 | `model.id`, `session_id`, `cwd` | nothing on the line — they go only into the published document (§9.7) |
 
 `used_percentage` is 0–100 and counts what is **spent**; the line prints it as
@@ -37,7 +37,7 @@ absent on its own. Missing both prints `limits n/a`.
 ### 9.2 The layout
 
 ```
-● Opus 5 (1M context) │ 5h ████░░░░ 44% · 2h14m │ 7d ██░░░░░░ 24% · 4d8h │ ctx 6%
+● Opus 5 (1M context) │ 5h ████░░░░ 44% · 2h14m │ 7d ██░░░░░░ 24% · 4d8h │ ctx ░░░░░░░░ 6%
 ```
 
 The leading dot is the bus: **green — connected, red — not** (§9.8). It is not
@@ -45,10 +45,25 @@ a `│`-separated segment on purpose — it reads as a lamp on the line rather t
 a fourth field competing with the model name — and it disappears entirely when
 publishing is switched off, because then there is no link for it to report.
 
-Bars are 8 cells and fill with what is spent — an empty bar is a fresh window,
-a full one is a window you have used up. The colour is a traffic light on the
-same number: green ≤50% spent, yellow ≤80%, red above that. The dot is the only
-other thing on the line that can be red, and only when the bus is down.
+**Every number on the row is the same kind of gauge** — a label, an 8-cell bar,
+a percentage — so the line is read with one habit instead of three. Bars fill
+with what is **spent**: an empty bar is a fresh window, a full one is one you
+have used up. `ctx` is a gauge like the rest; it just has no countdown, because
+a context window does not reset on a clock, it resets when the session does.
+
+The colour is a traffic light on that same number, and the **scale differs per
+gauge** because the same percentage does not mean the same thing:
+
+| Gauge | Green | Yellow | Red |
+|-------|-------|--------|-----|
+| `5h` / `7d` rate limits (`WINDOW`) | ≤50% spent | ≤80% | above |
+| `ctx` context window (`CONTEXT`) | ≤20% spent | ≤45% | above |
+
+Half a five-hour window is an ordinary working state; half a context window is
+most of the way to a compact, and the useful moment to notice is well before it
+is full. A test pins both scales and asserts they cannot drift into each other.
+The dot is the only other thing on the line that can be red, and only when the
+bus is down.
 
 The palette assumes a **black terminal background**. Text is an explicit bright
 grey (`\x1b[38;5;252m`) and labels, separators and countdowns a step darker
@@ -209,6 +224,12 @@ one `lib/bus.py` talks to (`nats://127.0.0.1:4222`). Watch it with:
 docker exec -it nats-box nats sub status
 ```
 
+**The first real subscriber is `approver-web`**, which draws these numbers as a
+plaque under the pending requests — see
+[`../approver-web/CLAUDE.md`](../approver-web/CLAUDE.md), "The model and limits
+plaque". It reads and never answers, so nothing here has to know about it; what it
+does mean is that renaming a field below breaks a page as well as a test.
+
 Core NATS, no stream: this is a *current value*, superseded a second later, and
 persisting a history of it would be storage spent on nothing (§4). A subscriber
 that was not listening missed it, by design.
@@ -216,7 +237,7 @@ that was not listening missed it, by design.
 ```json
 {
   "ts": 1786136782,
-  "line": "Opus 5 (1M context) │ 5h █████░░░ 65% · 1h13m │ 7d ██░░░░░░ 27% · 4d7h │ ctx 12%",
+  "line": "Opus 5 (1M context) │ 5h █████░░░ 65% · 1h13m │ 7d ██░░░░░░ 27% · 4d7h │ ctx █░░░░░░░ 12%",
   "session_id": "7b463c0f-…",
   "cwd": "E:\\projects\\ai-remote",
   "model": {"id": "claude-opus-5[1m]", "display_name": "Opus 5 (1M context)"},

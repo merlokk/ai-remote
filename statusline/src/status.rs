@@ -166,7 +166,7 @@ mod tests {
         assert_eq!(status.ts, NOW);
         assert_eq!(
             status.line,
-            "● Opus 5 (1M context) │ 5h ████░░░░ 44% · 2h14m │ 7d ██░░░░░░ 24% · 4d8h │ ctx 6%",
+            "● Opus 5 (1M context) │ 5h ████░░░░ 44% · 2h14m │ 7d ██░░░░░░ 24% · 4d8h │ ctx ░░░░░░░░ 6%",
             "the line travels with the numbers, and without escape codes"
         );
         assert_eq!(status.session_id.as_deref(), Some("0000-1111"));
