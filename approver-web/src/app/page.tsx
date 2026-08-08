@@ -44,11 +44,6 @@ export default function Page() {
           </Text>
         </Stack>
 
-        {/* Above the cards because it is context for them: how much of the rate
-            limits is already spent is part of deciding whether to spend more.
-            Five short rows, no controls — see StatuslinePlaque. */}
-        <StatuslinePlaque doc={snapshot?.statusline ?? null} now={now} />
-
         {/* The requests come first: they are what the page is watched for, and
             they are the only part that changes. Registration is a once-per-browser
             errand and the status bar is reference material, so both sit below
@@ -71,6 +66,11 @@ export default function Page() {
             ))}
           </Stack>
         )}
+
+        {/* Under the cards for the same reason as everything else here, and ahead
+            of registration because these numbers keep changing while registering
+            is a once-per-browser errand. */}
+        <StatuslinePlaque doc={snapshot?.statusline ?? null} now={now} />
 
         <RegisterPanel status={snapshot?.status ?? null} />
 

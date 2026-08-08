@@ -4,11 +4,15 @@
  * The model and the rate limits, off the `status` subject — `statusline/CLAUDE.md`
  * §9.7 rendered as a plaque instead of a terminal line.
  *
- * Why it is at the top and not with the reference material at the bottom: "95% of
- * the five-hour window is gone" is context for the decision on the cards below,
- * not an app detail. It is kept to five short rows — a name, three bars, a path —
- * for the same reason the register panel sits under the requests: what the page is
- * watched for has to stay visible without scrolling.
+ * Below the requests and above the register panel, which is the same ordering rule
+ * everything else on this page follows: the cards are what it is watched for, and
+ * nothing that only needs a glance may push them down. Ahead of registration
+ * because unlike that once-per-browser errand these numbers keep changing.
+ *
+ * Three rows: the model, the two rate-limit windows side by side, the context
+ * window. The windows share a row because they are the same measurement over two
+ * periods and are read as a pair — which is also how the terminal line prints
+ * them.
  *
  * Quiet on purpose. The bars are thin, the type is small, and there is no control
  * on it: this is a readout, and the two buttons on each card must stay the
@@ -49,18 +53,20 @@ function GaugeRow({
   note?: string;
 }) {
   return (
-    <HStack gap={3}>
+    // flex="1" + minW: two of these share a row and wrap to two when the card is
+    // too narrow for both, rather than squeezing the bars to nothing.
+    <HStack gap={3} flex="1" minW="15rem">
       {/* Spelled the way the terminal line spells them — `5h`, `7d`, `ctx` — not
           upper-cased into labels of their own. */}
       <Text fontSize="xs" fontFamily="mono" color="fg.subtle" minW="8">
         {label}
       </Text>
-      {/* Capped rather than full-width: three bars spanning the card turn the
-          readout into the loudest thing on the page, and the cards below have to
-          keep that job. The terminal line gets by on eight cells. */}
+      {/* Capped rather than full-width: bars spanning the card turn the readout
+          into the loudest thing on the page, and the cards above have to keep that
+          job. The terminal line gets by on eight cells. */}
       <Progress.Root
         flex="1"
-        maxW="14rem"
+        maxW="9rem"
         size="sm"
         shape="full"
         value={used}
@@ -144,23 +150,30 @@ export function StatuslinePlaque({ doc, now }: { doc: StatusDoc | null; now: num
 
           {five || seven || context ? (
             <Stack gap={2}>
-              {five ? (
-                <GaugeRow
-                  label="5h"
-                  title="five-hour rate limit"
-                  gauge="window"
-                  used={five.used_percentage}
-                  note={resetNote(five, nowSeconds)}
-                />
-              ) : null}
-              {seven ? (
-                <GaugeRow
-                  label="7d"
-                  title="seven-day rate limit"
-                  gauge="window"
-                  used={seven.used_percentage}
-                  note={resetNote(seven, nowSeconds)}
-                />
+              {/* Both rate-limit windows on one row: same measurement over two
+                  periods, read as a pair, and the terminal line puts them side by
+                  side too. `wrap` is what keeps a narrow window honest. */}
+              {five || seven ? (
+                <HStack gap={6} wrap="wrap">
+                  {five ? (
+                    <GaugeRow
+                      label="5h"
+                      title="five-hour rate limit"
+                      gauge="window"
+                      used={five.used_percentage}
+                      note={resetNote(five, nowSeconds)}
+                    />
+                  ) : null}
+                  {seven ? (
+                    <GaugeRow
+                      label="7d"
+                      title="seven-day rate limit"
+                      gauge="window"
+                      used={seven.used_percentage}
+                      note={resetNote(seven, nowSeconds)}
+                    />
+                  ) : null}
+                </HStack>
               ) : null}
               {context ? (
                 <GaugeRow

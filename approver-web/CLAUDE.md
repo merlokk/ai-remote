@@ -500,13 +500,13 @@ audio is broken. With sound on, one new request produced exactly two oscillators
 ## The model and limits plaque
 
 The page also watches the **status line's** subject — `status`, the document in
-`statusline/CLAUDE.md` §9.7 — and draws it above the requests:
+`statusline/CLAUDE.md` §9.7 — and draws it under the requests, above the register
+panel:
 
 ```
 Opus 5 (1M context)  claude-opus-5[1m]                            2s
-5h   ▬▬▬▬▭▭▭▭▭▭   22%  4h22m
-7d   ▬▬▬▬▬▭▭▭▭▭   31%  3d20h
-ctx  ▬▬▬▭▭▭▭▭▭▭   15%
+5h   ▬▬▬▬▭▭▭▭▭▭  22%  4h22m      7d  ▬▬▬▬▬▭▭▭▭▭  31%  3d20h
+ctx  ▬▬▬▭▭▭▭▭▭▭  15%
 E:\projects\ai-remote
 ```
 
@@ -515,13 +515,18 @@ the connection that was already open, it is never answered, and the request path
 does not read it. Removing `StatuslinePlaque` from `page.tsx` would leave a
 working responder — which is the test for whether this stayed a readout.
 
-- **Why above the cards.** How much of the five-hour window is already gone is
-  *input to the decision on the card below*, not app trivia like the config path.
-  It costs five short rows — a name, three bars and a path — and the register
-  panel stays where it is: the ordering
-  rule ("what the page is watched for is visible without scrolling") is about
-  keeping the requests high, not about keeping the top of the page empty.
-- **Quiet by construction.** Thin bars capped at `14rem` rather than full-width,
+- **Where it sits.** Under the requests and above the register panel. It was
+  briefly at the top, on the argument that "95% of the five-hour window is gone"
+  is input to the decision on the card below — but that is an argument for having
+  it on the page, not for putting it ahead of the cards, and the ordering rule
+  here does not bend for a readout: nothing that only needs a glance may push the
+  requests down. Ahead of registration, because unlike that once-per-browser
+  errand these numbers keep changing.
+- **Three rows, and the two windows share one.** `5h` and `7d` are the same
+  measurement over two periods and are read as a pair — as they are on the
+  terminal line — so they sit side by side and wrap to two rows only when the card
+  is too narrow for both. `ctx` gets its own row below them.
+- **Quiet by construction.** Thin bars capped at `9rem` rather than full-width,
   small type, no control on it. Full-width bars were tried first and made three
   green lines the loudest thing on the page — which loses to constraint 1 under
   "Look and feel": the two buttons on a card must stay the heaviest elements.
@@ -546,11 +551,11 @@ working responder — which is the test for whether this stayed a readout.
   a `stale` badge instead of dropping the numbers — a stale percentage is still
   the best available answer, as long as it does not claim to be current.
 - **One subject, every session.** Every Claude Code session on the machine
-  publishes to `status`, so this is whichever rendered last, not the session that
-  sent the request below it. Hence the `cwd` line and the age: without them the
-  plaque would read as a header for the card under it. If that ever needs fixing
-  properly, the document carries `session_id` and so does every request — the
-  join exists, it is just not worth the state today.
+  publishes to `status`, so this is whichever rendered last, not necessarily the
+  session that sent the requests above it. Hence the `cwd` line and the age:
+  without them the plaque reads as belonging to those cards. If that ever needs
+  fixing properly, the document carries `session_id` and so does every request —
+  the join exists, it is just not worth the state today.
 - **Junk is dropped, the last good document stays.** `status` is as open as
   `approvals.*`: `statusDocSchema` rejects a non-JSON payload, a document missing
   `ts`/`line` (the two fields §9.7 always sends — on an open subject that is the
