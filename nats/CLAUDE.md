@@ -47,9 +47,32 @@ line publishes a current value with no stream behind it (§9.7).
 | `status` | publish only, no stream | [`statusline/`](../statusline/CLAUDE.md) §9.7 |
 | `status.test.statusline` | the Rust integration test, so it cannot disturb a live subscriber | [`statusline/`](../statusline/CLAUDE.md) §9.6 |
 
-**The bus is unauthenticated and every subject on it is open.** That is
-acceptable only because it is bound to localhost in this sandbox: `approvals.*`
+**The bus is unauthenticated and every subject on it is open.** `approvals.*`
 carries the full `tool_input` (for Bash, the whole command; for Write, the file
 contents), and anyone who can publish can answer a registration request — which
 is why the §6 replies are signed and the §7 replies are verified rather than
-trusted. Do not expose these ports.
+trusted.
+
+**The client port is deliberately reachable from the home LAN** — decided so the
+ESP32 responder can reach it over Wi-Fi ([`approver-esp32/`](../approver-esp32/CLAUDE.md)
+§10.3), which is where the trade-off is argued. Read it as one sentence: *every
+device on that Wi-Fi can read every permission request in cleartext, and the
+protocol survives that because a decision still cannot be forged.* The boundary
+is now the router, not loopback, so three things hold it up:
+
+- **Nothing forwards a port to this host.** No port-forward, no UPnP hole, no
+  DMZ — that is the whole thing standing between `approvals.*` and the internet
+  now. Worth verifying once, deliberately, rather than assuming.
+- **`4222` is the only port that needs to leave the machine.** The monitoring
+  port `8222` (`/varz`, `/connz`, `/jsz`) and the dashboard on `8080` have no
+  device on the other end; bind them to `127.0.0.1` in `docker-compose.yml`
+  rather than leaving them on every interface.
+- **`4222:4222` means every interface, including ones joined later.** A VPN or
+  an overlay network (Tailscale, ZeroTier, a corporate tunnel) the host joins
+  next month carries this bus onto it silently. Publishing on the LAN address
+  explicitly (`192.168.x.y:4222:4222`) is the cheap version of not finding that
+  out later.
+
+TLS + credentials remain the real fix and are not done. The moment this bus
+crosses a network that is not "the flat inside a router" — a shared office, a
+guest VLAN with other people's devices, anything routed — it needs them first.

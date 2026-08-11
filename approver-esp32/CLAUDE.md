@@ -1,0 +1,995 @@
+# approver-esp32 — the responder as a device (ESP32-C6 + AMOLED, ESP-IDF)
+
+A fourth responder for the approval flow in
+[`../approver/CLAUDE.md`](../approver/CLAUDE.md) §6/§7, alongside
+`approver/responder.py` (software key), `approver/responder_yubikey.py` (key on a
+YubiKey, the primary one) and [`approver-web/`](../approver-web/CLAUDE.md) (the
+page). Same subjects, same `handler-config.json` allowlist, same signing bytes —
+`hook.py`, `protocol.py` and `registration_handler.py` must not change for it,
+and if they do, the design is wrong.
+
+The difference is only the front end, again: instead of a console prompt or a
+browser tab, the operator gets **a small object on the desk**. Most of the time
+it is a clock; when Claude Code is working it can show what is left of the rate
+limits; when a permission request arrives it lights up, shows the command, and
+takes one press. Nothing to keep open, nothing sharing a window with the work
+being approved — and nothing that can be answered by the machine being asked
+about.
+
+This file owns section **10** of the project docs. The numbering is global — see
+[`../CLAUDE.md`](../CLAUDE.md) §2 for the map — and project-wide rules (TDD, the
+dependency allowlist) stay in that root file.
+
+## Status: nothing is built yet
+
+This file is the **plan**, not a description of code. The folder holds no
+firmware; every table below is a decision on paper, and the ones that need the
+repository owner's sign-off say so.
+
+| Scope | State |
+|-------|-------|
+| The design below (roles, custody, dependencies, tests) | written, unimplemented |
+| The language and the layering (§10.14) — C++ except where C is forced, no dynamic memory, library layer before logic, the I²C bus leased | **decided**, nothing written yet |
+| The ESP-IDF dependency set (§10.4) — LVGL + `esp_lvgl_port`, the CO5300/CST9220 drivers, libsodium for Ed25519, `debsahu/espidf-nats` for the bus | **signed off** (root §1); exact versions pinned when the first build resolves them |
+| The LVGL host preview (§10.12.1) | installed and rendering — the only part of this folder that runs today |
+| Bus reachable from the device at all (§10.3) | **decided**: shared on the home LAN, no TLS, no auth — the router is the trust boundary |
+| Firmware: NATS client, registration, signing | not started |
+| The five screens — clock, limits, request, settings, Wi-Fi (§10.8) | specified, not started |
+| Wi-Fi manager: scan, join, remember, reconnect (§10.9) | specified, not started |
+| Host-tier tests + protocol parity vectors (§10.11) | not started |
+
+Read §10.3 before anything else: it is the one part of this that changes
+something outside this folder.
+
+## 10. `approver-esp32/` — the firmware
+
+### 10.1 The board — what the firmware may assume
+
+**Waveshare ESP32-C6-Touch-AMOLED-2.16**
+([product page](https://www.waveshare.com/esp32-c6-touch-amoled-2.16.htm),
+[docs](https://docs.waveshare.com/ESP32-C6-Touch-AMOLED-2.16)):
+
+| Part | What it is | Bus |
+|------|------------|-----|
+| ESP32-C6 | single RISC-V core @160 MHz, 512 KB HP SRAM + 16 KB LP SRAM, 16 MB flash, Wi-Fi 6 (2.4 GHz) / BLE 5 / 802.15.4 | — |
+| CO5300 | 2.16″ AMOLED, 480×480, 16.7 M colours | QSPI |
+| CST9220 | capacitive touch | I²C |
+| QMI8658 | 6-axis IMU (accel + gyro) | I²C |
+| PCF85063 | RTC, backed by the PMIC | I²C |
+| AXP2101 | power management + charging (3.7 V Li-ion on MX1.25) | I²C |
+| ES8311 + ES7210 | audio codec + echo-cancellation ADC, dual mic | I²C/I²S |
+| BOOT / PWR / KEY | three buttons; `KEY` is the free one | GPIO |
+| TF slot, USB-C, exposed I²C/UART pads | — | — |
+
+**The GPIO map is not written here on purpose.** Waveshare publishes it in the
+board's demo projects, and a pin number invented from memory costs a bricked
+evening. Take the pin definitions from the vendor demo's board header, in one
+place (`components/board/`), and cite the demo's version next to them.
+
+Two consequences that shape the firmware rather than decorate it:
+
+- **No PSRAM, and no way to add it** — the ESP32-C6 has no external-RAM support
+  at all. A full 480×480 framebuffer at 16 bpp is 480·480·2 = **460 800 bytes**
+  against 512 KB of SRAM shared with lwIP, Wi-Fi and the TLS stack. So: LVGL
+  draws into **partial buffers** (two of, say, 480×40 = 38.4 KB each), the panel
+  is fed by DMA per flush, and "just render the whole screen" is not on the
+  table. Any vendor demo that claims full double buffering on this chip is doing
+  it with partial buffers too.
+- **One core.** The UI, the NATS socket and the signature all live on the same
+  CPU. Split them: an LVGL task (it owns the display and the touch), a bus task
+  (socket, parse, reply), and a queue between them. A signature must never run
+  inside an LVGL callback — the frame it stalls is the frame the operator is
+  looking at.
+
+### 10.2 What the device is in the protocol
+
+A responder, indistinguishable from the software one to everything that verifies
+it:
+
+| | Value |
+|---|---|
+| `key_id` | `approver-esp32` (its own — **not** shared with another responder) |
+| `key_type` | `ed25519` (§10.6 explains why, and what it costs) |
+| Subscribes | `approvals.*`, queue group `approvers` |
+| Registers over | `registrations`, §6, on the device (§10.7) |
+| `reason` | always `""` — no keyboard, same call `responder_yubikey.py` makes (§8.7) |
+| `updated_input` | **never sent** |
+
+That last line is the reason this firmware is small. `updated_input` is the only
+field a responder *originates*, and the only one that would force the device to
+implement Python's canonical JSON (`sort_keys`, `separators`, `ensure_ascii`) and
+hash it identically — the trap that cost `approver-web` a whole section of its
+own docs. Without it the device **never hashes anything**: it echoes
+`input_sha256` as the string it arrived as, puts `""` in the
+`updated_input_sha256` position, and signs. Its entire crypto surface is
+Ed25519 sign, Ed25519 verify, base64, and a random nonce.
+
+The signing bytes are §7's, assembled with `\n` and nothing else:
+
+```
+str(v) "\n" session_id "\n" nonce "\n" tool_name "\n" input_sha256 "\n"
+behavior "\n" "" "\n" str(ts) "\n" ""
+```
+
+- **Echo `ts` as an integer, and be careful how.** `str(ts)` must produce exactly
+  what Python produced. Parse it into `int64_t` and print with `%lld` — never
+  through a `double` and `%f`, and never re-derive it from the device's own
+  clock. The same rule for `v`.
+- `key_id` is not in the signing bytes; it selects the key **and the scheme** on
+  the verifying side (§7). Nothing the device sends can choose an algorithm.
+
+**One responder at a time.** `approvals.*` with the `approvers` queue group means
+each request reaches exactly one subscriber, arbitrarily. A device sitting on the
+desk powered on all day *will* quietly take requests away from the YubiKey
+responder and the page. That is the intended end state, but during development it
+is the first confusing symptom — see §6 "Multiple clients".
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant CC as Claude Code
+    participant H as hook.py (host)
+    participant N as NATS (LAN)
+    participant D as ESP32-C6
+    participant O as Operator
+
+    CC->>H: PermissionRequest on stdin
+    H->>N: request approvals.<session_id>
+    N->>D: delivery (queue group "approvers")
+    D->>D: cJSON parse, validate, queue to the UI
+    D->>O: screen lights: tool, cwd, tool_input, countdown
+    O->>D: press Allow / Deny
+    D->>D: signing bytes -> ed25519 sign (key derived from eFuse)
+    D-->>N: publish to the reply subject
+    N-->>H: reply inbox
+    H->>H: verify sig against clients["approver-esp32"]
+    H-->>CC: allow/deny (exit 0)
+    Note over D,H: no press, no Wi-Fi, bad parse -> no reply at all<br/>hook times out, Claude Code asks in its own terminal
+```
+
+### 10.3 The bus stops being a localhost bus
+
+This is the part that reaches outside this folder, and it was decided before a
+line of firmware: **the NATS server is shared on the home LAN — reachable from
+the Wi-Fi the device is on, and from nowhere on the internet.** No TLS, no
+credentials, for now. The rest of this section is what that buys and what it
+costs, because the cost does not disappear by being accepted.
+
+[`nats/CLAUDE.md`](../nats/CLAUDE.md) §4 used to say it plainly: the bus is
+**unauthenticated, every subject on it is open**, and that was acceptable *only*
+because it was bound to localhost — `approvals.*` carries the whole `tool_input`,
+which for Bash is the full command and for Write the file contents. That
+sentence is now spent: the trust boundary moved from loopback to the router, and
+§4 has been rewritten to say so rather than to keep promising loopback.
+
+A device on Wi-Fi cannot honour that sentence. It has to reach `4222` across the
+LAN, and `docker-compose.yml` publishes `4222:4222` — i.e. on every interface the
+host has, not on loopback. So today the port is *already* open to the LAN and
+nothing has needed it yet; this firmware is the first thing that would.
+
+What that means, stated as consequences rather than a warning:
+
+1. **Anyone on the LAN can read every permission request** — every command
+   Claude Code asks about, in cleartext, plus `cwd` and the file contents of any
+   `Write`. That is not a firmware problem to mitigate; it is a property of the
+   bus once it is reachable.
+2. **Anyone on the LAN can answer registration requests** and can publish junk
+   onto `approvals.*`. The protocol already survives this (§6 replies are signed,
+   §7 replies are verified) — which is exactly why it was built that way, and why
+   this change is *possible* at all rather than fatal.
+3. **A forged decision still cannot be minted**: the hook verifies against the
+   allowlist, so the attack surface added is disclosure and denial of service,
+   not authorisation.
+
+The three ways out, and which one was taken:
+
+| Option | What it costs |
+|--------|---------------|
+| **TLS + credentials on the NATS server** (a `tls {}` block, and user/pass or nkey auth) — the honest fix | editing `nats/docker-compose.yml` and a server config file; every existing client gains a URL/credential; the device needs the CA cert in flash and TLS on the socket — which `debsahu/espidf-nats` already speaks (§10.4), so the device side of this is now configuration rather than work |
+| Firewall the host port to the device's address only | quick, hides nothing from anyone already on that LAN segment, and pins the device's IP |
+| **Open on a trusted network** ← **chosen**: the home Wi-Fi, behind the router, nothing forwarded | free, and the flat is the trust boundary. Indefensible the moment that network is shared with people rather than with a household |
+
+**What "trusted network" has to keep meaning**, or the decision quietly stops
+holding — the conditions are listed once, in [`nats/CLAUDE.md`](../nats/CLAUDE.md)
+§4, and they are: nothing port-forwarded to the host, `8222`/`8080` bound back to
+loopback since no device needs them, and `4222` published on the LAN address
+rather than on every interface — a VPN or overlay network joined later otherwise
+carries this bus onto it silently.
+
+Two things this does *not* change, and they are the reason it is survivable:
+a decision still cannot be forged (§7 verification against the allowlist), and
+the device's key still cannot be extracted (§10.6). What the LAN gains is
+**reading** every permission request, and the ability to make noise on the
+subjects. Both were true of anything on the machine already.
+
+**TLS + auth stays the eventual fix**, and it is now cheap on the device side —
+so it becomes a `nats/` change (§3/§4) whenever the network stops being a
+household, not a firmware one.
+
+### 10.4 Dependencies — the list, and what was signed off
+
+Root §1 requires explicit sign-off for anything outside the approved list.
+**The C side has it now**: LVGL + `esp_lvgl_port`, the CO5300/CST9220 drivers,
+libsodium for Ed25519, and `debsahu/espidf-nats` for the bus — approved by the
+repository owner as argued below, and recorded in root §1. The alternatives stay
+in the tables because they are the fallbacks if one of these turns out not to
+work, not because the choice is still open.
+
+**ESP-IDF v5.5.2** — the version Waveshare recommends for this board and builds
+its demos against; other versions are documented as possibly incompatible with
+the display/touch drivers. Pin it (`idf_component.yml` + a note in the README),
+the way `uv.lock` and `Cargo.lock` pin the rest of the repo.
+
+In-tree, arriving with ESP-IDF itself and needing no new supply chain:
+
+| Component | For |
+|-----------|-----|
+| `esp_wifi`, `lwip` | the network, BSD sockets |
+| `mbedtls` | base64 (`mbedtls_base64_*`), and TLS on the socket if §10.3 goes that way |
+| `json` (cJSON) | parsing requests, building replies |
+| `nvs_flash` | the registered `key_id`, the pinned `server_key`, Wi-Fi and bus settings |
+| `esp_hmac`, `efuse` | the key custody of §10.6 |
+| `esp_console`, `esp_vfs_usb_serial_jtag` | the provisioning commands of §10.7 |
+| `esp_lcd`, `driver` (I²C/SPI), `esp_timer`, `esp_event` | display transport, buses, the clock |
+
+New dependencies, all four approved:
+
+| Approved | Why | The alternative it beat |
+|----------|-----|-------------------------|
+| `lvgl/lvgl` (v9) + `espressif/esp_lvgl_port` | five screens, a scrolling list of scan results and an on-screen keyboard (§10.8) — hand-drawing that against `esp_lcd` primitives is weeks of work to reach something worse | draw directly against `esp_lcd`: defensible for the request card alone, not for the Wi-Fi screen, which is where the keyboard lives |
+| CO5300 panel driver + CST9220 touch driver | the two chips on this board; the vendor demo carries both | none — they are the hardware. Prefer an Espressif-registry component over a copied vendor tree; if the vendor's is the only one, vendor it into `components/` with its version recorded |
+| **an Ed25519 implementation** — `libsodium` (Espressif publishes it as a managed component) | mbedTLS has **no EdDSA**: it cannot sign or verify Ed25519 at all. §6's server key is Ed25519 *by fixed protocol* (`protocol.SERVER_KEY_TYPE`), so verify is not optional | switch the device's own key to `key_type: p256` (mbedTLS ECDSA, already a first-class scheme in §7 — the YubiKey and the browser both use it) — **but the registration reply still needs Ed25519 verify**, so this removes signing from libsodium's job, not libsodium |
+| **a NATS client** — `debsahu/espidf-nats` (ESP Component Registry, `^1.4.0`, MIT, header-only C++, ESP-IDF 4.4–6.0) | the §10.5 subset without writing and debugging a socket state machine; and it brings TLS 1.2/1.3 with server-cert validation, mTLS and SNI, which is exactly what §10.3 needs and the one part of a hand-written client that would *not* have been ~300 lines | writing it ourselves, and the two options below |
+
+**The NATS client is the interesting decision.** For Rust, §9.4 concluded that
+reimplementing the protocol to avoid `async-nats` "would be far worse than
+depending on it" — because an official client existed. For ESP-IDF there is no
+official one, and the choice went to a third-party component anyway:
+
+| Option | Assessment |
+|--------|------------|
+| **`debsahu/espidf-nats`** ← **chosen** | Header-only C++ on the registry, MIT, `idf.py add-dependency "debsahu/espidf-nats^1.4.0"`. Two hard requirements checked before choosing: `sub_internal` takes a `queue` argument, so the `approvers` group of §6 is expressible, and the message type carries `reply` — the reply-to subject §7 answers into. TLS and exponential-backoff reconnect come with it |
+| Write it: ~300 lines over a socket | The subset is genuinely tiny (§10.5) and every failure mode would have been ours to shape. Rejected: the tiny part is the plaintext path, and §10.3's TLS is the part that is not tiny. Stays the fallback if the component becomes a problem — §10.5 remains a complete specification of what to write |
+| `daed/nats-client` | The earlier port of `arduino-nats` the chosen one descends from; smaller, less maintained |
+| `nats.io`'s official C client (`nats.c`) | Written for POSIX servers; pulls threads and an event loop and assumes desktop-sized memory. Not a realistic target here |
+
+**What the component brings that this device must never use.** JetStream,
+KV, object store, NKey/JWT auth, WebSocket transport and message headers are all
+in it; the responder uses `connect`, `subscribe` (with a queue group),
+`publish`, `flush` and nothing else. The rule is §10.13's, applied to a
+dependency: on the board, unused is not the same as absent — Kconfig-off what
+can be turned off, keep `CONFIG_ESP_WEBSOCKET_CLIENT_ENABLE` unset, and record
+what it costs with `idf.py size-components` (§10.12) rather than assuming it is
+free. **It is C++**, which §10.14.1 turns from a problem into a non-issue — the
+firmware is C++ as well, so it is included directly; the only wrapper around it
+is the §10.5 contract, and that one exists to keep the call surface small, not
+to cross a language boundary.
+
+The rest of root §1's rule now applies to these four: each goes in
+`main/idf_component.yml` with a version, they are locked in `dependencies.lock`
+(committed), and **the exact versions land in these tables when the first build
+resolves them** — "LVGL v9" is the approval, `9.3.0` is the record. Anything
+beyond this list is a new question for the owner, including a transitive
+component one of them drags in.
+
+### 10.5 The NATS client — the subset that is actually needed
+
+The client is `debsahu/espidf-nats` (§10.4), so this section stopped being an
+implementation plan and became two things instead: **the contract the wrapper
+has to expose** — nothing outside this list is called, and anything the
+component cannot do is a blocking finding, not a detail — and **the complete
+specification of what to write** if the component ever has to be dropped. The
+wire protocol is line-based text; this device speaks four verbs and listens for
+three, which is why either way stays small.
+
+Sends:
+
+- `CONNECT {"verbose":false,"pedantic":false,"name":"approver-esp32","protocol":1}` — no credentials, per §10.3; `user`/`pass` or `auth_token` only if that bus ever gains auth
+- `SUB approvals.* approvers 1` — the queue group is not optional (§6)
+- `SUB status 3` — read-only, **no queue group** (§10.8.3): a broadcast current value is meant to reach every subscriber, and joining a group would mean taking it from the other watchers
+- `SUB <inbox> 2` — one private inbox for the registration reply, `_INBOX.<32 random hex>`
+- `PUB <reply-subject> <n>\r\n<payload>\r\n` — a decision, and the registration request
+- `PONG` — in answer to every `PING`
+
+Receives: `INFO {…}` (once, at connect — read it, don't parse it into a model),
+`PING`, `MSG <subject> <sid> [reply-to] <n>\r\n<payload>\r\n`, and `-ERR <why>`
+(log it and reconnect; a `-ERR` is the server telling you the connection is over).
+
+Everything the request-reply pattern needs is in that `MSG` line: **the
+`reply-to` field is the inbox to `PUB` the decision into.** There is no
+correlation to invent and no state to keep beyond "which reply subject belongs to
+the card on screen".
+
+Behaviour that is not about the protocol but about this repo's rules. With a
+third-party client these stop being things to implement and become things to
+**verify** — by test, against the component, before trusting it (§10.11's host
+tier cannot reach them, so they belong to the device tier):
+
+- **`PUB` is not delivery.** §4: "Published" means sent. On a one-shot exchange
+  (registration) wait for the reply before believing anything; on a decision,
+  the reply *is* the delivery — but do not tear down the socket the instant
+  after writing it. `flush` in the other clients exists for exactly this reason
+  (§6, §9.7).
+- **Junk on an open subject must not crash anything** — the rule `lib/bus.py`
+  and `approver-web` both state. A payload that is not JSON, an object missing
+  fields, a `MSG` with no `reply-to`, a length that does not match the bytes
+  that follow: drop it, one log line, keep the socket. On a device the stakes
+  are higher than a traceback — an unhandled parse is a reboot loop. The
+  frame-level half of this is the component's parser now, not ours, which is
+  exactly why something has to fire a lying length at it on purpose.
+- **Bound every read.** A truncated `MSG` header, a server that stops mid-payload
+  and a `PING` that never comes must all end in a socket timeout and a
+  reconnect, not a blocked task and a watchdog panic.
+- **Reconnect with backoff, and say so on screen** (§10.8): the dot in
+  `statusline` (§9.8) is the precedent — the operator has to be able to tell "no
+  requests are arriving" from "nothing is asking".
+
+### 10.6 Key custody — the part worth doing properly
+
+The repository has a pattern by now, and it is not "a private key in a config
+file": the YubiKey responder keeps the key in hardware (§8.7), the web responder
+keeps it non-extractable in the browser's key store. The device should hold to
+that standard, and the ESP32-C6 has the hardware for it.
+
+**The proposal: derive the Ed25519 seed from an eFuse key through the HMAC
+peripheral.** ESP32-C6 can hold a key in one of eFuse blocks 4–9 with a *purpose*
+that makes it usable **only** by the HMAC peripheral and unreadable by software
+([HMAC docs](https://docs.espressif.com/projects/esp-idf/en/stable/esp32c6/api-reference/peripherals/hmac.html)).
+So:
+
+```
+seed  = esp_hmac_calculate(HMAC_KEY0, "ai-remote-approver-esp32-v1")   // 32 bytes
+pair  = crypto_sign_seed_keypair(seed)                                  // ed25519
+```
+
+- The private key exists only in RAM, for as long as the firmware runs, and is
+  **not in flash at all** — a dumped flash image yields the public key and
+  nothing else.
+- It is reproducible across reboots, so registration survives a restart with
+  nothing secret persisted.
+- It is bound to the chip: the same firmware on another board is a different
+  responder, which is the correct behaviour (that board is not this key).
+- The label in the HMAC message is the domain separator. Change it and you have
+  rotated the key deliberately — which then requires re-registration (§6), the
+  same felt cost the server-key rotation has.
+
+The fallback, if the eFuse route stalls: generate once and store in **encrypted
+NVS** with flash encryption enabled. Strictly worse (the key is in flash,
+protected by a key that is also on the chip) but still not a plaintext file, and
+honest as a first milestone as long as this doc says which one shipped.
+
+| Responder | Where the private key lives | Can the host forge a decision? |
+|-----------|------------------------------|-------------------------------|
+| `responder.py` | `responder-config.json` on disk | yes, trivially |
+| `responder_yubikey.py` | inside the YubiKey | no |
+| `approver-web` | non-extractable `CryptoKey` in IndexedDB | no |
+| **this** | RAM only, derived from an eFuse key per boot | no — and there is no file to steal |
+
+**A boot self-test, because a miscompiled crypto library is silent.** ESP-IDF's
+libsodium has a Kconfig switch for using mbedTLS's SHA-512 underneath, and that
+seam has historically produced *valid-looking but wrong* `crypto_sign` output
+([esp-idf#1044](https://github.com/espressif/esp-idf/issues/1044)). A wrong
+signature here is indistinguishable, from the operator's side, from a working
+device: the hook simply rejects every reply and Claude Code keeps asking in its
+own terminal. So at boot, sign a **fixed test vector with a fixed test key** and
+compare against bytes generated by `lib/crypto.py`; refuse to subscribe if it
+does not match, and say so on the screen. Ed25519 is deterministic, which is
+what makes this check possible at all.
+
+### 10.7 Registration on the device (§6, without a keyboard)
+
+The token is `<key_id>.<b64 32 bytes>` — around 50 characters, minted on the host
+by `py approver/registration_handler.py --get-token approver-esp32`. Typing that
+on a 2.16″ touchscreen is a bad joke, so registration is driven over **USB**,
+through `esp_console` on the USB Serial/JTAG port:
+
+```
+register <token>              # the §6 exchange — the reason this console exists
+keys                          # print this device's public key + the pinned server key
+forget                        # drop the registration and the pinned server key
+bus  nats://192.168.1.5:4222  # also on the settings screen (§10.8.5)
+wifi <ssid> <password>        # the headless fallback for §10.9's screen
+```
+
+The exchange itself is §6 verbatim, and the order of operations is the part that
+must not be "simplified":
+
+1. Generate a fresh 32-byte `nonce`. **After Wi-Fi is up** — the ESP32's RNG is
+   only a true random source with the radio enabled; before that it is a PRNG,
+   and a predictable nonce gives up the replay protection the nonce exists for.
+2. `PUB registrations` with `{v, token, key_id, pubkey, key_type: "ed25519",
+   nonce, ts}` and wait on the private inbox.
+3. **Verify the handler's Ed25519 signature over the reply before reading
+   `ok`** — `registration_reply_signing_bytes`, context string included; check
+   the `nonce` echo; if a `server_key` is already pinned in NVS, require it to be
+   exactly that one. This is `responder.verify_server_reply` in C, and it is not
+   optional: an unsigned `{"ok":false,"error":"expired"}` from anyone on the bus
+   would otherwise send the operator hunting a problem that does not exist.
+4. Only on a verified `ok:true`: write `key_id` and the pinned `server_key` to
+   NVS. A rejection changes nothing — the same ordering all three existing
+   responders use.
+
+**Trust on first use, and the screen is what closes it.** The first registration
+has nothing to compare the handler's key against, so show it: the device displays
+`handler key <b64>` and the handler prints `server key (ed25519): <b64>` on
+stderr at startup. Two strings, compared by eye, once. `approver-web` does the
+same thing in its register panel.
+
+`ts` for the request comes from the RTC (PCF85063) or SNTP — and if neither has
+been set, from `0`: the handler does not check the request's `ts`, and inventing
+a plausible-looking wrong one is worse than an obviously unset one.
+
+### 10.8 The screens
+
+Five, and one of them is not navigable to — it arrives:
+
+| # | Screen | Reached by | Exists to |
+|---|--------|-----------|-----------|
+| 10.8.2 | **Clock** — home | the screen it returns to from everywhere | be the thing on the desk for 99 % of its life, and admit in one glyph whether it could answer a request right now |
+| 10.8.3 | **Limits** | swipe left/right from the clock | the §9.7 `status` document: which model is answering and how much of the 5h / 7d windows is spent — present only while a Claude Code session is actually publishing |
+| 10.8.4 | **Request** | **a message on `approvals.*`** | the one screen the device exists for |
+| 10.8.5 | **Settings** | swipe up, or the gear on the clock | bus, key and registration, display, time, factory reset — and the way into Wi-Fi |
+| 10.8.6 | **Wi-Fi settings** | from Settings | scan, pick, type a password, forget a network (the machinery is §10.9) |
+
+None of them needs a board to be drawn: §10.12.1 renders LVGL on the host and
+returns a picture — with the caveats stated there about what a picture proves.
+
+#### 10.8.1 The model — priority, not a stack
+
+Navigation is a small explicit state machine, not "whatever LVGL screen was
+loaded last", because two of the transitions are not the operator's:
+
+- **The request overlay outranks everything.** It appears over any screen —
+  mid-scroll, mid-password, mid-anything — and while it is up, navigation is
+  gone: no swipe, no gear, no back. There is nothing to reach that is more
+  urgent than the card, and a device where a stray swipe can hide a pending
+  request is a device that will silently time one out.
+- **It is not modal in the other direction either.** The card cannot be
+  *dismissed*, only answered or expired. There is no ✕, because a ✕ would be a
+  third verdict that §7 does not have.
+- What was underneath is restored exactly when the card goes: the settings
+  screen keeps its scroll position and any half-typed password. Losing a
+  password to an arriving request is how an operator learns to resent the
+  device.
+- **Everything else is quiet.** No screen may steal focus for a readout: fresh
+  limits, a Wi-Fi reconnect and a finished registration all change what a screen
+  *shows*, never which screen is up. `approver-web` states the same rule about
+  its plaque, for the same reason.
+
+**One LVGL task owns the display.** LVGL is not thread-safe: every widget touch
+happens in the UI task, and the bus task hands work across a queue (or takes
+`lvgl_port_lock()` and gets out fast). A signature, a socket read and a JSON
+parse never run inside an LVGL callback — §10.1 already says why, and this is
+where it becomes a code rule rather than an observation.
+
+**Shared across all five:**
+
+- **A link indicator, always visible.** The dot from `statusline` (§9.8) is the
+  precedent: the operator must be able to tell "nothing is being asked" from "I
+  am not connected". Three states, not two — bus up / bus down / not registered
+  — because a connected device with no key is just as unable to answer, and
+  looks identical from the outside otherwise.
+- **AMOLED: black is free, static is expensive.** An unlit pixel costs no power
+  and no lifetime, so these screens are mostly black by design rather than by
+  taste. Anything permanent (the clock, the dot) shifts by a few pixels on a
+  slow timer, brightness drops on an idle timeout and the panel blanks after
+  it — waking on touch, and unconditionally on a request. Burn-in on a device
+  showing one layout for months is an outcome, not a risk.
+- **The queued touch.** A card appears while a finger is already on its way
+  down, and on a 480×480 panel Allow may be exactly where the operator was about
+  to tap. Ignore presses for the first ~300 ms of any newly presented card, and
+  discard any touch whose press began before it appeared. A console prompt and a
+  browser tab get this guard for free; a desk object does not.
+- **The alert.** There is a codec and a speaker here: one short synthesised chirp
+  on a new request, no asset. `approver-web`'s "The new-request alert" applies —
+  ramp the envelope or it clicks, and never chirp for a card that was already
+  there.
+
+#### 10.8.2 Clock — the home screen
+
+Big time, small everything else, and it must not lie about the one thing the
+device is for. On it: the time, the date, the link indicator, `key_id` when
+registered, and a gear.
+
+- **Time comes from SNTP, is kept by the PCF85063, and survives a reboot.** The
+  RTC is the source at boot (instant, offline); SNTP corrects it once the network
+  is up and writes the corrected value back. A device that has never had either
+  shows `--:--`, not `00:00` — a plausible wrong time is worse than an obviously
+  unset one, the same call §10.7 makes about `ts`.
+- **This is where the repo finally has to know about timezones.** §9.1 avoided
+  them by printing countdowns; a clock cannot. A POSIX `TZ` string in settings
+  (`MSK-3`, `CET-1CEST,M3.5.0,M10.5.0/3`), `setenv` + `tzset`, stored in NVS.
+  Not a timezone database, not a lookup by IP.
+- **A clock that cannot approve says so on the clock.** Unregistered, or the
+  boot self-test (§10.6) failed, or no bus — it is on this screen, in words, not
+  buried in settings. The device's whole value is that a glance at the desk tells
+  you the loop is alive.
+
+#### 10.8.3 Limits — the `status` document, when there is one
+
+A port of `approver-web`'s "model and limits plaque" onto the panel: the model
+name, `effort.level`, the `5h` and `7d` gauges with countdowns, `ctx`, and the
+`cwd` the session is in.
+
+- **It is a second subscription on the connection that is already open, it is
+  never answered, and the request path must not read it.** Same test
+  `approver-web` states: deleting this screen must leave a working responder. No
+  queue group (§10.5) — a broadcast current value is meant to reach everyone.
+- **"Connected" means a document arrived recently, and nothing more.** §9.7
+  publishes a current value with no stream: an idle session simply stops
+  publishing and there is nothing to catch up on. So the screen shows the
+  document's **age**, marks it `stale` past ~2 minutes (`approver-web`'s
+  threshold — keep them equal) instead of dropping the numbers, and says "no
+  session" only when it has never had one or the last is long dead. A stale
+  percentage is still the best available answer as long as it does not claim to
+  be current.
+- **The traffic light is §9.2's, not a new one.** A rate-limit window is green to
+  50 % spent and yellow to 80 %; the context window green to 20 % and yellow to
+  45 %. Three implementations of these two scales now exist (`render.rs`,
+  `statusline.ts`, this) — each pins them in a test, and they must not drift into
+  each other.
+- **The countdown depends on whose clock is trustworthy.** The document carries
+  both `resets_at` and the publisher's own resolution (`resets_in`,
+  `resets_in_text`) precisely for a subscriber that cannot trust its clock. So:
+  before SNTP has synced, display the published text and age it by the time since
+  arrival; after, recompute from `resets_at` like the plaque does. `countdown()`
+  is a port of `render.rs::countdown` and is tested against the same cases —
+  `1h59m`, `<1m`, `now`.
+- **One subject, every session.** Every Claude Code session on the machine
+  publishes to `status`, so this is whichever rendered last, not necessarily the
+  session whose request is on the card. Hence the `cwd` line — without it the
+  screen reads as belonging to the request.
+- Junk is dropped and the last good document stays: a payload that is not JSON,
+  or is missing `ts`/`line`, or carries a percentage that is not a number → one
+  log line, previous document kept. Percentages are clamped 0–100 a second time
+  here, because a bar drawn from someone else's `130` overflows its track.
+
+#### 10.8.4 Request — the screen the device exists for
+
+`tool_name`, `cwd`, the `tool_input` as the heaviest thing on the panel, a
+countdown, and two buttons.
+
+**The decision-surface rules from [`approver-web`](../approver-web/CLAUDE.md)
+"Look and feel" constraint 1 carry over unchanged, and they matter more here**,
+because this is a gadget and gadgets invite reflex taps:
+
+- Allow and Deny are the **same size and weight**, told apart by label and
+  position as well as by colour; neither is the quiet one you dismiss.
+- The `tool_input` outweighs both buttons. If the command does not fit it
+  **scrolls** — it is never truncated into something that reads as harmless, and
+  a card whose command has not been fully seen is exactly the card people approve
+  by reflex.
+- A prettier screen that makes Allow easier to hit is a worse screen.
+
+- **The countdown is the hook's, not the device's.** It must be ≥ the `timeout`
+  in `handler-config.json`, and reaching zero means the card disappears with **no
+  reply** — the §7 fail-safe, not a deny.
+- **More than one request can be pending.** `approver-web` lists them; a 480×480
+  panel shows one card at a time with `+2 waiting`, oldest first. Answering one
+  brings the next up instantly — which is precisely when the 300 ms guard of
+  §10.8.1 earns its place.
+- **Then it says what it sent.** `behavior` plus a short fingerprint of the
+  signature, for a beat, before returning to whatever was underneath — neither
+  the press nor the signature tells the operator what actually left the device.
+  `responder_yubikey.print_decision` (§8.7) exists for exactly this reason.
+
+#### 10.8.5 Settings
+
+One list, no cleverness:
+
+| Entry | What it holds |
+|-------|---------------|
+| Wi-Fi | → §10.8.6; shows the current SSID and RSSI |
+| Bus | the NATS URL — the host's LAN address per §10.3, no credentials to enter unless that bus ever gains auth. Editing it drops the connection and reconnects |
+| Key & registration | `key_id`, this device's public key, the pinned handler key (the strings §10.7 has the operator compare), the boot self-test result — and `forget`, which unpins both |
+| Display | brightness, idle-dim and blank timeouts |
+| Time | the `TZ` string and the SNTP server |
+| About | firmware version, chip and MAC, uptime, and the heap **low-water mark** rather than the current free heap (§10.14.1 — the minimum ever seen is the number that says whether the device is safe) |
+| Factory reset | wipes NVS: Wi-Fi, bus, registration. Two-step, and it says exactly what will be lost |
+
+`forget` and `Factory reset` are the only destructive entries, they are the only
+two that confirm, and they say what breaks: after either, `clients[key_id]` on
+the handler still names a key this device can no longer prove it has, and a new
+token is needed (§6).
+
+#### 10.8.6 Wi-Fi settings — the screen
+
+The front of §10.9: a list of what was found, sorted by signal, each with a lock
+glyph and RSSI; the remembered ones marked; tap to join, long-press to forget.
+A password goes in through the LVGL keyboard, with a show/hide toggle — a
+mistyped WPA key and an out-of-range AP look identical otherwise. `Other…`
+takes a hidden SSID by hand.
+
+Rules the screen has to keep because of what it is:
+
+- **The password is a secret from the moment it is typed.** It goes to NVS
+  encrypted (§10.9), it is never logged, and it never appears in a console dump
+  or a crash trace.
+- **Scanning while connected costs the connection a beat** — the radio has to
+  leave the channel. Do not scan on a timer, only when this screen is open; and
+  a request arriving mid-scan still preempts it (§10.8.1).
+- Joining is not blocking: the screen shows the state machine's state
+  (`connecting… / wrong password / no such network / connected`) rather than
+  freezing on a spinner with no way back.
+
+### 10.9 Wi-Fi — the manager behind that screen
+
+Everything else in this repository runs on a machine somebody already logged
+into. This device has to get onto a network by itself, keep itself there, and
+behave sanely when it cannot — and none of that may involve a laptop.
+
+**A state machine, owned by one task, driven by `esp_event`:**
+
+```
+NO_CREDENTIALS ──join──► CONNECTING ──got IP──► ONLINE ──disconnect──► RETRYING
+      ▲                      │                                             │
+      └──── forget ──────────┴────── auth fail / not found ────────────────┘
+```
+
+- `NO_CREDENTIALS` is a first-class state, not an error: fresh from the flasher,
+  the clock still runs and the Wi-Fi screen is what the device asks for.
+- `RETRYING` backs off — a few seconds, then tens, capped at a minute or so —
+  and **never becomes a tight loop**. A device retrying a dead AP ten times a
+  second is a device that heats up, drains a battery and floods the log.
+- An **auth failure is sticky and is reported**, not retried forever. Wrong
+  password and "the AP is out of range" are different problems and the screen
+  must not spell them the same way (`WIFI_EVENT_STA_DISCONNECTED` carries a
+  reason code — use it).
+- Only `ONLINE` releases the bus task. The NATS client waits on "got IP", and on
+  the way down it tears the socket rather than letting it hang on a dead route.
+
+**Storage.** Credentials live in **our** NVS namespace, in encrypted NVS
+(`nvs_keys` in the partition table, §10.12), not in the driver's own store: set
+`esp_wifi_set_storage(WIFI_STORAGE_RAM)` so there is exactly one record of what
+this device knows, in one place, under one encryption decision. Remember a small
+number of networks (four is plenty), try last-successful first — a desk device
+that moves between a home and an office is the entire use case; roaming between
+dozens is not.
+
+**What the radio can and cannot do**, because these are support questions, not
+bugs:
+
+- ESP32-C6 is **2.4 GHz only**. A 5 GHz-only SSID never appears in the scan. The
+  screen should say the band it scans rather than let the operator conclude the
+  network is broken.
+- WPA2 and WPA3-SAE personal, open networks, hidden SSIDs by manual entry.
+  **WPA2-Enterprise and captive-portal networks are out of scope** — a device
+  that cannot show a login page cannot join a network that demands one, and a
+  hotel Wi-Fi is not where this thing approves `rm -rf`.
+- A weak signal is not a failure state. Show RSSI and let the operator decide;
+  reconnect logic must not treat a marginal link as a reason to forget anything.
+
+**Why the screen and not `wifi_provisioning`.** ESP-IDF ships SoftAP/BLE
+provisioning with a phone app on the other end, and it is the right answer for a
+headless sensor. This board has a 480×480 touchscreen: pulling a phone, an app
+and a second radio into onboarding would be more moving parts to reach a worse
+result. The cost is honest — typing a 30-character WPA key on a touchscreen is
+unpleasant, exactly once per network — and it is the reason the keyboard gets a
+show-password toggle instead of a policy against showing it.
+
+**The registration token still comes over USB** (§10.7). It is ~50 characters of
+base64 that must be transcribed exactly, it is minted on the host anyway, and a
+typo in it fails in a way that looks like a protocol problem. Wi-Fi is typed once
+and confirmed by the device joining; a token is pasted once and confirmed by the
+handler's signature.
+
+### 10.10 Rules this firmware inherits (do not soften them)
+
+- **No reply is the safe outcome.** No press, an expired card, a failed
+  signature, a dropped socket, a panic — all end in silence, the hook times out,
+  and Claude Code asks in its own terminal (§7). Never invent a verdict, never
+  answer on a timer, and there is no "skip" button because skipping is not
+  pressing anything.
+- **Never a silent allow.** The only path to `allow` is a human press on a card
+  that is on the screen.
+- **Untrusted input, always.** Everything off `approvals.*` is attacker-shaped:
+  a 4 MB payload, a `tool_name` with no terminator, a `cwd` full of control
+  characters, missing fields, duplicate keys. Bound every buffer, validate before
+  use, drop with one log line. A responder that reboots on a malformed message is
+  a denial of service against the person trying to work.
+- **`key_type` is pinned by the allowlist**, not by anything the device sends.
+- **A hung UI must not answer stale requests.** If the reply-to's connection is
+  gone or the card outlived its TTL, discard it rather than publishing into a
+  dead inbox.
+- **Failure is visible.** The status line's dot (§9.8) is the model: the operator
+  must be able to distinguish "quiet because nothing is being asked" from
+  "quiet because I am not connected".
+
+### 10.11 Tests
+
+Root §1's TDD rule applies here as it does to pytest, Rust and the Node half.
+Three tiers, and the first one is where nearly everything belongs:
+
+1. **Host tier — no board.** ESP-IDF builds for the `linux` target, so the pure
+   logic runs under Unity on the development machine: the signing-bytes
+   assembly, the reply builder, payload validation (not JSON, fields missing,
+   values out of range, a `MSG` with no reply-to), the base64 helpers, the
+   `int64` `ts` round-trip, and the NVS-shaped config with every field missing.
+   The frame-level parser is no longer ours — it moved into
+   `debsahu/espidf-nats` with §10.4's decision, so firing truncated and
+   oversized frames at it is a device-tier job (§10.5). The **I²C lease** of
+   §10.14.3 lands here instead, against its fake backend: contention between two
+   holders, an acquire that times out, a recovery after a stuck slave — the
+   library layer has no protocol in it (§10.14.2), which is exactly what makes
+   it runnable on the host. This is the tier that has to be comprehensive,
+   because it is the one that runs on every change.
+
+   Three things the screens add to it, all of them logic rather than pixels:
+   **the navigation state machine** (a request preempts every screen; it cannot
+   be dismissed; what was underneath comes back with its state — §10.8.1), **the
+   Wi-Fi state machine** (backoff bounded, auth failure sticky and distinct from
+   "not found", `forget` returning to `NO_CREDENTIALS` — §10.9), and **the
+   limits screen's arithmetic**: `countdown()` against `render.rs`'s cases, the
+   staleness threshold, and the §9.2 gauge scales pinned exactly as `render.rs`
+   and `statusline.ts` pin them, including the assertion that the two scales
+   cannot drift into each other.
+2. **Cross-language parity vectors**, mirroring what `approver-web` does with
+   `protocol.test.ts`: fixtures generated by the Python implementation itself and
+   compiled into the host tests, so "does the device still speak §7?" is a
+   question a test answers.
+
+   ```powershell
+   py -c "import sys; sys.path.insert(0, r'E:\projects\ai-remote'); from approver import protocol as p; print(p.signing_bytes(v=1, session_id='abc123', nonce='n', tool_name='Bash', input_sha256='0'*64, behavior='allow', updated_input_sha256='', ts=1737345600, reason=''))"
+   ```
+
+   Include a `registration_reply_signing_bytes` vector and an Ed25519 key pair
+   with a known signature — the latter is what the boot self-test of §10.6
+   consumes, so the vector has one job on the host and one on the device.
+3. **Device tier — opt-in, like §8.6's touch tests.** A board, a real bus, and a
+   real `hook.py`: the acceptance test is a device-signed reply that
+   `hook.verify_reply` returns `trusted=True` for, plus the same reply with
+   `behavior` flipped being rejected. It must never run as part of a bare
+   `py -m pytest`, and it should be reachable as one command from `scripts/`, in
+   the style of `e2e-approval.cmd`.
+
+### 10.12 Build and flash (Windows)
+
+```powershell
+# once: ESP-IDF v5.5.2 installed, then in an IDF-enabled shell
+idf.py set-target esp32c6
+idf.py build
+idf.py -p COM7 flash monitor      # Ctrl+] to leave the monitor
+```
+
+Notes that will otherwise be rediscovered the hard way:
+
+- **The port is the USB Serial/JTAG device**, and it is the same port
+  `esp_console` serves the §10.7 commands on — the monitor and a manual `register`
+  cannot both hold it.
+- **16 MB of flash, and a partition table that says so.** The default table
+  assumes 2 MB or 4 MB; LVGL plus Wi-Fi plus TLS will not fit it. Plan for a
+  custom `partitions.csv` with `nvs`, `nvs_keys` (encrypted NVS), and two OTA
+  slots if OTA is ever wanted — deciding that after the first `nvs` layout ships
+  means re-registering the device.
+- **Flash encryption and Secure Boot are what make §10.6's fallback meaningful**
+  and they are one-way operations on real hardware. Read Espressif's docs
+  before burning anything, and keep a development board that has not been
+  through it.
+- `idf.py size-components` is how you find out what the dependency decisions of
+  §10.4 actually cost; record the numbers when they are taken.
+
+#### 10.12.1 The LVGL preview — screens before there is a board
+
+`lvgl-mcp-server` ([jaklys/Lvgl-mcp-esp32](https://github.com/jaklys/Lvgl-mcp-esp32),
+npm, v2.0.0) is an MCP server that compiles an LVGL snippet against a headless
+desktop build of LVGL and hands back a PNG plus a JSON widget tree —
+`lvgl_render`, `lvgl_render_full`, `lvgl_inspect`, `lvgl_set_resolution`. It is
+how the five screens of §10.8 get drawn and argued about while §10.13's build
+order still has the request card at step 1. **A host-side design tool, not a
+dependency**: nothing in `main/` links against it, and it does not enter §10.4's
+list.
+
+It is registered project-wide in [`../.mcp.json`](../.mcp.json) — project scope,
+so Claude Code asks to approve it once per machine (`/mcp`). Three things there
+are deliberate and will look arbitrary later:
+
+- **The command points at the global install, not `npx`.** `npx` resolves a
+  second copy into its own cache, and that copy re-runs the postinstall that
+  fails below.
+- **`VCVARSALL_PATH` is set by hand.** Rendering *compiles* the snippet with the
+  host MSVC, and the server's autodetect only scans `Microsoft Visual
+  Studio\{2019,2022}\…`; this machine has `\18\BuildTools`. Without it every
+  render dies on `CMAKE_C_COMPILER: cl … not found in the PATH`.
+- **`NINJA_PATH` borrows ESP-IDF's ninja** (`C:\Espressif\tools\ninja\1.12.1`),
+  because nothing puts one on PATH otherwise. `cmake` from PATH is fine.
+
+**The install has a silent failure worth writing down.** The postinstall pulls a
+106 MB release archive and unpacks it with PowerShell `Expand-Archive` under a
+60-second timeout — on this box it times out, catches its own error and exits
+**0**, so `npm install` reports success. The symptom is a package with no
+`simulator/` directory, a leftover `.zip` and `_release_tmp/` beside it, and
+every render failing later for reasons that have nothing to do with the code.
+Unpack the archive by hand and move `simulator/` to the package root; the
+binary that has to exist is `simulator/build/lvgl_sim.exe`.
+
+Two rules about believing what it shows:
+
+- **Set 480×480 first** (`lvgl_set_resolution`, or the per-call `width`/
+  `height`) — the default is 800×480, and a layout designed at the wrong size is
+  worse than no preview at all.
+- **It proves the layout and nothing else.** The simulator has a desktop's RAM,
+  no CO5300 and no CST9220: it says nothing about the partial buffers of §10.1,
+  flush timing, the colour path or touch. A card that looks right here can still
+  be too heavy for 512 KB. And the preview only stays honest while the
+  simulator's LVGL and the firmware's are the same minor version (it ships 9.5)
+  — when §10.4's LVGL gets pinned, pin it against this one.
+
+### 10.13 Not in scope, but decided
+
+- **Build it in this order** — after the library layer of §10.14, which comes
+  before all of it. The screens themselves are not equally load-bearing:
+  1. bus + registration + the **request** screen (§10.8.4) — the loop closes here,
+     and until it does the rest is decoration;
+  2. **Wi-Fi** (§10.9) and its screen — until then, credentials compiled in or set
+     over the console;
+  3. **clock** (§10.8.2) and **settings** (§10.8.5);
+  4. **limits** (§10.8.3) — last, because it is the only screen whose removal
+     leaves everything else working, which is also the test that it stayed a
+     readout.
+- **No authentication on the device.** Whoever can reach the screen can approve
+  and have it signed — the key is bound to the chip, not to a person. Identical to
+  `approver-web`'s position, and acceptable for the same reason (a single-operator
+  tool on a desk) until it isn't.
+- **Battery and sleep are a later question.** Light sleep with a socket open, or
+  waking on Wi-Fi, changes the "is it connected" story (§10.8.1) and should not
+  be designed around before the wired-and-plugged version works. Note what it
+  collides with: a screen that blanks is fine, a *radio* that sleeps means
+  requests arrive late or not at all — and a responder that is asleep is a
+  responder that times out.
+- **Of the rest of the board, three parts have a job and the others do not.**
+  The PCF85063 keeps the clock (§10.8.2), the AXP2101 reports charge, and the
+  codec plays the one chirp (§10.8.1). The IMU, the microphones and the TF slot
+  do not: they are on the board, which is not a reason to use them. In
+  particular, **no gesture ever approves anything** — a wrist-flick verdict is
+  precisely the reflex §10.8.4 is built to prevent.
+
+### 10.14 How it is written — the language, and the layer that comes first
+
+#### 10.14.1 C++, C only where forced, and no heap
+
+**The firmware is C++.** C is not the default and not the fallback of habit; it
+is what a specific spot forces. The places that force it are few and knowable:
+anything that must present a C ABI to ESP-IDF or to a C component, `extern "C"`
+entry points (`app_main`, event and ISR handlers registered with IDF), and
+headers meant to be included from C. Everything else — the drivers of §10.14.2,
+the bus task, the screens' glue, the protocol assembly of §10.2 — is C++.
+
+This is also what makes §10.4's dependencies fit rather than fight:
+`debsahu/espidf-nats` is header-only **C++** and now needs no wrapper for
+language reasons; LVGL, libsodium and IDF itself are C with `extern "C"` in
+their own headers, which is all that is needed to call them.
+
+The dialect is the embedded one, and the constraints are not stylistic:
+
+- **No exceptions, no RTTI** — off by default in ESP-IDF and staying off.
+  Errors are return values (`esp_err_t` at the IDF boundary, a small result type
+  above it), which is also what §10.10's "no reply is the safe outcome" needs:
+  every failure path has to be a value someone decided about, not a stack unwind.
+- **No dynamic memory** — the rule below, and the one that shapes the most code.
+- **RAII is the point, not decoration.** A lease that releases itself on every
+  return path (§10.14.3), a lock that cannot be forgotten, a socket that closes
+  when its owner dies. This is most of why the language is worth having here —
+  and note that RAII here manages *ownership of a resource*, never a lifetime of
+  memory.
+- Compile-time over run-time where it is free: `constexpr` sizes, `enum class`
+  for states (the machines of §10.8.1 and §10.9), `static_assert` on the wire
+  constants of §10.2.
+
+**No heap: everything is allocated statically and lives forever.** 512 KB of
+SRAM shared with lwIP, Wi-Fi and TLS, and no way to add PSRAM (§10.1) — so our
+code has no `new`, no `delete`, no `malloc`, and — with the one named exception
+below — nothing that grows. Objects are constructed once, at file or class
+scope, and stay for the life of the device. Almost nothing has an allocation
+failure to handle because almost nothing allocates, and a device meant to sit on
+a desk for months does not accumulate fragmentation.
+
+What that means in practice, including the parts that are not obvious:
+
+- **No `std::vector`, no `std::function`.** `char[N]` with an explicit length,
+  fixed arrays, spans over them, and plain function pointers with a
+  `void* user_data` — which is the shape LVGL and IDF callbacks want anyway. And
+  **no fixed-container library**: pulling in `etl` or similar would be a new
+  dependency under root §1, and a handful of small containers written here is
+  cheaper than that conversation.
+- **`std::string` is allowed where it earns it** — the one named exception, and
+  it is a real one: `debsahu/espidf-nats` is a C++ API, and text that arrives as
+  a `std::string` is not worth copying into a `char[N]` to satisfy a rule. Use
+  it, knowing what it does: libstdc++ keeps up to **15 characters inline** and
+  goes to the heap past that, and every append can reallocate. So —
+  - fine in setup and one-shot paths: parsing a config, the registration
+    exchange (§10.7), console commands, building a URL;
+  - **not** in an ISR, not in the LVGL frame path, and not as the long-lived
+    home of something a fixed buffer already holds — a `tool_input` bounded by
+    §10.10 belongs in the buffer that bounds it;
+  - pass `const std::string&` or `std::string_view`, never by value, and
+    `reserve()` once if it will grow;
+  - "objects live forever" is unchanged by this: a static object holding a
+    `std::string` still takes its buffer from the heap the first time it grows.
+    The low-water heap mark below is what tells you whether that mattered.
+- **FreeRTOS objects are static too** — `xTaskCreateStatic`, `StaticQueue_t`,
+  `StaticSemaphore_t`, with the stacks and storage as arrays. The dynamic
+  variants take from the heap, which is the thing we are trying not to depend
+  on.
+- **Constructors run before `app_main` and before any driver exists.** A static
+  object whose constructor touches I²C, NVS or the network is a boot crash with
+  a stack trace that names the wrong thing. Two phases: a trivial constructor,
+  then an `init()` that may fail and returns a value. And because the relative
+  order of static constructors across translation units is undefined, the
+  `init()` calls are made from `app_main` in an order that is written down.
+- **Fixed capacity makes "full" a state that must be designed**, not an error to
+  report later. The pending-request queue of §10.8.4 ("+2 waiting") is N slots;
+  request payloads have a maximum size, which §10.10 requires regardless because
+  the input is untrusted. Over capacity → drop with one log line and no reply,
+  which is already the fail-safe (§10.10), never a reallocation.
+- **The libraries still allocate, and that is the part to watch.** lwIP, the
+  Wi-Fi stack, mbedTLS, libsodium and `debsahu/espidf-nats` all use the heap;
+  this rule binds our code, not theirs. What our code owes them is headroom:
+  don't hold large buffers they will need, and treat
+  `heap_caps_get_minimum_free_size()` — the low-water mark, not the current
+  free heap — as the number that says whether the device is safe. §10.8.5's
+  About screen shows free heap; it should show that one.
+- **LVGL is the one exception, and it is bounded on purpose.** LVGL objects come
+  from its own pool, sized once in `lv_conf.h`. So: build every screen at boot
+  and keep it, never create and delete widgets per navigation — which is what
+  §10.8.1 already requires when it says what was underneath comes back with its
+  scroll position and its half-typed password intact. A screen that is rebuilt
+  is a screen that lost its state and touched the allocator to do it.
+- **The numbers are recorded, not assumed.** `idf.py size-components` (§10.12)
+  for static footprint, and the low-water heap mark under load — a request
+  arriving during a Wi-Fi scan with the codec running is the worst case worth
+  measuring.
+
+#### 10.14.2 The library layer comes first, and knows nothing about approvals
+
+Two layers, built in this order, and the order is the design:
+
+1. **The library layer** — the board and the outside world as small,
+   self-contained services: the I²C bus (below) and the chips on it (touch, RTC,
+   PMIC, codec), the display transport, NVS-backed settings, Wi-Fi (§10.9), the
+   NATS link (§10.5), crypto (§10.6). Each one is usable, and testable, without
+   the rest.
+2. **The logic** — the §7 flow, the screens of §10.8, registration (§10.7).
+
+**Nothing in the library layer may know what an approval is.** No `key_id`, no
+`behavior`, no `tool_input` below the line: the I²C driver does not know that a
+touch will become a verdict. This is the same split the Python half already
+has — `lib/` versus `approver/` in root §2 — and it is what lets the host tier
+of §10.11 be the comprehensive one: a layer with no protocol in it is a layer
+that runs under Unity on the `linux` target with a fake backend underneath.
+
+#### 10.14.3 The I²C bus is shared, so it is leased
+
+Five of the board's chips hang off one I²C bus (§10.1): CST9220 touch, PCF85063
+RTC, AXP2101 PMIC, QMI8658 IMU, and the ES8311/ES7210 codecs. Several tasks want
+them at once — LVGL polls touch every frame, a slow timer reads the clock and
+the charge, the codec gets configured for a chirp — on **one core** and one set
+of wires. So there is exactly one owner of the bus, and everything else borrows
+it:
+
+**acquire → work → release.** Nobody calls `i2c_master_*` outside this library;
+every driver takes a lease first. In C++ that lease is a scope guard, so
+"release" is not a line anyone can forget to write (§10.14.1).
+
+- **A lease exists to make a *sequence* atomic**, not a single transfer. One
+  transaction needs no help; a read-modify-write on the PMIC, or a touch
+  controller's register-select followed by a burst read, must not have another
+  task's transfer land in the middle. That is the whole reason this is a lease
+  and not a wrapper.
+- **Acquire with a timeout, and a failure is a logged skip — never a block.**
+  A wedged codec must not freeze touch, and a task waiting forever on a bus is a
+  watchdog panic with a confusing name. The caller decides what a miss means:
+  for the clock, use the last value; for touch, drop the frame's read.
+- **Hold it briefly.** Nothing sleeps, retries a network, or draws while holding
+  the bus. A lease held across an LVGL flush is a bug even when it works.
+- **Recovery belongs to the owner.** A slave holding SDA low is a known I²C
+  failure with a known fix (clock out until it lets go, then re-init); it is
+  handled once, in the bus, with a bounded number of attempts and one log line —
+  not five times in five drivers.
+- **The speed is the bus's, not a driver's.** One clock, chosen as the minimum
+  the slowest chip on the wire tolerates, set by the owner at init. A driver
+  that "needs 400 kHz" is a conversation about the whole bus.
+- **It is fake-able, and that is a requirement.** The backend is an interface
+  with two implementations: the IDF driver, and a host-side fake that records
+  transfers and can be told to time out or NACK. Without it, the lease
+  semantics — contention, timeout, recovery — are only testable on hardware,
+  and §10.11 says that tier is the opt-in one.
