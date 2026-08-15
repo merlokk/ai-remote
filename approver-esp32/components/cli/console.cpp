@@ -141,6 +141,12 @@ int CmdPower(int, char **) {
 
     printf("system     %u mV\n", static_cast<unsigned>(s.system_mv));
     printf("die temp   %.1f C\n", static_cast<double>(s.die_celsius));
+    // The two rails that are not decoration: ALDO3 resets the panel, ALDO2
+    // powers the amplifier (§10.1). Both start off.
+    printf("rails      dc1 %u mV | aldo2 (audio) %u mV %s | aldo3 (panel) %u mV %s\n",
+           static_cast<unsigned>(s.dc1_mv), static_cast<unsigned>(s.aldo2_mv),
+           s.aldo2_enabled ? "on" : "off", static_cast<unsigned>(s.aldo3_mv),
+           s.aldo3_enabled ? "on" : "off");
     return 0;
 }
 

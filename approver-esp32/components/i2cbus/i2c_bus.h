@@ -33,10 +33,13 @@
 
 namespace i2cbus {
 
-// The speed is the bus's, not a driver's (§10.14.3): one clock, the slowest
-// chip on the wire decides it. 400 kHz is what every chip on this board
-// tolerates; a driver that "needs" something else is a conversation about the
-// whole bus.
+// The default clock. **Speed is per device**, not one number for the wire:
+// `driver/i2c_master.h` puts `scl_speed_hz` in the *device* config, and the
+// vendor's own driver for this board talks to the AXP2101 at 100 kHz while
+// nothing else has to slow down for it. §10.14.3 used to say the opposite; it
+// now says this, and the argument is recorded there.
+//
+// A device that says nothing gets this.
 inline constexpr uint32_t kClockHz = 400000;
 
 // Long enough that a slow chip finishes, short enough that a wedged one does
@@ -93,6 +96,11 @@ class Bus {
     esp_err_t Init(gpio_num_t scl, gpio_num_t sda, uint32_t clock_hz = kClockHz);
     bool Ready() const { return handle_ != nullptr; }
 
+    // Declares the clock a particular chip is talked to at. Call it before the
+    // first transfer to that address — and **not** while holding a lease, since
+    // it takes the bus itself. A chip that never calls this runs at kClockHz.
+    esp_err_t AddDevice(uint8_t address, uint32_t clock_hz);
+
     Lease Acquire(uint32_t timeout_ms = kDefaultAcquireMs);
 
     // A slave holding SDA low is a known failure with a known fix: clock it out
@@ -105,11 +113,13 @@ class Bus {
 
     void Release();
     esp_err_t DeviceFor(uint8_t address, i2c_master_dev_handle_t *out);
+    esp_err_t OpenDevice(uint8_t address, uint32_t clock_hz, i2c_master_dev_handle_t *out);
     void ForgetDevices();
 
     struct DeviceSlot {
         uint8_t address;
         bool used;
+        uint32_t clock_hz;
         i2c_master_dev_handle_t handle;
     };
 

@@ -39,7 +39,7 @@ the repository owner's sign-off say so.
 | The pin map — `components/boards/board.h` (§10.1) | **written**, from Waveshare's own pinout sheet in `docs/`; logged at boot. Nothing drives a pin yet |
 | SPIFFS mounted + the console — `components/storage`, `components/cli` (§10.7, §10.15) | **running on hardware**: flashed over COM4, `status`, `power` and `cat` answer on the USB Serial/JTAG port |
 | The leased I²C bus — `components/i2cbus` (§10.14.3) | **written and running**: lease, timeout-not-block, per-address device table, bus recovery. The fake backend the host tests need is still owed (§10.11) |
-| AXP2101 — `components/pmic`, brought up from `board::Init()` (§10.1, §10.13) | **reading on hardware**: charge state, VBUS, battery mV and %, system rail, die temperature |
+| AXP2101 — `components/pmic`, brought up from `board::Init()` (§10.1, §10.13) | **configured and reading on hardware**: TS pin silenced, ADC channels, VBUS limit, rail voltages, charge currents — all cross-checked against the vendor's `pmicpower` component — plus `SetAldo2`/`SetAldo3` for the audio and panel rails |
 | The language and the layering (§10.14) — C++ except where C is forced, no dynamic memory, library layer before logic, the I²C bus leased | **decided**, nothing written yet |
 | The ESP-IDF dependency set (§10.4) — LVGL + `esp_lvgl_port`, the CO5300/CST9220 drivers, libsodium for Ed25519, `debsahu/espidf-nats` for the bus | **signed off** (root §1); exact versions pinned when the first build resolves them |
 | The LVGL host preview (§10.12.1) | installed and rendering — the only part of this folder that runs today |
@@ -100,6 +100,16 @@ and RTC interrupts, and the driver init sequences the sheet cannot carry:
   `src/XPowersAXP2101.tpp`), and `components/pmic` cites them line by line
   rather than trusting anyone's memory. It is a source to read, not a
   dependency to add: nothing links against it.
+- **`02_Example/ESP-IDF-v5.5.3/…/components/pmicpower`** — what the vendor
+  actually *configures* on this board, which is a different question from what
+  the registers mean. Reading it after the fact found four things missing from
+  a driver that already worked: the TS pin left measuring (XPowersLib silences
+  it inside `begin()`, and its own comment says the pin "will affect the
+  charger"), the charge currents left at power-on defaults rather than this
+  battery's 50/500/50 mA, the VBUS limit left below 2 A, and the rails never
+  written to 3.3 V. **A driver that returns plausible numbers is not a driver
+  that is configured** — the vendor's init sequence is worth diffing against
+  even when nothing looks broken.
 - The datasheets in `docs/` — CO5300, CST9220's family, AXP2101, PCF85063,
   QMI8658C, ES8311, and the C6 technical reference manual. I²C addresses are
   theirs, not `board.h`'s: they belong with each chip's driver (§10.14.2).
@@ -1091,9 +1101,17 @@ every driver takes a lease first. In C++ that lease is a scope guard, so
   failure with a known fix (clock out until it lets go, then re-init); it is
   handled once, in the bus, with a bounded number of attempts and one log line —
   not five times in five drivers.
-- **The speed is the bus's, not a driver's.** One clock, chosen as the minimum
-  the slowest chip on the wire tolerates, set by the owner at init. A driver
-  that "needs 400 kHz" is a conversation about the whole bus.
+- **The speed is per device, and this reverses what this section used to say.**
+  The old rule was one clock for the wire, the minimum the slowest chip
+  tolerates — which is the right rule for the legacy driver, where the clock is
+  a property of the port. `driver/i2c_master.h` puts `scl_speed_hz` in the
+  **device** config, so a slow chip costs only its own transfers. The vendor's
+  driver for this board proves the case: it opens the AXP2101 at 100 kHz while
+  nothing else has to come down with it. So: the bus has a default (400 kHz),
+  a driver declares its own with `Bus::AddDevice(address, hz)` if it needs to,
+  and the owner is still the only one who opens a device. What has not changed
+  is that a driver does not get to reconfigure *the bus* — the thing it may
+  pick is its own line rate.
 - **It is fake-able, and that is a requirement.** The backend is an interface
   with two implementations: the IDF driver, and a host-side fake that records
   transfers and can be told to time out or NACK. Without it, the lease

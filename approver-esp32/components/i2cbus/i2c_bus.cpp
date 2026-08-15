@@ -86,14 +86,8 @@ Lease Bus::Acquire(uint32_t timeout_ms) {
 
 void Bus::Release() { xSemaphoreGive(mutex_); }
 
-esp_err_t Bus::DeviceFor(uint8_t address, i2c_master_dev_handle_t *out) {
-    for (DeviceSlot &slot : devices_) {
-        if (slot.used && slot.address == address) {
-            *out = slot.handle;
-            return ESP_OK;
-        }
-    }
-
+esp_err_t Bus::OpenDevice(uint8_t address, uint32_t clock_hz,
+                          i2c_master_dev_handle_t *out) {
     for (DeviceSlot &slot : devices_) {
         if (slot.used) {
             continue;
@@ -101,7 +95,7 @@ esp_err_t Bus::DeviceFor(uint8_t address, i2c_master_dev_handle_t *out) {
         const i2c_device_config_t config = {
             .dev_addr_length = I2C_ADDR_BIT_LEN_7,
             .device_address = address,
-            .scl_speed_hz = kClockHz,
+            .scl_speed_hz = clock_hz,
             .scl_wait_us = 0,
             .flags = {.disable_ack_check = false},
         };
@@ -110,8 +104,11 @@ esp_err_t Bus::DeviceFor(uint8_t address, i2c_master_dev_handle_t *out) {
             return err;
         }
         slot.address = address;
+        slot.clock_hz = clock_hz;
         slot.used = true;
-        *out = slot.handle;
+        if (out != nullptr) {
+            *out = slot.handle;
+        }
         return ESP_OK;
     }
 
@@ -119,6 +116,49 @@ esp_err_t Bus::DeviceFor(uint8_t address, i2c_master_dev_handle_t *out) {
     // (§10.14.1). Five chips, eight slots — this is a wiring mistake, not load.
     ESP_LOGE(TAG, "no slot left for 0x%02x", address);
     return ESP_ERR_NO_MEM;
+}
+
+esp_err_t Bus::AddDevice(uint8_t address, uint32_t clock_hz) {
+    if (handle_ == nullptr) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    auto lease = Acquire();
+    if (!lease) {
+        return ESP_ERR_TIMEOUT;
+    }
+
+    for (DeviceSlot &slot : devices_) {
+        if (!slot.used || slot.address != address) {
+            continue;
+        }
+        if (slot.clock_hz == clock_hz) {
+            return ESP_OK;
+        }
+        // Already open at another speed: the handle carries the clock, so it
+        // has to be reopened rather than adjusted.
+        i2c_master_bus_rm_device(slot.handle);
+        slot.used = false;
+        slot.handle = nullptr;
+        break;
+    }
+
+    const esp_err_t err = OpenDevice(address, clock_hz, nullptr);
+    if (err == ESP_OK && clock_hz != kClockHz) {
+        ESP_LOGI(TAG, "0x%02x runs at %" PRIu32 " Hz, not the bus default", address,
+                 clock_hz);
+    }
+    return err;
+}
+
+esp_err_t Bus::DeviceFor(uint8_t address, i2c_master_dev_handle_t *out) {
+    for (DeviceSlot &slot : devices_) {
+        if (slot.used && slot.address == address) {
+            *out = slot.handle;
+            return ESP_OK;
+        }
+    }
+    return OpenDevice(address, clock_hz_, out);
 }
 
 void Bus::ForgetDevices() {

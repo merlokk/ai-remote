@@ -24,6 +24,66 @@ namespace pmic {
 inline constexpr uint8_t kAddress = 0x34;
 inline constexpr uint8_t kChipId = 0x4A;
 
+// The vendor's driver opens this chip at 100 kHz while the rest of the bus runs
+// faster. Kept because they chose it deliberately for this board, and because
+// the per-device clock costs nothing (§10.14.3).
+inline constexpr uint32_t kClockHz = 100000;
+
+// The register field values, with the numbers XPowersLib's enums resolve to.
+// `ChargeCurrent` is the one worth staring at: it is not a dense enum — it
+// jumps from 0 mA at 0 straight to 100 mA at 4.
+enum class VbusCurrentLimit : uint8_t {
+    k100mA = 0,
+    k500mA = 1,
+    k900mA = 2,
+    k1000mA = 3,
+    k1500mA = 4,
+    k2000mA = 5,
+};
+
+enum class PrechargeCurrent : uint8_t {
+    k0mA = 0,
+    k25mA = 1,
+    k50mA = 2,
+    k75mA = 3,
+};
+
+enum class ChargeCurrent : uint8_t {
+    k0mA = 0,
+    k100mA = 4,
+    k125mA = 5,
+    k150mA = 6,
+    k175mA = 7,
+    k200mA = 8,
+    k300mA = 9,
+    k400mA = 10,
+    k500mA = 11,
+    k600mA = 12,
+    k700mA = 13,
+    k800mA = 14,
+    k900mA = 15,
+    k1000mA = 16,
+};
+
+enum class TerminationCurrent : uint8_t {
+    k0mA = 0,
+    k25mA = 1,
+    k50mA = 2,
+    k75mA = 3,
+    k100mA = 4,
+};
+
+// What `Init` writes. The defaults are Waveshare's for this board, from
+// `Custom_PmicRegisterInit()` in their `pmicpower` component — not this
+// author's judgement about someone else's battery.
+struct Config {
+    uint16_t rail_mv = 3300;  // DC1 and ALDO1..4, written only if they differ
+    VbusCurrentLimit vbus_limit = VbusCurrentLimit::k2000mA;
+    PrechargeCurrent precharge = PrechargeCurrent::k50mA;
+    ChargeCurrent charge = ChargeCurrent::k500mA;
+    TerminationCurrent termination = TerminationCurrent::k50mA;
+};
+
 // The low three bits of STATUS2. The raw code is kept in `Status` next to the
 // name so a wrong label is visible rather than believed.
 enum class ChargeState : uint8_t {
@@ -46,6 +106,11 @@ struct Status {
     uint16_t system_mv;
     float die_celsius;
     int battery_percent;  // -1 when there is no battery to ask about
+    bool aldo2_enabled;   // the audio amplifier's rail (§10.1)
+    bool aldo3_enabled;   // the panel's reset rail (§10.1)
+    uint16_t dc1_mv;      // the C6's own supply
+    uint16_t aldo2_mv;
+    uint16_t aldo3_mv;
 };
 
 class Axp2101 {
@@ -54,9 +119,10 @@ class Axp2101 {
     Axp2101(const Axp2101 &) = delete;
     Axp2101 &operator=(const Axp2101 &) = delete;
 
-    // Identifies the chip and turns on the ADC channels this firmware reads.
-    // Trivial constructor, separate Init (§10.14.1).
-    esp_err_t Init(i2cbus::Bus &bus);
+    // Identifies the chip, silences the TS pin, turns on the ADC channels this
+    // firmware reads, and applies `Config`. Trivial constructor, separate Init
+    // (§10.14.1). All of it happens under one lease.
+    esp_err_t Init(i2cbus::Bus &bus, const Config &config = Config{});
 
     bool Present() const { return present_; }
 
@@ -65,9 +131,18 @@ class Axp2101 {
     // is for).
     esp_err_t Read(Status *out);
 
+    // ALDO3 is the panel's reset rail and ALDO2 the audio amplifier's (§10.1) —
+    // which is why this driver has to exist before the display does. `Init`
+    // sets their voltage and deliberately leaves them **off**: whoever owns the
+    // panel or the codec turns its own rail on.
+    esp_err_t SetAldo2(bool on);
+    esp_err_t SetAldo3(bool on);
+
     static const char *ChargeStateName(uint8_t code);
 
    private:
+    esp_err_t SetRail(uint8_t bit, bool on, const char *name);
+
     i2cbus::Bus *bus_ = nullptr;
     bool present_ = false;
 };

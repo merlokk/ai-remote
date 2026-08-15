@@ -180,6 +180,18 @@ s.close()
 Nothing else may hold the port while this runs — a monitor left open in another
 window is the usual reason it returns silence.
 
+**A killed `idf.py monitor` leaves orphans holding COM4.** Timing one out (or
+Ctrl-C'ing the wrapper) can leave `idf.py`, `idf_monitor.py` and
+`esp_idf_monitor` processes alive, and the next flash fails with *"Could not
+open COM4, the port is busy"*. Find and clear them:
+
+```powershell
+Get-CimInstance Win32_Process |
+  Where-Object { $_.Name -match 'python' -and $_.CommandLine -match 'monitor' } |
+  Select-Object ProcessId, CommandLine
+Stop-Process -Id <ids> -Force
+```
+
 The token comes from the host, minted by the handler:
 
 ```powershell
