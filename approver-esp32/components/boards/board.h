@@ -22,9 +22,11 @@
 #include "driver/gpio.h"
 #include "esp_err.h"
 #include "i2c_bus.h"
+#include "panel.h"
 #include "pcf85063.h"
 #include "qmi8658.h"
 #include "speaker.h"
+#include "touch.h"
 
 namespace board {
 
@@ -193,5 +195,21 @@ bool ImuInterrupt2();
 // `namespace board`.
 ::audio::Es8311 &Codec();
 ::audio::Speaker &Sound();
+
+// The panel and the glass in front of it. `Init` brings both up: the QSPI bus,
+// the CO5300's init sequence with its reset — which is the PMIC's ALDO3 rail
+// (§10.1), and therefore the reason the display cannot come up before the
+// AXP2101 does — and the CST9220 on the I²C bus.
+//
+// **What is *not* here is LVGL.** `board` hands out hardware; registering a
+// display with LVGL and choosing what its task's stack and priority are is an
+// application decision, so `main` does it (§10.14.2). And nothing at this level
+// knows what a screen is — the five of §10.8 live above all of this.
+//
+// The `::` is the shadowing guard `Imu()` and `Codec()` need for the same
+// reason: `board::display` and `board::touch` above are this file's namespaces
+// of pins, and inside `namespace board` they hide the drivers completely.
+::display::Panel &Display();
+::display::Touch &Touch();
 
 }  // namespace board

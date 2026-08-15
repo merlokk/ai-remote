@@ -21,3 +21,31 @@ CONFIG_COMPILER_CXX_RTTI=n
 # Serial/JTAG, which is what the board's USB-C is wired to. There is no UART
 # bridge on this board, so leaving the default UART console means a silent port.
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+# --- LVGL (§10.8, §10.14.1) -------------------------------------------------
+# A 1 kHz tick, which is what the LVGL port's timer and the animations below it
+# assume. The IDF default is 100 Hz, and at that rate a 5 ms `lv_timer_handler`
+# period is a 10 ms one — visible as stutter, and the vendor's example sets this
+# for the same reason.
+CONFIG_FREERTOS_HZ=1000
+
+# **LVGL's own pool, and this is the one allocator §10.14.1 allows.** Every
+# widget comes out of it, it is sized once here, and it does not grow. 64 KB of
+# the C6's 512 KB is the vendor's number for this panel; the five screens of
+# §10.8 are built once at boot and kept, so this is a ceiling rather than a
+# working set. If it is ever not enough, the fix is this line — never a
+# create-and-delete-per-navigation screen, which is what §10.8.1 forbids for a
+# different reason and this makes expensive as well.
+CONFIG_LV_MEM_SIZE_KILOBYTES=64
+
+# 16-bit colour. The byte order the panel wants is **not** set here: it is the
+# `swap_bytes` flag on the LVGL port's display config, so the swap happens in
+# the flush path where it can be read next to the driver that needs it.
+CONFIG_LV_COLOR_DEPTH_16=y
+
+# The fonts compiled in. Montserrat 14 is LVGL's default and what a label gets
+# when nothing says otherwise; 28 and 48 are for the clock of §10.8.2, which is
+# the one screen whose whole design is one big number.
+CONFIG_LV_FONT_MONTSERRAT_14=y
+CONFIG_LV_FONT_MONTSERRAT_28=y
+CONFIG_LV_FONT_MONTSERRAT_48=y

@@ -46,8 +46,9 @@ the repository owner's sign-off say so.
 | PCF85063 RTC — `components/rtc` (§10.8.2) | **running on hardware**: read, written and surviving a reboot; the system clock is adopted from it at boot, **in UTC**. No SNTP yet |
 | Named time zones — `components/timezone` (§10.8.2) | **running on hardware**: 72 zones compiled in, `Europe/Kyiv` or plain `EET` rather than a POSIX rule, applied at boot from `config.json`. The clock stays UTC; a zone only changes what is printed and how a typed time is read |
 | AXP2101 — `components/pmic`, brought up from `board::Init()` (§10.1, §10.13) | **configured and reading on hardware**: TS pin silenced, ADC channels, VBUS limit, rail voltages, charge currents — all cross-checked against the vendor's `pmicpower` component — plus `SetAldo2`/`SetAldo3` for the audio and panel rails |
+| The panel and the touch — `components/display` (§10.1, §10.8) | **lit on hardware**: the CO5300 over QSPI with the vendor's init sequence, its reset driven as a PMIC rail through a callback, the CST9220 read under the I²C lease, and LVGL 9.4 on two 480×40 buffers. `display` on the console. No screens yet — §10.8's five are the next thing, and what is on the panel today is a placeholder that says so |
 | The language and the layering (§10.14) — C++ except where C is forced, no dynamic memory, library layer before logic, the I²C bus leased | **decided**, nothing written yet |
-| The ESP-IDF dependency set (§10.4) — LVGL + `esp_lvgl_port`, the CO5300/CST9220 drivers, libsodium for Ed25519, `debsahu/espidf-nats` for the bus | **signed off** (root §1); exact versions pinned when the first build resolves them |
+| The ESP-IDF dependency set (§10.4) — LVGL + `esp_lvgl_port`, the CO5300/CST9220 drivers, libsodium for Ed25519, `debsahu/espidf-nats` for the bus | **signed off** (root §1). The display half is **resolved and building**: LVGL 9.4.0, `esp_lvgl_port` 2.9.0, `esp_lcd_sh8601` 2.0.1, `waveshare/esp_lcd_touch_cst9217` 1.0.4 — two of which are not the names §10.4 guessed, see below. libsodium and the NATS client are still unresolved |
 | The LVGL host preview (§10.12.1) | installed and rendering — the only part of this folder that runs today |
 | Bus reachable from the device at all (§10.3) | **decided**: shared on the home LAN, no TLS, no auth — the router is the trust boundary |
 | Firmware: NATS client, registration, signing | not started |
@@ -344,6 +345,31 @@ New dependencies, all four approved:
 |----------|-----|-------------------------|
 | `lvgl/lvgl` (v9) + `espressif/esp_lvgl_port` | five screens, a scrolling list of scan results and an on-screen keyboard (§10.8) — hand-drawing that against `esp_lcd` primitives is weeks of work to reach something worse | draw directly against `esp_lcd`: defensible for the request card alone, not for the Wi-Fi screen, which is where the keyboard lives |
 | CO5300 panel driver + CST9220 touch driver | the two chips on this board; the vendor demo carries both | none — they are the hardware. Prefer an Espressif-registry component over a copied vendor tree; if the vendor's is the only one, vendor it into `components/` with its version recorded |
+
+**Two of those four names do not exist, and what they resolved to is the record
+that matters.** The approval stands — these are the same components in intent —
+but a table that keeps naming things that cannot be installed is a table nobody
+can act on:
+
+| §10.4 said | It is | Why |
+|---|---|---|
+| "CO5300 panel driver" | **`espressif/esp_lcd_sh8601` 2.0.1** | there is no CO5300 component on the registry, and the vendor's own ESP-IDF example drives this board with the SH8601 driver. The two share the QSPI command set, and everything specific to this glass arrives as the init list in `components/display/panel.cpp` — copied from that example, because a panel init sequence is not something to derive from a datasheet and hope |
+| "CST9220 touch driver" | **`waveshare/esp_lcd_touch_cst9217` 1.0.4** | the part number in the board's documentation is CST9220 and the driver Waveshare publishes for it is `cst9217`. Not a discrepancy to resolve — the driver prints `Chip Type: 0x9220` when it probes this board, so it knows perfectly well what it is talking to. It brings `espressif/esp_lcd_touch` with it, which is the interface `esp_lvgl_port` also speaks |
+
+And one the vendor took differently, where §10.4's choice was kept: Waveshare's
+example is built on **`espressif/esp_lvgl_adapter`**, which drags in `button`,
+`knob`, `freetype`, `esp_lv_decoder` and `esp_lv_fs` — five transitive
+components for a device with three buttons it polls itself and no fonts to load
+at runtime. Root §1 asks about exactly that weight. `esp_lvgl_port` **2.9.0**
+depends on nothing but LVGL, covers the same ground, and is what §10.4 approved.
+
+**LVGL is 9.4.0**, which is not 9.5 — §10.12.1's rule that the host preview and
+the firmware must be the same minor version is now a live constraint rather
+than a note: the simulator ships 9.5.
+
+**And the whole display half resolved and built on ESP-IDF v6.0.2**, which is
+the first real evidence in the v5.5.3-versus-v6.0.2 argument of §10.12 — see
+there for what it does and does not settle.
 | **an Ed25519 implementation** — `libsodium` (Espressif publishes it as a managed component) | mbedTLS has **no EdDSA**: it cannot sign or verify Ed25519 at all. §6's server key is Ed25519 *by fixed protocol* (`protocol.SERVER_KEY_TYPE`), so verify is not optional | switch the device's own key to `key_type: p256` (mbedTLS ECDSA, already a first-class scheme in §7 — the YubiKey and the browser both use it) — **but the registration reply still needs Ed25519 verify**, so this removes signing from libsodium's job, not libsodium |
 | **a NATS client** — `debsahu/espidf-nats` (ESP Component Registry, `^1.4.0`, MIT, header-only C++, ESP-IDF 4.4–6.0) | the §10.5 subset without writing and debugging a socket state machine; and it brings TLS 1.2/1.3 with server-cert validation, mTLS and SNI, which is exactly what §10.3 needs and the one part of a hand-written client that would *not* have been ~300 lines | writing it ourselves, and the two options below |
 
@@ -517,6 +543,9 @@ buttons                       # BOOT / KEY / PWR: debounced state, the raw pin
 buttons watch [seconds]       # print edges as they happen, with press durations
 imu                           # the QMI8658C: all six axes, tilt, die temperature
 imu watch [seconds]           # a line a second of the same six numbers
+display                       # the panel, LVGL and the touch controller
+display on|off                # blank the panel without dimming it
+display brightness [0..100]   # the panel only — `config set brightness` is the stored one
 play [file]                   # play a WAV from the storage partition (alert.wav)
 play volume [0..100]          # read it, or set it — same as `config set volume`
 config [reload|save|restore]  # the settings of §10.15, parsed into fields
@@ -1034,9 +1063,26 @@ already past the top of. `eim` installs versions side by side and `eim select`
 switches between them, so the resolution is a decision — install v5.5.3
 alongside and build against it, or re-argue the pin against v6.0.x with the
 vendor drivers in hand — to be taken at the first real build, and recorded in
-§10.4 when it is. **What is built today is on v6.0.2 and does not settle it**:
-the skeleton, the partition table and `components/boards` touch nothing
-version-sensitive. The display and touch drivers are what will decide it. The targets this install has support for are `esp32`,
+§10.4 when it is.
+
+**The version-sensitive half is now built, and it built on v6.0.2.** The
+panel, the touch and LVGL — the exact three things this paragraph said would
+decide it — resolve, compile and run on the installed version: `esp_lcd_sh8601`
+2.0.1 declares `idf >=5.3`, `esp_lvgl_port` 2.9.0 declares `>=5.2`, and the
+CST9217 driver `>=4.4.2`. So **v5.5.3 is no longer worth installing for this
+reason**, and the pin in §10.4 should be read as "the version the vendor's
+examples are written against" rather than as a requirement.
+
+Two things it cost, both recorded rather than worked around: the `dc_gpio_num`
+and SPI-host fields of the `esp_lcd` config are stricter about types in v6 than
+the v5.5.3 example is written for, and `esp_lcd_touch_get_coordinates` is
+deprecated there in favour of `esp_lcd_touch_get_data`. Neither is a reason to
+go back a version; both are the reason a copied vendor file does not compile
+unchanged.
+
+What is still unmeasured is the other half of §10.4 — libsodium and
+`debsahu/espidf-nats`, the latter advertising 4.4–6.0 and therefore the one
+that could still reopen this. The targets this install has support for are `esp32`,
 `esp32c6`, `esp32p4` and `esp32s3`, so `set-target esp32c6` is not the blocker.
 
 The project those commands run in is **generated** — `create-project` plus a
@@ -1376,6 +1422,24 @@ snapshot rather than five values from five moments.
 The pins are **arguments to `Bus::Init`**, not an include of `board.h` — the
 library layer knows about wires, not about which board they are on (§10.14.2),
 and `components/boards` is what puts the two together.
+
+**The touch controller is where this rule was nearly lost, and the save is
+worth recording.** `esp_lcd_touch` opens its own I²C device on the bus handle
+and talks to it directly; it has never heard of the lease and cannot be taught.
+The short path is to hand its handle to `lvgl_port_add_touch` and let the LVGL
+port poll it — which puts an I²C transfer in the LVGL task that no lease
+covers, so a read-modify-write on the PMIC could be split by a touch read.
+That is the exact failure this section exists to prevent, arriving through a
+third-party component rather than through our own code.
+
+So the port's touch integration is **not** used. `display::Touch::Read` polls
+the controller itself, holding the lease across the call, and LVGL gets a
+pointer input device whose read callback is that function — twenty lines, and
+the vendor's transfers land inside a critical section it knows nothing about.
+`i2cbus::Bus::Handle()` exists for this and says so: it hands out the bus
+handle, not permission to skip the lease. A lease it could not get is a dropped
+frame's read and a counter the `display` command prints, never a block — this
+section already named touch as the case where that is the right answer.
 
 **Still owed: the fake backend.** This section calls it a requirement, and it is
 not written — with no host tier yet (§10.11), an interface with one

@@ -24,6 +24,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "linenoise/linenoise.h"
+#include "lvgl_display.h"
 #include "qmi8658.h"
 #include "speaker.h"
 #include "storage.h"
@@ -1002,6 +1003,66 @@ int CmdPower(int, char **) {
     return 0;
 }
 
+// The display, and the same class of command `power` and `imu` are: a way to
+// find out that a part of the board is alive without reflashing to test it
+// (§10.7). It answers the three questions a panel raises — is it there, is it
+// lit, and is the touch controller reporting — and the last of those is why
+// `missed reads` is printed: a number that climbs is contention on the I²C
+// lease (§10.14.3), which no other readout would show.
+int CmdDisplay(int argc, char **argv) {
+    ::display::Panel &panel = board::Display();
+    ::display::Touch &glass = board::Touch();
+
+    if (argc == 1) {
+        printf("panel      %s", panel.Ready() ? "up" : "not initialised");
+        if (panel.Ready()) {
+            printf(", %dx%d, %s at %u%%", panel.Width(), panel.Height(),
+                   panel.On() ? "on" : "blanked", static_cast<unsigned>(panel.Brightness()));
+        }
+        printf("\n");
+        printf("lvgl       %s\n", ::display::LvglReady() ? "running" : "not started");
+        printf("touch      %s, %" PRIu32 " missed read(s)\n",
+               glass.Ready() ? "up" : "not initialised", glass.MissedReads());
+        return 0;
+    }
+
+    if (!panel.Ready()) {
+        printf("the panel did not come up — see the boot log\n");
+        return 1;
+    }
+
+    if (argc == 2 && strcmp(argv[1], "on") == 0) {
+        return panel.SetOn(true) == ESP_OK ? 0 : 1;
+    }
+    if (argc == 2 && strcmp(argv[1], "off") == 0) {
+        return panel.SetOn(false) == ESP_OK ? 0 : 1;
+    }
+    if (argc == 3 && strcmp(argv[1], "brightness") == 0) {
+        char *end = nullptr;
+        const long value = strtol(argv[2], &end, 10);
+        if (end == argv[2] || *end != '\0' || value < 0 || value > 100) {
+            printf("brightness takes 0..100\n");
+            return 1;
+        }
+        // Not written to `config.json` — `config set brightness` is what does
+        // that, and this is the one that only moves the panel (§10.15's rule
+        // that editing and persisting are two commands).
+        const esp_err_t err = panel.SetBrightness(static_cast<uint8_t>(value));
+        if (err != ESP_OK) {
+            printf("brightness not set: %s\n", esp_err_to_name(err));
+            return 1;
+        }
+        printf("brightness %ld%% (panel only — `config set brightness` is the stored one)\n",
+               value);
+        return 0;
+    }
+
+    printf("usage: display                    panel, LVGL and touch state\n");
+    printf("       display on|off             blank the panel without dimming it\n");
+    printf("       display brightness <0..100>\n");
+    return 1;
+}
+
 const esp_console_cmd_t kCommands[] = {
     {
         .command = "status",
@@ -1071,6 +1132,15 @@ const esp_console_cmd_t kCommands[] = {
         .help = "read the RTC, or 'date set <YYYY-MM-DD> <HH:MM:SS>' to write it",
         .hint = "[set <YYYY-MM-DD> <HH:MM:SS>]",
         .func = &CmdDate,
+        .argtable = nullptr,
+        .func_w_context = nullptr,
+        .context = nullptr,
+    },
+    {
+        .command = "display",
+        .help = "the panel, LVGL and the touch controller; on/off and brightness",
+        .hint = "[on|off|brightness <0..100>]",
+        .func = &CmdDisplay,
         .argtable = nullptr,
         .func_w_context = nullptr,
         .context = nullptr,

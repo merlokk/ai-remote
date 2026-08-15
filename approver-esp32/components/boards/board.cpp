@@ -24,6 +24,8 @@ rtc::Pcf85063 clock_chip;
 ::audio::Es8311 codec;
 ::audio::Speaker sound;
 buttons::Buttons keys;
+::display::Panel panel;
+::display::Touch glass;
 
 // The rate the sounds in `spiffs_image/` are converted to. One number, in one
 // place: the codec is configured for it at boot and `Speaker` retunes both
@@ -121,6 +123,10 @@ buttons::Buttons &Buttons() { return keys; }
 
 ::audio::Speaker &Sound() { return sound; }
 
+::display::Panel &Display() { return panel; }
+
+::display::Touch &Touch() { return glass; }
+
 bool ImuInterrupt1() { return gpio_get_level(imu::kInterrupt1) != 0; }
 
 bool ImuInterrupt2() { return gpio_get_level(imu::kInterrupt2) != 0; }
@@ -201,6 +207,53 @@ esp_err_t Init() {
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "speaker not initialised: %s", esp_err_to_name(err));
         }
+    }
+
+    // The panel last, and for two reasons rather than one. It takes the longest
+    // — the reset is three 100 ms rail transitions and the CO5300's own
+    // sleep-out is 600 ms more — and nothing else on this board depends on it,
+    // so anything that fails above still gets to report before the screen
+    // spends a second of the boot. What it *does* depend on is the PMIC, which
+    // is why it cannot move up: its reset line is ALDO3 (§10.1).
+    if (axp.Present()) {
+        const ::display::Config panel_config = {
+            .sclk = display::kSclk,
+            .data0 = display::kData0,
+            .data1 = display::kData1,
+            .data2 = display::kData2,
+            .data3 = display::kData3,
+            .chip_select = display::kChipSelect,
+            .width = kScreenWidth,
+            .height = kScreenHeight,
+            // **The rail, passed as a function, not as a PMIC.** The display
+            // driver is library layer and may not know what an AXP2101 is
+            // (§10.14.2); this is where the board says that the panel's reset
+            // happens to be ALDO3. A captureless lambda converts to a plain
+            // function pointer, so nothing is allocated (§10.14.1).
+            .power = [](bool on, void *) { axp.SetAldo3(on); },
+        };
+        err = panel.Init(panel_config);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "panel not initialised: %s", esp_err_to_name(err));
+        }
+
+        // The touch is independent of the panel — a display that failed still
+        // gets a controller that answers, and the console can then say which of
+        // the two is the problem.
+        const ::display::TouchConfig touch_config = {
+            .reset = touch::kReset,
+            .interrupt = touch::kInterrupt,
+            .width = kScreenWidth,
+            .height = kScreenHeight,
+        };
+        err = glass.Init(bus, touch_config);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "touch not initialised: %s", esp_err_to_name(err));
+        }
+    } else {
+        // Not an omission to debug later: the panel's reset is a PMIC rail, so
+        // without the PMIC there is no way to bring the display up at all.
+        ESP_LOGE(TAG, "no PMIC, so no panel: its reset is ALDO3 (§10.1)");
     }
 
     gpio_config_t interrupt_pins = {};

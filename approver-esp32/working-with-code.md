@@ -149,6 +149,9 @@ buttons                       # BOOT / KEY / PWR: debounced state + the raw pin
 buttons watch 30              # print edges for 30 s (default 10, max 120)
 imu                           # the QMI8658C: six axes, tilt, die temperature
 imu watch 10                  # a line a second of the same numbers
+display                       # panel, LVGL and touch state, with missed I2C reads
+display brightness 40         # the panel only; `config set brightness` is the stored one
+display off                   # blank it; `display on` brings it back
 play                          # play alert.wav; `play poweron.wav` for the other one
 play volume 45                # the same setter as `config set volume`; memory only
 config                        # the parsed settings; `config reload|save|restore`

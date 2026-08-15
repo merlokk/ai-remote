@@ -103,6 +103,16 @@ class Bus {
 
     Lease Acquire(uint32_t timeout_ms = kDefaultAcquireMs);
 
+    // The raw bus handle, for a third-party driver that has to open its own
+    // device on this bus. `esp_lcd_touch` is the one that does, and it is the
+    // reason this exists.
+    //
+    // **It is not permission to skip the lease.** Whoever calls such a driver
+    // takes the lease around the call, so the driver's transfers land inside a
+    // critical section it has never heard of — `display::Touch::Read` is the
+    // worked example, and `touch.h` argues why the short path was refused.
+    i2c_master_bus_handle_t Handle() const { return handle_; }
+
     // A slave holding SDA low is a known failure with a known fix: clock it out
     // until it lets go, then re-init. Handled once, here, rather than five
     // times in five drivers. Bounded, and one log line.

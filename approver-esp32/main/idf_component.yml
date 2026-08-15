@@ -14,3 +14,45 @@ dependencies:
   ## on the v5.5.3-versus-v6.0.2 ledger of §10.12: on the version §10.4 pins,
   ## this line would not exist.
   espressif/cjson: "^1.7.18"
+
+  ## --- The display (§10.4, §10.8) -----------------------------------------
+  ## Approved as "LVGL v9 + esp_lvgl_port, the CO5300 panel and CST9220 touch
+  ## drivers". Two of those four names turned out not to exist; what follows is
+  ## what they resolve to on the registry, and each difference is argued where
+  ## it is used rather than here.
+
+  ## LVGL itself. §10.4 approved "v9"; this is the record of which v9.
+  lvgl/lvgl: "^9.3.0"
+
+  ## The LVGL port: the task that runs `lv_timer_handler`, the flush callback
+  ## wired to `esp_lcd`, and the recursive lock everything else takes.
+  ##
+  ## **Not the one the vendor's example uses.** Waveshare's `09_LVGL_V9_Test`
+  ## is built on `espressif/esp_lvgl_adapter`, which drags in `button`, `knob`,
+  ## `freetype`, `esp_lv_decoder` and `esp_lv_fs` — five transitive components
+  ## for a device that has three buttons it polls itself and no fonts to load
+  ## at runtime. Root §1 asks about exactly that kind of weight. `esp_lvgl_port`
+  ## is what §10.4 approved, it depends on nothing but LVGL, and it covers the
+  ## same ground.
+  espressif/esp_lvgl_port: "^2.9.0"
+
+  ## The panel driver. **The glass is a CO5300 and this is the SH8601 driver**,
+  ## which is not a mistake: there is no CO5300 component on the registry, and
+  ## the vendor's own ESP-IDF example drives this board with this driver. The
+  ## two speak the same QSPI command set, and everything specific to this glass
+  ## arrives as the init list in `components/display/panel.cpp`. §10.4 says
+  ## "CO5300 panel driver"; this is what that turned out to mean.
+  espressif/esp_lcd_sh8601: "^2.0.1"
+
+  ## The touch driver — CST9217, in the `waveshare` namespace, and both halves
+  ## of that are worth a line. §10.4 said "CST9220": the part number in the
+  ## board's documentation is CST9220 and the driver Waveshare publishes and
+  ## uses for it is `cst9217` — same family, same register interface. And it is
+  ## a registry component rather than a vendored tree, which is the preference
+  ## §10.4 states; that the namespace is the board vendor's rather than
+  ## Espressif's is the closest that preference can get for this part.
+  ##
+  ## It brings `espressif/esp_lcd_touch` with it — the common touch interface
+  ## `esp_lvgl_port` also speaks. One transitive component, and it is the one
+  ## that makes the two fit together.
+  waveshare/esp_lcd_touch_cst9217: "^1.0.4"
