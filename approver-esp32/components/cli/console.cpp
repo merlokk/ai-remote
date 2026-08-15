@@ -728,31 +728,11 @@ int CmdPlay(int argc, char **argv) {
             printf("usage: play volume [0..100]\n");
             return 1;
         }
-        char *end = nullptr;
-        const unsigned long percent = strtoul(argv[2], &end, 10);
-        if (end == argv[2] || *end != '\0' || percent > 100) {
-            printf("expected 0..100, got '%s'\n", argv[2]);
-            return 1;
-        }
-        const esp_err_t err = codec.SetVolume(static_cast<uint8_t>(percent));
-        if (err != ESP_OK) {
-            printf("volume not set: %s\n", esp_err_to_name(err));
-            return 1;
-        }
-
-        // Into the field, then to the file. A volume that survives the codec
-        // but not a reboot is the more annoying of the two failures, so the
-        // save is not optional and its failure is reported rather than logged
-        // out of sight.
-        config::Get().audio.volume_percent = static_cast<uint8_t>(percent);
-        const esp_err_t saved = config::Save();
-        if (saved != ESP_OK) {
-            printf("volume %lu%% set, but %s was not written: %s\n", percent, config::kPath,
-                   esp_err_to_name(saved));
-            return 1;
-        }
-        printf("volume %lu%%, saved to %s\n", percent, config::kPath);
-        return 0;
+        // **The same field, through the same setter as `config set volume`** —
+        // one behaviour and one implementation, rather than two commands that
+        // differ in whether they touch the filesystem. This one used to save;
+        // it no longer does, and `config save` is what writes.
+        return SetConfigField("volume", argv[2]);
     }
 
     if (!codec.Present()) {

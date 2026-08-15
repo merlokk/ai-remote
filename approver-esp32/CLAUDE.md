@@ -516,7 +516,7 @@ buttons watch [seconds]       # print edges as they happen, with press durations
 imu                           # the QMI8658C: all six axes, tilt, die temperature
 imu watch [seconds]           # a line a second of the same six numbers
 play [file]                   # play a WAV from the storage partition (alert.wav)
-play volume [0..100]          # read it, or set it and save it to config.json
+play volume [0..100]          # read it, or set it — same as `config set volume`
 config [reload|save|restore]  # the settings of §10.15, parsed into fields
 config set <field> <value>    # into memory only; `config save` is what writes
 term                          # ask the terminal again, and turn on up-arrow history
@@ -1550,6 +1550,11 @@ cheap undo for anything not saved. The Wi-Fi networks are the exception and are
 not settable this way: they are a list of ssid/password pairs and belong to the
 screen of §10.8.6. `volume` is also the one field applied as it is set, so the
 next `play` is audibly the number just typed.
+
+`play volume <n>` is the same setter reached by a shorter name — it calls the
+same function, so there is one behaviour rather than two commands differing in
+whether they touch the filesystem. It did save, briefly; that was the
+inconsistency this rule replaced.
 
 **The volume is the first setting that round-trips**, and it is worth having as
 the proof of the whole path: `play volume 45` writes the field and the file,

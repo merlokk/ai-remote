@@ -150,7 +150,7 @@ buttons watch 30              # print edges for 30 s (default 10, max 120)
 imu                           # the QMI8658C: six axes, tilt, die temperature
 imu watch 10                  # a line a second of the same numbers
 play                          # play alert.wav; `play poweron.wav` for the other one
-play volume 45                # set it and save it to config.json (§10.15)
+play volume 45                # the same setter as `config set volume`; memory only
 config                        # the parsed settings; `config reload|save|restore`
 config set volume 35          # into memory only
 config set nats nats://192.168.1.77:4222
