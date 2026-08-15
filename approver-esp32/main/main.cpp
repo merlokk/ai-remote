@@ -13,6 +13,7 @@
 #include "esp_log.h"
 #include "esp_ota_ops.h"
 #include "storage.h"
+#include "timezone.h"
 
 namespace {
 
@@ -48,6 +49,13 @@ extern "C" void app_main(void) {
     // the second write would be the one that mattered.
     storage::Init();
     config::Init();
+
+    // The zone before the clock: `board::Init` adopts the RTC and logs what it
+    // found, and a log line in the wrong zone is a bug report about the RTC.
+    // Nothing here moves a stored value — the RTC and `time_t` are UTC, and
+    // this only decides how they are read back (§10.8.2).
+    tz::Apply(config::Get().time.posix);
+
     board::Init();
     console::Init();
 

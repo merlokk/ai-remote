@@ -7,7 +7,8 @@
         "url": "nats://192.168.1.5:4222"
     },
     "time": {
-        "timezone": "UTC0",
+        "zone": "UTC",
+        "posix": "UTC0",
         "sntp": "pool.ntp.org"
     },
     "display": {

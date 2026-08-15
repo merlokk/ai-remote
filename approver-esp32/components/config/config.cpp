@@ -7,6 +7,7 @@
 #include "cJSON.h"
 #include "esp_log.h"
 #include "storage.h"
+#include "timezone.h"
 
 namespace config {
 
@@ -116,8 +117,20 @@ esp_err_t Parse(const char *json, Data *out) {
 
     const cJSON *time = cJSON_GetObjectItemCaseSensitive(root, "time");
     if (cJSON_IsObject(time)) {
-        CopyString(time, "timezone", out->time.timezone, sizeof(out->time.timezone));
+        CopyString(time, "zone", out->time.zone, sizeof(out->time.zone));
+        CopyString(time, "posix", out->time.posix, sizeof(out->time.posix));
         CopyString(time, "sntp", out->time.sntp_server, sizeof(out->time.sntp_server));
+
+        // A file that names a zone but carries no rule — hand-edited, or
+        // written by a firmware whose table was smaller — is completed from
+        // the table rather than refused. The name is the operator's intent;
+        // the rule is an implementation detail they should not have to know.
+        const char *known = tz::Lookup(out->time.zone);
+        if (known != nullptr &&
+            (out->time.posix[0] == '\0' ||
+             cJSON_GetObjectItemCaseSensitive(time, "posix") == nullptr)) {
+            snprintf(out->time.posix, sizeof(out->time.posix), "%s", known);
+        }
     }
 
     const cJSON *display = cJSON_GetObjectItemCaseSensitive(root, "display");
@@ -181,7 +194,8 @@ esp_err_t Serialise(const Data &in, size_t *length) {
 
     cJSON *time = cJSON_AddObjectToObject(root, "time");
     if (time != nullptr) {
-        cJSON_AddStringToObject(time, "timezone", in.time.timezone);
+        cJSON_AddStringToObject(time, "zone", in.time.zone);
+        cJSON_AddStringToObject(time, "posix", in.time.posix);
         cJSON_AddStringToObject(time, "sntp", in.time.sntp_server);
     }
 
@@ -297,7 +311,8 @@ void FillDefaults(Data *out) {
     out->wifi.active = false;
     out->wifi.network_count = 0;
     snprintf(out->nats.url, sizeof(out->nats.url), "nats://192.168.1.5:4222");
-    snprintf(out->time.timezone, sizeof(out->time.timezone), "UTC0");
+    snprintf(out->time.zone, sizeof(out->time.zone), "UTC");
+    snprintf(out->time.posix, sizeof(out->time.posix), "UTC0");
     snprintf(out->time.sntp_server, sizeof(out->time.sntp_server), "pool.ntp.org");
     out->display.brightness = 80;
     out->display.dim_seconds = 30;

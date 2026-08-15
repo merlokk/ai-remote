@@ -69,7 +69,18 @@ struct Nats {
 };
 
 struct Time {
-    char timezone[kTimezoneSize];  // POSIX TZ string (§10.8.2)
+    // **Two fields for one setting, and the pair is the point** (§10.8.2; the
+    // house firmware of §10.14.4 keeps the same two): `zone` is what a person
+    // reads and types — `Europe/Kyiv` — and `posix` is the rule libc is
+    // actually given. Keeping both means a zone whose transitions moved can be
+    // corrected on the device by writing `posix` alone, without waiting for a
+    // firmware whose table knows the new rule.
+    //
+    // Neither of them moves the clock. The RTC and `time_t` are UTC, always;
+    // a zone is how a time is shown and how a typed time is read, never how it
+    // is stored.
+    char zone[kTimezoneSize];
+    char posix[kTimezoneSize];
     char sntp_server[kHostSize];
 };
 

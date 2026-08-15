@@ -43,7 +43,8 @@ the repository owner's sign-off say so.
 | ES8311 codec + speaker — `components/audio` (§10.8.1, §10.13) | **playing on hardware**: the codec configured from its datasheet, an I²S transmit channel, uncompressed WAV streamed off SPIFFS. `poweron.wav` at boot, `alert.wav` on `play`. No microphone, no decoder |
 | Settings — `components/config` (§10.15) | **read, written and surviving a reboot**: `config.json` parsed into a fixed struct at boot, `reload` / `save` / `restore` on the console, and the codec's volume is the first setting that round-trips |
 | QMI8658C IMU — `components/imu` (§10.13) | **reading on hardware**: 0x6B, six axes, tilt and die temperature through `imu`. A diagnostic and nothing more — §10.13's rule that no gesture approves anything is unchanged |
-| PCF85063 RTC — `components/rtc` (§10.8.2) | **running on hardware**: read, written and surviving a reboot; the system clock is adopted from it at boot. No timezone and no SNTP yet |
+| PCF85063 RTC — `components/rtc` (§10.8.2) | **running on hardware**: read, written and surviving a reboot; the system clock is adopted from it at boot, **in UTC**. No SNTP yet |
+| Named time zones — `components/timezone` (§10.8.2) | **running on hardware**: 68 zones compiled in, `Europe/Kyiv` rather than a POSIX rule, applied at boot from `config.json`. The clock stays UTC; a zone only changes what is printed and how a typed time is read |
 | AXP2101 — `components/pmic`, brought up from `board::Init()` (§10.1, §10.13) | **configured and reading on hardware**: TS pin silenced, ADC channels, VBUS limit, rail voltages, charge currents — all cross-checked against the vendor's `pmicpower` component — plus `SetAldo2`/`SetAldo3` for the audio and panel rails |
 | The language and the layering (§10.14) — C++ except where C is forced, no dynamic memory, library layer before logic, the I²C bus leased | **decided**, nothing written yet |
 | The ESP-IDF dependency set (§10.4) — LVGL + `esp_lvgl_port`, the CO5300/CST9220 drivers, libsodium for Ed25519, `debsahu/espidf-nats` for the bus | **signed off** (root §1); exact versions pinned when the first build resolves them |
@@ -508,8 +509,9 @@ status                        # firmware / IDF / chip versions, the running OTA
                               # slot, uptime, heap free and low-water, storage use
 power                         # the AXP2101: charge state, VBUS, battery mV and %,
                               # the system rail, die temperature (§10.13's one job)
-date                          # the RTC, and the system clock beside it
-date set <YYYY-MM-DD> <HH:MM:SS>
+date                          # the RTC and the system clock in UTC, plus local
+date set <YYYY-MM-DD> <HH:MM:SS>        # local time; stored as UTC
+date set utc <YYYY-MM-DD> <HH:MM:SS>
 buttons                       # BOOT / KEY / PWR: debounced state, the raw pin
                               # beside it, and how long it has been that way
 buttons watch [seconds]       # print edges as they happen, with press durations
@@ -519,6 +521,7 @@ play [file]                   # play a WAV from the storage partition (alert.wav
 play volume [0..100]          # read it, or set it — same as `config set volume`
 config [reload|save|restore]  # the settings of §10.15, parsed into fields
 config set <field> <value>    # into memory only; `config save` is what writes
+config zones [filter]         # the time zones this firmware knows by name
 term                          # ask the terminal again, and turn on up-arrow history
                               # if it answers ('term smart' / 'term dumb' to force)
 poweroff now                  # cut power — refused while USB is connected
@@ -712,8 +715,9 @@ registered, and a gear.
 
   **The half of this that exists** is `components/rtc` and `board::Init()`
   adopting the RTC into the system clock at boot; the console reads and writes
-  it with `date` (§10.7). What is *not* there yet is SNTP and the `TZ` string
-  below, so everything is currently in whatever zone was typed in.
+  it with `date` (§10.7). The zones below exist as well, and the RTC now holds
+  UTC rather than whatever was typed. What is *not* there yet is SNTP: the
+  clock is set by hand until there is a network.
 
   The chip makes the `--:--` rule cheap rather than a convention to remember:
   the **OS flag** in its seconds register says the oscillator stopped or never
@@ -727,9 +731,39 @@ registered, and a gear.
   also what clears OS, so a successful `date set` is what makes the clock
   trustworthy again.
 - **This is where the repo finally has to know about timezones.** §9.1 avoided
-  them by printing countdowns; a clock cannot. A POSIX `TZ` string in settings
-  (`MSK-3`, `CET-1CEST,M3.5.0,M10.5.0/3`), `setenv` + `tzset`, stored in
-  `config.json` (§10.15). Not a timezone database, not a lookup by IP.
+  them by printing countdowns; a clock cannot.
+
+  **The clock is UTC, and a zone is presentation.** The RTC holds UTC, `time_t`
+  is UTC, and every conversion happens at the edge where a time is shown or
+  typed. That invariant is what makes changing zones free: nothing stored
+  moves, so `config set tz Asia/Tokyo` changes one line of `date` and no data
+  at all. It is also what `board::AdoptClock` had wrong at first — it read the
+  RTC with `mktime`, which treats the counters as *local*, and was therefore
+  correct only while the zone was UTC. It uses `timegm` now.
+
+  **Named zones, from a table compiled into the firmware.** libc understands
+  POSIX `TZ` strings and nothing else, and ESP-IDF ships no IANA database (v6
+  checked, not assumed) — so `components/timezone` maps `Europe/Kyiv` to
+  `EET-2EEST,M3.5.0/3,M10.5.0/4`, and `config.json` keeps **both**: `time.zone`
+  is what a person reads, `time.posix` is what libc is given. That pair is the
+  house firmware's shape (§10.14.4, its `TimeUtil`), and it is what lets a zone
+  whose transitions moved be corrected on the device — write `posix` — without
+  waiting for a firmware whose table knows the new dates. A raw POSIX rule is
+  accepted anywhere a name is, and is stored as `Custom`; what is refused is a
+  string that is neither, because libc reads a misspelled zone as UTC and says
+  nothing.
+
+  Two costs, stated rather than discovered later: the table is **curated**, so
+  a missing zone means typing a rule; and transition rules **change**, so a
+  country that moves its dates needs the table edited and the firmware
+  reflashed. Neither is fixable without shipping tzdata, which is hundreds of
+  kilobytes for a device with one clock face. Not a lookup by IP either.
+
+  The console side: `date` prints RTC and system in UTC and the same instant
+  local; `date set <date> <time>` reads **local** time (what is on the wall)
+  and stores UTC; `date set utc …` is the escape hatch for when the zone is
+  wrong and the clock still has to be right; `config zones [filter]` lists what
+  the table knows.
 - **A clock that cannot approve says so on the clock.** Unregistered, or the
   boot self-test (§10.6) failed, or no bus — it is on this screen, in words, not
   buried in settings. The device's whole value is that a glance at the desk tells
@@ -1533,8 +1567,8 @@ replaced the placeholder schema the two files were carrying — an AP-mode Wi-Fi
 block and a `WEB` section, both inherited from the house firmware of §10.14.4
 and belonging to a device this one is not. What is in them now is what this
 firmware has or is specified to have: `wifi.networks[]` (§10.9, four of them),
-`nats.url` (§10.3), `time.timezone` / `time.sntp` (§10.8.2), the display
-timeouts (§10.8.5) and `audio.volume`.
+`nats.url` (§10.3), `time.zone` / `time.posix` / `time.sntp` (§10.8.2), the
+display timeouts (§10.8.5) and `audio.volume`.
 
 The server's address is `nats.url` rather than `bus.url` for the reason the
 name suggests: there is one bus here and it is NATS, so an address reads as an

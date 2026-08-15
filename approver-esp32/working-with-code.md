@@ -153,6 +153,9 @@ play                          # play alert.wav; `play poweron.wav` for the other
 play volume 45                # the same setter as `config set volume`; memory only
 config                        # the parsed settings; `config reload|save|restore`
 config set volume 35          # into memory only
+config set tz Europe/Kyiv     # named zones; `config zones [filter]` lists them
+date set 2026-08-16 12:00:00  # local time, per that zone — stored as UTC
+date set utc 2026-08-16 09:00:00
 config set nats nats://192.168.1.77:4222
 config save                   # …and this is what puts it in the file
 term                          # switch on up-arrow history — see below
@@ -222,13 +225,18 @@ Stop-Process -Id <ids> -Force
 Setting the clock from the host's own time, in one line:
 
 ```powershell
-$now = Get-Date
-"date set $($now.ToString('yyyy-MM-dd')) $($now.ToString('HH:mm:ss'))"
+$now = (Get-Date).ToUniversalTime()
+"date set utc $($now.ToString('yyyy-MM-dd')) $($now.ToString('HH:mm:ss'))"
 ```
 
 — paste the result into the console, or feed it to the pyserial snippet above.
-There is no timezone anywhere in the firmware yet (§10.8.2), so whatever zone
-you type is the zone the device is in.
+
+**`ToUniversalTime()` and `set utc` are the point**: the device keeps UTC
+(§10.8.2), and sending it the host's local time without saying so would set the
+clock wrong by the offset and look right on screen, because the zone would then
+shift it a second time. `date set` without `utc` is the other half — it takes
+local time deliberately, for when you are reading a wall clock rather than
+scripting.
 
 The token comes from the host, minted by the handler:
 

@@ -27,6 +27,7 @@
 #include "qmi8658.h"
 #include "speaker.h"
 #include "storage.h"
+#include "timezone.h"
 
 namespace console {
 
@@ -114,39 +115,93 @@ int CmdDate(int argc, char **argv) {
             // §10.8.2: an obviously unset clock beats a plausible wrong one.
             printf("rtc        -------/-- --:--:--  (oscillator stopped or never set)\n");
         } else {
-            printf("rtc        %04u-%02u-%02u %02u:%02u:%02u\n", now.year, now.month, now.day,
+            printf("rtc        %04u-%02u-%02u %02u:%02u:%02u UTC\n", now.year, now.month, now.day,
                    now.hour, now.minute, now.second);
         }
 
         const time_t system_now = time(nullptr);
-        struct tm fields = {};
-        gmtime_r(&system_now, &fields);
-        printf("system     %04d-%02d-%02d %02d:%02d:%02d (no timezone applied yet)\n",
-               fields.tm_year + 1900, fields.tm_mon + 1, fields.tm_mday, fields.tm_hour,
-               fields.tm_min, fields.tm_sec);
+        struct tm utc_fields = {};
+        gmtime_r(&system_now, &utc_fields);
+        printf("system     %04d-%02d-%02d %02d:%02d:%02d UTC\n", utc_fields.tm_year + 1900,
+               utc_fields.tm_mon + 1, utc_fields.tm_mday, utc_fields.tm_hour, utc_fields.tm_min,
+               utc_fields.tm_sec);
+
+        // The same instant, shown through the configured zone. UTC is what the
+        // device keeps; this line is the only place a zone means anything.
+        struct tm local_fields = {};
+        localtime_r(&system_now, &local_fields);
+        const int offset = tz::OffsetSeconds(system_now);
+        printf("local      %04d-%02d-%02d %02d:%02d:%02d %s (UTC%+03d:%02d%s)\n",
+               local_fields.tm_year + 1900, local_fields.tm_mon + 1, local_fields.tm_mday,
+               local_fields.tm_hour, local_fields.tm_min, local_fields.tm_sec,
+               config::Get().time.zone, offset / 3600, abs(offset % 3600) / 60,
+               tz::IsDaylightSaving(system_now) ? ", DST" : "");
         return 0;
     }
 
-    if (argc != 4 || strcmp(argv[1], "set") != 0) {
-        printf("usage: date              read the clock\n");
-        printf("       date set <YYYY-MM-DD> <HH:MM:SS>\n");
+    // `date set` takes **local** time, because that is what an operator reads
+    // off a wall or a phone. `date set utc …` is the escape hatch for the
+    // moment when the zone is wrong and the clock still has to be right.
+    //
+    // The two forms are picked apart by naming the arguments rather than by
+    // shifting `argv`, which is how the first version of this got it wrong: a
+    // shift moves the word the *next* check is looking for.
+    bool as_utc = false;
+    const char *date_arg = nullptr;
+    const char *time_arg = nullptr;
+    if (argc == 4 && strcmp(argv[1], "set") == 0) {
+        date_arg = argv[2];
+        time_arg = argv[3];
+    } else if (argc == 5 && strcmp(argv[1], "set") == 0 && strcmp(argv[2], "utc") == 0) {
+        as_utc = true;
+        date_arg = argv[3];
+        time_arg = argv[4];
+    }
+
+    if (date_arg == nullptr) {
+        printf("usage: date                    read it: RTC and system in UTC, plus local\n");
+        printf("       date set <YYYY-MM-DD> <HH:MM:SS>       in %s\n", config::Get().time.zone);
+        printf("       date set utc <YYYY-MM-DD> <HH:MM:SS>   in UTC\n");
         return 1;
     }
 
     unsigned year = 0, month = 0, day = 0, hour = 0, minute = 0, second = 0;
-    if (sscanf(argv[2], "%4u-%2u-%2u", &year, &month, &day) != 3 ||
-        sscanf(argv[3], "%2u:%2u:%2u", &hour, &minute, &second) != 3) {
-        printf("could not parse '%s %s'; expected YYYY-MM-DD HH:MM:SS\n", argv[2], argv[3]);
+    if (sscanf(date_arg, "%4u-%2u-%2u", &year, &month, &day) != 3 ||
+        sscanf(time_arg, "%2u:%2u:%2u", &hour, &minute, &second) != 3) {
+        printf("could not parse '%s %s'; expected YYYY-MM-DD HH:MM:SS\n", date_arg, time_arg);
         return 1;
     }
 
+    // **The typed time is converted to UTC first, and UTC is what is stored.**
+    // `mktime` reads the fields as local and applies the zone; `timegm` takes
+    // them as UTC already. `tm_isdst = -1` is the important half of the local
+    // case: it tells libc to work out for itself whether summer time was in
+    // force on that date, instead of this code assuming.
+    struct tm fields = {};
+    fields.tm_year = static_cast<int>(year) - 1900;
+    fields.tm_mon = static_cast<int>(month) - 1;
+    fields.tm_mday = static_cast<int>(day);
+    fields.tm_hour = static_cast<int>(hour);
+    fields.tm_min = static_cast<int>(minute);
+    fields.tm_sec = static_cast<int>(second);
+    fields.tm_isdst = as_utc ? 0 : -1;
+
+    const time_t seconds = as_utc ? timegm(&fields) : mktime(&fields);
+    if (seconds <= 0) {
+        printf("that is not a date this clock can hold\n");
+        return 1;
+    }
+
+    struct tm utc_fields = {};
+    gmtime_r(&seconds, &utc_fields);
+
     rtc::DateTime value = {};
-    value.year = static_cast<uint16_t>(year);
-    value.month = static_cast<uint8_t>(month);
-    value.day = static_cast<uint8_t>(day);
-    value.hour = static_cast<uint8_t>(hour);
-    value.minute = static_cast<uint8_t>(minute);
-    value.second = static_cast<uint8_t>(second);
+    value.year = static_cast<uint16_t>(utc_fields.tm_year + 1900);
+    value.month = static_cast<uint8_t>(utc_fields.tm_mon + 1);
+    value.day = static_cast<uint8_t>(utc_fields.tm_mday);
+    value.hour = static_cast<uint8_t>(utc_fields.tm_hour);
+    value.minute = static_cast<uint8_t>(utc_fields.tm_min);
+    value.second = static_cast<uint8_t>(utc_fields.tm_sec);
     value.weekday = 0;  // nothing here reads it; the chip keeps counting it anyway
 
     const esp_err_t err = clock.Write(value);
@@ -161,20 +216,15 @@ int CmdDate(int argc, char **argv) {
 
     // The system clock follows, so logs and `status` agree with the chip
     // without waiting for a reboot.
-    struct tm fields = {};
-    fields.tm_year = static_cast<int>(year) - 1900;
-    fields.tm_mon = static_cast<int>(month) - 1;
-    fields.tm_mday = static_cast<int>(day);
-    fields.tm_hour = static_cast<int>(hour);
-    fields.tm_min = static_cast<int>(minute);
-    fields.tm_sec = static_cast<int>(second);
-    const time_t seconds = mktime(&fields);
-    if (seconds > 0) {
-        const timeval tv = {.tv_sec = seconds, .tv_usec = 0};
-        settimeofday(&tv, nullptr);
-    }
+    const timeval tv = {.tv_sec = seconds, .tv_usec = 0};
+    settimeofday(&tv, nullptr);
 
-    printf("set to %04u-%02u-%02u %02u:%02u:%02u\n", year, month, day, hour, minute, second);
+    printf("set to %04u-%02u-%02u %02u:%02u:%02u %s\n", year, month, day, hour, minute, second,
+           as_utc ? "UTC" : config::Get().time.zone);
+    if (!as_utc) {
+        printf("stored %04d-%02d-%02d %02d:%02d:%02d UTC — the clock keeps UTC, always\n",
+               value.year, value.month, value.day, value.hour, value.minute, value.second);
+    }
     return 0;
 }
 
@@ -609,9 +659,47 @@ int SetConfigField(const char *key, const char *value) {
         char *target;
         size_t capacity;
     };
+    if (strcmp(key, "tz") == 0) {
+        // A name from the table, or a raw POSIX rule for a zone it does not
+        // know. Both are accepted; what is refused is a *third* thing —
+        // something that is neither, which is almost always a typo and which
+        // libc would quietly read as UTC.
+        const char *posix = tz::Lookup(value);
+        const char *name = value;
+        if (posix == nullptr) {
+            if (!tz::LooksLikePosix(value)) {
+                printf("'%s' is neither a zone this firmware knows nor a POSIX rule.\n", value);
+                printf("try 'config zones' for the list, or give a rule like EET-2EEST,M3.5.0/3,M10.5.0/4\n");
+                return 1;
+            }
+            // Stored as `Custom` rather than named after a zone that happens
+            // to share the rule: one rule serves many zones, so naming it
+            // would tell the operator they are in Athens when they typed the
+            // rule for Kyiv.
+            posix = value;
+            name = tz::kCustomName;
+        }
+        if (strlen(name) >= sizeof(c.time.zone) || strlen(posix) >= sizeof(c.time.posix)) {
+            printf("that name or rule is longer than the %u characters the field holds\n",
+                   static_cast<unsigned>(sizeof(c.time.zone) - 1));
+            return 1;
+        }
+
+        snprintf(c.time.zone, sizeof(c.time.zone), "%s", name);
+        snprintf(c.time.posix, sizeof(c.time.posix), "%s", posix);
+        // Applied at once, like the volume: the point of a zone is what `date`
+        // prints, and a setting you cannot see the effect of is one you cannot
+        // check.
+        tz::Apply(c.time.posix);
+        const int offset = tz::OffsetSeconds();
+        printf("tz = %s (%s, UTC%+03d:%02d%s), in memory only — 'config save' writes it to %s\n",
+               c.time.zone, c.time.posix, offset / 3600, abs(offset % 3600) / 60,
+               tz::IsDaylightSaving() ? ", DST now" : "", config::kPath);
+        return 0;
+    }
+
     const StringField strings[] = {
         {"nats", c.nats.url, sizeof(c.nats.url)},
-        {"tz", c.time.timezone, sizeof(c.time.timezone)},
         {"sntp", c.time.sntp_server, sizeof(c.time.sntp_server)},
     };
 
@@ -655,9 +743,30 @@ int CmdConfig(int argc, char **argv) {
     if (argc == 4 && strcmp(argv[1], "set") == 0) {
         return SetConfigField(argv[2], argv[3]);
     }
+
+    if (argc >= 2 && strcmp(argv[1], "zones") == 0) {
+        // The table, optionally filtered — `config zones Europe` is how an
+        // operator finds the spelling without scrolling past Australia.
+        const char *filter = argc == 3 ? argv[2] : nullptr;
+        size_t shown = 0;
+        for (size_t i = 0; i < tz::Count(); ++i) {
+            const tz::Zone &zone = tz::At(i);
+            if (filter != nullptr && strcasestr(zone.name, filter) == nullptr) {
+                continue;
+            }
+            printf("  %-22s %s\n", zone.name, zone.posix);
+            ++shown;
+        }
+        printf("%u of %u zone(s)%s. Any POSIX rule is accepted too.\n",
+               static_cast<unsigned>(shown), static_cast<unsigned>(tz::Count()),
+               filter != nullptr ? " matched" : "");
+        return 0;
+    }
+
     if (argc > 2) {
         printf("usage: config [reload|save|restore]\n");
         printf("       config set <field> <value>\n");
+        printf("       config zones [filter]\n");
         return 1;
     }
 
@@ -705,7 +814,10 @@ int CmdConfig(int argc, char **argv) {
                c.wifi.networks[i].password[0] == '\0' ? "not set" : "set");
     }
     printf("nats       %s\n", c.nats.url);
-    printf("time       TZ=%s, sntp %s\n", c.time.timezone, c.time.sntp_server);
+    const int offset = tz::OffsetSeconds();
+    printf("time       %s (%s), UTC%+03d:%02d%s, sntp %s\n", c.time.zone, c.time.posix,
+           offset / 3600, abs(offset % 3600) / 60, tz::IsDaylightSaving() ? ", DST now" : "",
+           c.time.sntp_server);
     printf("display    %u%%, dim after %us, blank after %us\n",
            static_cast<unsigned>(c.display.brightness),
            static_cast<unsigned>(c.display.dim_seconds),

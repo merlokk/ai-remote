@@ -74,10 +74,12 @@ void AdoptClock() {
     fields.tm_sec = now.second;
     fields.tm_isdst = 0;
 
-    // No timezone anywhere yet: the RTC holds what was written to it and this
-    // treats it as the system clock's own reading. §10.8.2 owns the TZ string
-    // when there is a settings screen to hold it.
-    const time_t seconds = mktime(&fields);
+    // **`timegm`, not `mktime`: the RTC holds UTC** (§10.8.2). `mktime` would
+    // read those seven counters as local time and hand back a `time_t` shifted
+    // by the current zone — which is right only while the zone is UTC, and
+    // wrong by an hour twice a year even then. The chip stores one universal
+    // moment; a zone is applied when it is shown.
+    const time_t seconds = timegm(&fields);
     if (seconds <= 0) {
         return;
     }
