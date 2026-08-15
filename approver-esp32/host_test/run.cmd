@@ -28,7 +28,7 @@ call "%VCVARSALL%" x64 >nul || exit /b 1
 pushd "%~dp0"
 "%CMAKE%" -S . -B build -G Ninja -DCMAKE_MAKE_PROGRAM="%NINJA%" -DIDF_PATH="%IDF_PATH%" || goto :fail
 "%CMAKE%" --build build || goto :fail
-build\host_test.exe || goto :fail
+build\host_test.exe %* || goto :fail
 popd
 exit /b 0
 

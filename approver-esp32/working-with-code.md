@@ -277,13 +277,53 @@ happily playing yesterday's file.
 One command, no board, nothing to install:
 
 ```powershell
-approver-esp32\host_test\run.cmd
+approver-esp32\host_test\run.cmd            # all of them
+approver-esp32\host_test\run.cmd config     # one suite
+approver-esp32\host_test\run.cmd i2c pmic   # several
+```
+
+A suite name is matched as a substring, and the names are `navigator`, `i2c`,
+`pmic`, `rtc`, `imu`, `es8311` and `config`. Run everything before committing;
+filter while debugging, because scrolling past a hundred lines of `PASS` to
+find the one that matters is how a suite stops being run.
+
+The tail of a good run:
+
+```
+124 Tests 0 Failures 0 Ignored
+OK
 ```
 
 It sources MSVC, configures with CMake + Ninja, builds and runs. All three
 tools are already on this machine for other reasons — MSVC for the LVGL
-preview below, CMake and Ninja from ESP-IDF — and `IDF_PATH` is only needed to
-find Unity's sources, with `E:\esp\v6.0.2\esp-idf` as the built-in fallback.
+preview below, CMake and Ninja from ESP-IDF. Two paths it needs:
+
+- **`IDF_PATH`**, for Unity's sources, with `E:\esp\v6.0.2\esp-idf` as the
+  built-in fallback;
+- **`managed_components/espressif__cjson`**, because the config tests use the
+  real parser rather than a stand-in. That directory is fetched by `idf.py
+  build` and is not in git, so **run the firmware build once** before the tests
+  on a fresh checkout. CMake says so by name if it is missing.
+
+**Mutation-check anything worth trusting.** The habit this suite is built on:
+break the rule the test claims to protect, run it, watch the right test fail,
+put it back. It takes a minute and it is the difference between a test and a
+line that always passes. Nine invariants have been through it so far; §10.11
+lists them.
+
+```powershell
+# the shape of it
+git stash              # or just edit and undo by hand
+# …break one line in the driver…
+approver-esp32\host_test\run.cmd i2c
+git checkout -- approver-esp32/components/i2cbus/i2c_bus.cpp
+```
+
+**The test filesystem is `host_test/build/fs`**, and it is deliberately a
+short *relative* path: `storage::kMaxPathLength` is 64 and `ResolvePath`
+refuses rather than truncating, which the host's own temp directory
+(`C:\Users\…\AppData\Local\Temp\…`) blows straight past. Widening the buffer in
+the fake would have hidden a constraint the device really has.
 
 **The drivers are compiled unmodified.** `host_test/fakes/` shadows ESP-IDF's
 headers on the include path, so `i2c_bus.cpp`, `axp2101.cpp`, `pcf85063.cpp`,

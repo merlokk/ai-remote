@@ -44,6 +44,17 @@ if(NOT DEFINED IDF_PATH)
 endif()
 set(UNITY_DIR "${IDF_PATH}/components/unity/unity/src")
 
+# cJSON is a managed component, so it is not in git — `idf.py build` fetches it
+# into `managed_components/`. Depending on it here is the price of testing the
+# real parser instead of a stand-in.
+set(CJSON_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../managed_components/espressif__cjson/cJSON")
+
+if(NOT EXISTS "${CJSON_DIR}/cJSON.c")
+    message(FATAL_ERROR
+        "cJSON not found at ${CJSON_DIR}. Run `idf.py build` once to fetch the "
+        "managed components; working-with-code.md has the command.")
+endif()
+
 if(NOT EXISTS "${UNITY_DIR}/unity.c")
     message(FATAL_ERROR
         "Unity not found at ${UNITY_DIR}. Pass -DIDF_PATH=<esp-idf checkout>; "
@@ -58,11 +69,13 @@ add_executable(host_test
     test_rtc.cpp
     test_imu.cpp
     test_es8311.cpp
+    test_config.cpp
 
     # The fake ESP-IDF the drivers are compiled against. `fakes/` shadows the
     # framework's headers on the include path below, so the sources listed
     # after it are the ones that ship, unmodified.
     fakes/fake_platform.cpp
+    fakes/fake_storage.cpp
 
     # Under test.
     ../components/ui/navigator.cpp
@@ -71,6 +84,11 @@ add_executable(host_test
     ../components/rtc/pcf85063.cpp
     ../components/imu/qmi8658.cpp
     ../components/audio/es8311.cpp
+    ../components/config/config.cpp
+    ../components/timezone/timezone.cpp
+
+    # cJSON, the real one, out of the managed component `idf.py build` fetched.
+    "${CJSON_DIR}/cJSON.c"
 
     "${UNITY_DIR}/unity.c"
 )
@@ -84,6 +102,10 @@ target_include_directories(host_test PRIVATE
     ../components/rtc
     ../components/imu
     ../components/audio
+    ../components/config
+    ../components/timezone
+    ../components/storage
+    "${CJSON_DIR}"
     "${UNITY_DIR}"
 )
 
@@ -91,7 +113,29 @@ target_include_directories(host_test PRIVATE
 # the double support it references.
 target_compile_definitions(host_test PRIVATE UNITY_INCLUDE_DOUBLE)
 
+# Where `fake::PutRepoFile` finds the committed `config.json` /
+# `config.init.json`. The tests read the **real** files, which is what makes
+# "the shipped defaults parse" mean anything.
+target_compile_definitions(host_test PRIVATE
+    SPIFFS_IMAGE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../spiffs_image")
+
+# `setenv`, `tzset`, `localtime_r` and `timegm` under the names the firmware
+# calls them, forced into every C++ translation unit so the shipping sources
+# need no `#ifdef _WIN32`. **CXX only** — Unity and cJSON are C, and a header
+# that includes `<cstdlib>` makes MSVC refuse the file outright.
 if(MSVC)
+    # No quotes inside the flag: CMake would quote the whole token and MSVC then
+    # reads the path as part of the option name. The path has no spaces.
+    target_compile_options(host_test PRIVATE
+        "$<$<COMPILE_LANGUAGE:CXX>:/FI${CMAKE_CURRENT_SOURCE_DIR}/fakes/posix_compat.h>")
+endif()
+
+if(MSVC)
+    # MSVC calls `fopen`, `tzset` and friends deprecated. That is its opinion
+    # about the standard C library, not a finding about this code, and the
+    # firmware compiles the same lines under GCC with -Wall -Wextra -Werror.
+    target_compile_definitions(host_test PRIVATE _CRT_SECURE_NO_WARNINGS
+                                                 _CRT_NONSTDC_NO_WARNINGS)
     target_compile_options(host_test PRIVATE /W4 /WX)
 else()
     target_compile_options(host_test PRIVATE -Wall -Wextra -Werror)

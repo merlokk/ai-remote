@@ -58,7 +58,7 @@ the repository owner's sign-off say so.
 | Wi-Fi manager: scan, join, remember, reconnect (§10.9) | specified, not started |
 | Where the configuration lives (§10.15) | **decided**: all of it in JSON on SPIFFS, nothing of ours in NVS — with the cost stated (SPIFFS cannot be encrypted at rest). `spiffs_image/config.json` + `config.init.json` are flashed; nothing reads them yet |
 | The `KEY`-at-boot config restore (§10.15) | specified, not started |
-| Host-tier tests (§10.11) — `host_test/` | **running**: 100 Unity tests over `ui`, `i2cbus`, `pmic`, `rtc`, `imu` and `audio`, one command, no board. The drivers are compiled **unmodified** against a fake ESP-IDF (`host_test/fakes/`), which is §10.14.3's owed fake backend arriving in a different shape than that section specified. Built by MSVC rather than by ESP-IDF's `linux` target, which does not work on a Windows host — §10.11 records why |
+| Host-tier tests (§10.11) — `host_test/` | **running**: 124 Unity tests over `ui`, `i2cbus`, `pmic`, `rtc`, `imu`, `audio` and `config`, one command, no board. The drivers are compiled **unmodified** against a fake ESP-IDF (`host_test/fakes/`), which is §10.14.3's owed fake backend arriving in a different shape than that section specified. Built by MSVC rather than by ESP-IDF's `linux` target, which does not work on a Windows host — §10.11 records why |
 | Protocol parity vectors (§10.11 tier 2) | not started |
 
 Read §10.3 before anything else: it is the one part of this that changes
@@ -1059,7 +1059,7 @@ Three tiers, and the first one is where nearly everything belongs:
    ESP-IDF. One command, in [`working-with-code.md`](working-with-code.md).
 
    **What is under it today is the navigator and four of the five chips on the
-   I²C bus** — 100 tests:
+   I²C bus, and the settings file** — 124 tests:
 
    | Subject | What is pinned |
    |---|---|
@@ -1069,6 +1069,7 @@ Three tiers, and the first one is where nearly everything belongs:
    | `components/rtc` | BCD both ways; the seven counters in one burst; the OS flag making a *successful* read untrustworthy, and being masked out of the seconds it shares a register with; the clock stopped and restarted around a write — including after a write that failed |
    | `components/imu` | 0x6B, the inverse of the habit; CTRL1's auto-increment, without which fourteen bytes are TEMP_L fourteen times; the range actually changing the scale; signed counts; tilt |
    | `components/audio` | the volume mapping where 0 is silence rather than full scale; clamping; the codec coming up muted; rates refused rather than approximated — and the two lease rules of §10.14.3 that this suite **found broken here and in the IMU**: a bounded number of leases across a configuration sequence, and zero milliseconds slept while holding the bus |
+   | `components/config` | every test §10.15 asks for, and the one it spends the most words on: **the write that is not allowed to half-happen**. All three post-crash states are exercised — a leftover temp dropped, a temp with no `config.json` finished into place, and a clean save leaving nothing behind — against a filesystem where `rename()` refuses to replace, exactly as SPIFFS does. Plus: the **committed** `spiffs_image/` files parsed rather than a fixture, so an edit that breaks them fails here instead of on a flash; the password placeholder still being `CHANGEME`; a missing, truncated, non-JSON or oversized file all ending in a restore; `Reload` deliberately **not** restoring; `registration.json` untouched by one; unknown fields lost on the next write; and a named zone filling in its POSIX rule |
 
    The fake platform is `host_test/fakes/` — an ESP-IDF-shaped set of headers
    with a register-file I²C device behind them. It models the shape all five
@@ -1078,11 +1079,21 @@ Three tiers, and the first one is where nearly everything belongs:
    headers rather than the interface that section originally specified.
 
    **Every one of these was mutation-checked rather than trusted**: break the
-   rule, watch the test that covers it fail, put it back. Six so far — the
+   rule, watch the test that covers it fail, put it back. Nine so far — the
    card-outranks-navigation rule, the lease timeout, `Recover`'s handle drop,
-   the battery field width, `PowerOff`'s refusal, and the OS flag. Two more
-   needed no mutation, because they failed on the real code the first time it
-   was run: §10.14.3 has them.
+   the battery field width, `PowerOff`'s refusal, the RTC's OS flag, and
+   `config`'s three: the boot-time recovery, the restore-on-bad-file, and the
+   atomic write. Two more needed no mutation, because they failed on the real
+   code the first time it was run: §10.14.3 has them.
+
+   Two things the host build costs, both recorded because they will look
+   arbitrary later. It needs **`managed_components/`** — the config tests use
+   the real cJSON, which `idf.py build` fetches and git does not carry, so a
+   fresh checkout builds the firmware once first. And a handful of POSIX names
+   MSVC spells differently (`setenv`, `localtime_r`, `timegm`, `strcasecmp`)
+   are supplied by a force-included header rather than by an `#ifdef _WIN32` in
+   the firmware: the sources under test are the ones that ship, and that rule
+   is worth more than the tidiness of not having the header.
 
    Three things the screens add to it, all of them logic rather than pixels:
    **the navigation state machine** (a request preempts every screen; it cannot

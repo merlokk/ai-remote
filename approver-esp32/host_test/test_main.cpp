@@ -8,6 +8,14 @@
 // and not in each suite: a test that inherits the previous one's transfer log
 // passes for the wrong reason, and the only reliable way to prevent it is for
 // no suite to have the option of forgetting.
+//
+// With no arguments it runs everything, which is what a pre-commit check
+// wants. With arguments it runs the suites whose name contains one of them —
+// `run.cmd i2c pmic` — which is what a debugging loop wants. That exists
+// because scrolling past a hundred lines of PASS to find the one that matters
+// is how a suite stops being run.
+
+#include <cstring>
 
 #include "fake_platform.h"
 #include "unity.h"
@@ -18,20 +26,44 @@ void RegisterPmicTests(void);
 void RegisterRtcTests(void);
 void RegisterImuTests(void);
 void RegisterEs8311Tests(void);
+void RegisterConfigTests(void);
 
 void setUp(void) { fake::Reset(); }
 
 void tearDown(void) {}
 
-int main(void) {
+namespace {
+
+int filter_count = 0;
+char **filters = nullptr;
+
+bool Wanted(const char *suite) {
+    if (filter_count == 0) {
+        return true;
+    }
+    for (int i = 0; i < filter_count; ++i) {
+        if (std::strstr(suite, filters[i]) != nullptr) {
+            return true;
+        }
+    }
+    return false;
+}
+
+}  // namespace
+
+int main(int argc, char **argv) {
+    filter_count = argc - 1;
+    filters = argv + 1;
+
     UNITY_BEGIN();
 
-    RegisterNavigatorTests();
-    RegisterI2cBusTests();
-    RegisterPmicTests();
-    RegisterRtcTests();
-    RegisterImuTests();
-    RegisterEs8311Tests();
+    if (Wanted("navigator")) RegisterNavigatorTests();
+    if (Wanted("i2c")) RegisterI2cBusTests();
+    if (Wanted("pmic")) RegisterPmicTests();
+    if (Wanted("rtc")) RegisterRtcTests();
+    if (Wanted("imu")) RegisterImuTests();
+    if (Wanted("es8311")) RegisterEs8311Tests();
+    if (Wanted("config")) RegisterConfigTests();
 
     return UNITY_END();
 }
