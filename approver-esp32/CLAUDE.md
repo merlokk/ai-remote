@@ -47,6 +47,8 @@ the repository owner's sign-off say so.
 | Named time zones — `components/timezone` (§10.8.2) | **running on hardware**: 72 zones compiled in, `Europe/Kyiv` or plain `EET` rather than a POSIX rule, applied at boot from `config.json`. The clock stays UTC; a zone only changes what is printed and how a typed time is read |
 | AXP2101 — `components/pmic`, brought up from `board::Init()` (§10.1, §10.13) | **configured and reading on hardware**: TS pin silenced, ADC channels, VBUS limit, rail voltages, charge currents — all cross-checked against the vendor's `pmicpower` component — plus `SetAldo2`/`SetAldo3` for the audio and panel rails |
 | The panel and the touch — `components/display` (§10.1, §10.8) | **lit on hardware**: the CO5300 over QSPI with the vendor's init sequence, its reset driven as a PMIC rail through a callback, the CST9220 read under the I²C lease, and LVGL 9.4 on two 480×40 buffers. `display` on the console. No screens yet — §10.8's five are the next thing, and what is on the panel today is a placeholder that says so |
+| The navigation state machine — `components/ui` (§10.8.1) | **written and tested on the host**: which screen is up, the request card outranking everything, the bounded pending queue. It includes no headers at all, which is what makes it testable without a board |
+| The boot splash — `spiffs_image/splash.bin`, `components/display/rawimage` (§10.8) | **running on hardware**: white katakana, on the glass for two seconds before LVGL owns it. Generated on the host by `tools/make-splash.ps1`, streamed off SPIFFS as raw RGB565 with no decoder |
 | The language and the layering (§10.14) — C++ except where C is forced, no dynamic memory, library layer before logic, the I²C bus leased | **decided**, nothing written yet |
 | The ESP-IDF dependency set (§10.4) — LVGL + `esp_lvgl_port`, the CO5300/CST9220 drivers, libsodium for Ed25519, `debsahu/espidf-nats` for the bus | **signed off** (root §1). The display half is **resolved and building**: LVGL 9.4.0, `esp_lvgl_port` 2.9.0, `esp_lcd_sh8601` 2.0.1, `waveshare/esp_lcd_touch_cst9217` 1.0.4 — two of which are not the names §10.4 guessed, see below. libsodium and the NATS client are still unresolved |
 | The LVGL host preview (§10.12.1) | installed and rendering — the only part of this folder that runs today |
@@ -56,7 +58,8 @@ the repository owner's sign-off say so.
 | Wi-Fi manager: scan, join, remember, reconnect (§10.9) | specified, not started |
 | Where the configuration lives (§10.15) | **decided**: all of it in JSON on SPIFFS, nothing of ours in NVS — with the cost stated (SPIFFS cannot be encrypted at rest). `spiffs_image/config.json` + `config.init.json` are flashed; nothing reads them yet |
 | The `KEY`-at-boot config restore (§10.15) | specified, not started |
-| Host-tier tests + protocol parity vectors (§10.11) | not started |
+| Host-tier tests (§10.11) — `host_test/` | **running**: fifteen Unity tests over `components/ui`, one command, no board. Built by MSVC rather than by ESP-IDF's `linux` target, which does not work on a Windows host — §10.11 records why |
+| Protocol parity vectors (§10.11 tier 2) | not started |
 
 Read §10.3 before anything else: it is the one part of this that changes
 something outside this folder.
@@ -679,6 +682,29 @@ Five, and one of them is not navigable to — it arrives:
 None of them needs a board to be drawn: §10.12.1 renders LVGL on the host and
 returns a picture — with the caveats stated there about what a picture proves.
 
+**And one picture that is not a screen: the boot splash.** White katakana,
+Matrix-fashion, on the glass from the moment the panel is up until LVGL takes
+it over. It is deliberately *not* an LVGL screen and not in the table above —
+it exists in the window before LVGL owns anything, which is also the only
+window in which the panel is up and there is nothing to show.
+
+- **The boot sound plays under it, and that is what decides how long it is
+  up.** `Speaker::PlayWav` blocks for the length of the file, the picture needs
+  no CPU to stay on the glass, so the three seconds the chime costs are three
+  seconds of splash rather than three seconds after it. The two used to
+  stack — a device that lit up silently and then beeped at a clock — and
+  unstacking them made the boot 1.7 s shorter as a side effect. The `2000` in
+  `main.cpp` is a floor for a device with no codec, not a duration.
+- **It is a file, not code**: `spiffs_image/splash.bin`, generated on the host
+  by `tools/make-splash.ps1` and flashed with the SPIFFS image. Raw RGB565 in
+  the panel's byte order, no header, no decoder — `components/display/rawimage.h`
+  argues it, and the argument is `speaker.h`'s about WAV, applied to pixels.
+  460 800 bytes of an 11 MB partition.
+- The generator is **Windows PowerShell 5.1** rather than Python, and that is
+  the dependency ledger rather than a preference: rasterising a glyph needs a
+  font engine, `System.Drawing` is in the box on every Windows machine, and
+  every other route meant a new entry on root §1's list.
+
 #### 10.8.1 The model — priority, not a stack
 
 Navigation is a small explicit state machine, not "whatever LVGL screen was
@@ -1002,8 +1028,8 @@ handler's signature.
 Root §1's TDD rule applies here as it does to pytest, Rust and the Node half.
 Three tiers, and the first one is where nearly everything belongs:
 
-1. **Host tier — no board.** ESP-IDF builds for the `linux` target, so the pure
-   logic runs under Unity on the development machine: the signing-bytes
+1. **Host tier — no board.** The pure logic runs under Unity on the development
+   machine: the signing-bytes
    assembly, the reply builder, payload validation (not JSON, fields missing,
    values out of range, a `MSG` with no reply-to), the base64 helpers, the
    `int64` `ts` round-trip, and the config files of §10.15 with every field
@@ -1016,6 +1042,31 @@ Three tiers, and the first one is where nearly everything belongs:
    library layer has no protocol in it (§10.14.2), which is exactly what makes
    it runnable on the host. This is the tier that has to be comprehensive,
    because it is the one that runs on every change.
+
+   **It is not built by ESP-IDF, and that is a finding rather than a
+   shortcut.** This section used to open with "ESP-IDF builds for the `linux`
+   target", and the target *is* offered by the install here
+   (`idf.py --preview --list-targets` lists it) — it just does not work on a
+   Windows host: `set-target linux` picks esp-clang and then tries to link a
+   Windows PE against `kernel32`/`user32` with `ld.lld`, ending in `unable to
+   find library -lkernel32`. Measured, not assumed.
+
+   So `host_test/` is a plain CMake project built by the host compiler, and it
+   keeps the two things that matter. It is **Unity**, taken out of the ESP-IDF
+   checkout rather than vendored, so these tests move to the `linux` target
+   unchanged the day it works; and it needs **nothing installed** — MSVC is
+   already here for §10.12.1's LVGL preview, CMake and Ninja ship with
+   ESP-IDF. One command, in [`working-with-code.md`](working-with-code.md).
+
+   **What is under it today is `components/ui`** — the navigation machine of
+   §10.8.1, fifteen tests: every transition of §10.8's table, swipes that must
+   *not* navigate on the settings and Wi-Fi screens, a request preempting all
+   four screens without moving any of them, navigation vanishing entirely
+   while the card is up, the screen underneath surviving both an answer and an
+   expiry, and the pending queue refusing a fifth arrival rather than
+   absorbing it. That component's `CMakeLists.txt` has an empty `REQUIRES`,
+   which is not an omission: a navigator that included LVGL would be a
+   navigator that needs a board.
 
    Three things the screens add to it, all of them logic rather than pixels:
    **the navigation state machine** (a request preempts every screen; it cannot

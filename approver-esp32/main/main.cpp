@@ -12,7 +12,11 @@
 #include "esp_app_desc.h"
 #include "esp_log.h"
 #include "esp_ota_ops.h"
+#include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "lvgl_display.h"
+#include "rawimage.h"
 #include "storage.h"
 #include "timezone.h"
 
@@ -24,6 +28,20 @@ constexpr const char *TAG = "app";
 // mono PCM, because the firmware has no decoder and does not want one — the
 // argument is in `speaker.h`.
 constexpr const char *kBootSound = "poweron.wav";
+
+// The boot splash (§10.8): white katakana, Matrix-fashion, generated on the
+// host by `tools/make-splash.ps1` and flashed with the SPIFFS image. Raw
+// RGB565 in the panel's own byte order — `rawimage.h` argues why the firmware
+// has no decoder, and it is `speaker.h`'s argument applied to pixels.
+constexpr const char *kSplashImage = "splash.bin";
+
+// **A floor, not a duration, and measured from the start of the blit.** The
+// boot sound plays under the splash and takes about three seconds, so that is
+// what decides how long the picture is up; this is what keeps a device with no
+// codec — or a shorter chime — from flashing the splash and moving on. Timing
+// it from the start also stops a slow filesystem from being added to the wait:
+// the 460 KB is on the glass while it streams.
+constexpr int64_t kSplashMs = 2000;
 
 // **A placeholder, and it is meant to be deleted.** §10.8 specifies five
 // screens and none of them exists yet; what this draws is the smallest thing
@@ -137,26 +155,55 @@ extern "C" void app_main(void) {
         board::Codec().SetVolume(config::Get().audio.volume_percent);
     }
 
+    // **The splash and the boot sound are one event, and the order below is
+    // what makes them one.** The picture goes on the glass first, the chime
+    // plays under it, and LVGL takes the panel over only afterwards — a device
+    // that lights up silently and then beeps at a clock reads as two devices.
+    //
+    // Both come after the console on purpose: between them they hold this task
+    // for about three seconds, and a board that will not answer `status` until
+    // a chime has finished is a board that looks hung.
+    const int64_t splash_started = esp_timer_get_time();
+
+    if (board::Display().Ready()) {
+        // While LVGL still owns nothing — the moment the port registers a
+        // display it starts flushing its own blank screen over whatever is
+        // there, so this is not a step that can be moved later.
+        const esp_err_t splash = display::BlitRaw(board::Display(), kSplashImage);
+        if (splash != ESP_OK) {
+            // A boot with no splash is a boot (§10.10's rule about staying up
+            // to report), so this is a log line and not a branch.
+            ESP_LOGW(TAG, "%s not shown: %s", kSplashImage, esp_err_to_name(splash));
+        }
+    }
+
+    // **`PlayWav` blocks for the length of the file, and here that is the
+    // point rather than a limitation**: the splash is already on the panel and
+    // needs no CPU to stay there, so the three seconds this spends are three
+    // seconds of splash. It is also why `kSplashMs` is a floor and not a
+    // duration — the sound is what actually decides how long the picture is
+    // up, and a shorter file simply gives the wait below something to do.
+    if (board::Sound().Ready()) {
+        const esp_err_t err = board::Sound().PlayWav(kBootSound);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "%s not played: %s", kBootSound, esp_err_to_name(err));
+        }
+    }
+
     // LVGL, and it is `main` that starts it rather than `board::Init` for the
     // same reason the volume is applied here: the panel is hardware, the task
     // that draws on it is an application decision (§10.14.2).
     if (board::Display().Ready()) {
+        const int64_t shown_ms = (esp_timer_get_time() - splash_started) / 1000;
+        if (shown_ms < kSplashMs) {
+            vTaskDelay(pdMS_TO_TICKS(kSplashMs - shown_ms));
+        }
+
         const esp_err_t err = display::LvglInit(board::Display(), &board::Touch());
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "LVGL not started: %s", esp_err_to_name(err));
         } else {
             ShowPlaceholder();
-        }
-    }
-
-    // The boot sound, last and deliberately after the console: it takes three
-    // seconds of this task, and a device that will not answer `status` until a
-    // chime has finished is a device that looks hung. Failure is a log line —
-    // §10.10's rule holds here too, and a silent boot is a working boot.
-    if (board::Sound().Ready()) {
-        const esp_err_t err = board::Sound().PlayWav(kBootSound);
-        if (err != ESP_OK) {
-            ESP_LOGW(TAG, "%s not played: %s", kBootSound, esp_err_to_name(err));
         }
     }
 }
