@@ -18,6 +18,7 @@
 // (§10.14.2), verified against the datasheet in `docs/`; this file is wires.
 
 #include "axp2101.h"
+#include "buttons.h"
 #include "driver/gpio.h"
 #include "esp_err.h"
 #include "i2c_bus.h"
@@ -45,6 +46,25 @@ namespace button {
 inline constexpr gpio_num_t kBoot = GPIO_NUM_9;
 inline constexpr gpio_num_t kKey = GPIO_NUM_10;
 inline constexpr gpio_num_t kPwr = GPIO_NUM_18;
+
+// The index each button has in `board::Buttons()`. The driver is a table of
+// pins that knows no names (§10.14.2); this is where the table gets its meaning,
+// and it is the only place that may assume the order.
+enum Index : size_t {
+    kBootIndex = 0,
+    kKeyIndex = 1,
+    kPwrIndex = 2,
+    kCount = 3,
+};
+
+// `BOOT` and `KEY` short their pin to ground: idle high, pressed 0. **`PWR`
+// is inverted at this pin** — GPIO18 rests at 0 (driven, not floating: it
+// stays 0 with the internal pull-up enabled) and goes high while the button is
+// held, the opposite of the AXP2101's own PWRON pin. Measured on this board,
+// not read off a sheet; `board.cpp` carries the note and the polarity.
+//
+// Reading any of them costs nothing and changes nothing — in particular,
+// watching `PWR` is not how the board is switched (§10.1).
 }  // namespace button
 
 // --- The I²C bus ---------------------------------------------------------
@@ -141,5 +161,6 @@ esp_err_t Init();
 i2cbus::Bus &I2c();
 pmic::Axp2101 &Pmic();
 rtc::Pcf85063 &Clock();
+buttons::Buttons &Buttons();
 
 }  // namespace board

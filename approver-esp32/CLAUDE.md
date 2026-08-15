@@ -39,6 +39,7 @@ the repository owner's sign-off say so.
 | The pin map — `components/boards/board.h` (§10.1) | **written**, from Waveshare's own pinout sheet in `docs/`; logged at boot. Nothing drives a pin yet |
 | SPIFFS mounted + the console — `components/storage`, `components/cli` (§10.7, §10.15) | **running on hardware**: flashed over COM4, `status`, `power` and `cat` answer on the USB Serial/JTAG port |
 | The leased I²C bus — `components/i2cbus` (§10.14.3) | **written and running**: lease, timeout-not-block, per-address device table, bus recovery. The fake backend the host tests need is still owed (§10.11) |
+| The buttons — `components/buttons` (§10.1, §10.15) | **running on hardware**: debounced BOOT / KEY / PWR, polled, with a blocking `HeldFor` for §10.15's KEY-at-boot. It is what found that GPIO18 reads `PWR` **inverted**. No consumer yet — the config restore is still unwritten |
 | PCF85063 RTC — `components/rtc` (§10.8.2) | **running on hardware**: read, written and surviving a reboot; the system clock is adopted from it at boot. No timezone and no SNTP yet |
 | AXP2101 — `components/pmic`, brought up from `board::Init()` (§10.1, §10.13) | **configured and reading on hardware**: TS pin silenced, ADC channels, VBUS limit, rail voltages, charge currents — all cross-checked against the vendor's `pmicpower` component — plus `SetAldo2`/`SetAldo3` for the audio and panel rails |
 | The language and the layering (§10.14) — C++ except where C is forced, no dynamic memory, library layer before logic, the I²C bus leased | **decided**, nothing written yet |
@@ -104,6 +105,15 @@ behaviour to avoid breaking, and GPIO18 exists so the firmware can *see* the
 button, not so it can switch the board. And it is the same fact that makes
 §10.7's `poweroff` refuse over USB: VBUS insert powers the chip on, so a soft
 shutdown with the cable in is one the hardware immediately undoes.
+
+**And GPIO18 sees it inverted, which the datasheet does not say and a board
+does.** `PWR` at the PMIC is pressed = 0; at the ESP's pin it is the other way
+round — GPIO18 rests at **0** (driven, not floating: it stays 0 with the
+internal pull-up enabled) and goes high while the button is held. `BOOT` and
+`KEY` are the ordinary way round, low when pressed. This was found by reading
+the pin with the obvious polarity assumed and getting a button that was pressed
+for the whole uptime, which is the argument for `buttons` (§10.7) existing at
+all: a button driver that is never read back is a set of assumptions.
 
 Where the rest comes from when it is needed — the TE line, backlight, the PMIC
 and RTC interrupts, and the driver init sequences the sheet cannot carry:
@@ -480,6 +490,9 @@ power                         # the AXP2101: charge state, VBUS, battery mV and 
                               # the system rail, die temperature (§10.13's one job)
 date                          # the RTC, and the system clock beside it
 date set <YYYY-MM-DD> <HH:MM:SS>
+buttons                       # BOOT / KEY / PWR: debounced state, the raw pin
+                              # beside it, and how long it has been that way
+buttons watch [seconds]       # print edges as they happen, with press durations
 poweroff now                  # cut power — refused while USB is connected
 ls                            # what is in the storage partition, with sizes
 cat <path>                    # print a file from the storage partition (§10.15)
@@ -507,6 +520,16 @@ looks complete is worse than a short one that admits it. That is the rule
 `ls` also has nothing to recurse into — **SPIFFS is flat**, so its output is the
 whole filesystem rather than one level of it, and `2 file(s), 1626 bytes` next
 to `partition 2259 bytes used` is the filesystem's own overhead made visible.
+
+**`buttons` prints two answers per button — the debounced state and the raw
+pin — because they disagree exactly when something is wrong.** A pin held low
+by a fault reads pressed in both, for the whole uptime, which is how a broken
+button tells itself apart from an idle one; it is also how §10.1's inverted
+`PWR` was found. `buttons watch` is the other half: it blocks the REPL for a
+bounded number of seconds (default 10, capped at 120 — a watch that outlives
+the operator's attention is a console that looks hung) and prints each edge
+with the duration of the press it ended. A run that shows several 30 ms presses
+where one finger went down is a debounce window that is too short.
 
 **`poweroff` refuses while USB is connected, and that is a driver rule rather
 than a console one** — `Axp2101::PowerOff()` reads the VBUS bits and returns

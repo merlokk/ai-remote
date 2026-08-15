@@ -4,10 +4,12 @@
 
 #include <cinttypes>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
 
 #include "board.h"
+#include "buttons.h"
 #include "esp_app_desc.h"
 #include "esp_chip_info.h"
 #include "esp_console.h"
@@ -17,6 +19,8 @@
 #include "esp_ota_ops.h"
 #include "esp_system.h"
 #include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "storage.h"
 
 namespace console {
@@ -251,6 +255,114 @@ int CmdCat(int argc, char **argv) {
     }
 }
 
+// `buttons watch` runs for this long unless told otherwise, and no longer than
+// the cap — the REPL task is blocked while it runs, so a watch that outlives the
+// operator's attention is a console that looks hung.
+constexpr uint32_t kWatchDefaultSeconds = 10;
+constexpr uint32_t kWatchMaxSeconds = 120;
+
+// **A single poll can never confirm a change.** The debounce promotes a level
+// only once it has held for `kDebounceMs` *across* polls, and one call has no
+// elapsed time in it — so a one-shot snapshot would print every button as it was
+// before the command ran. A button held while `buttons` is typed would come out
+// as `released` next to `raw pressed`, and that disagreement is the console's
+// fault rather than the wire's, which is precisely the signal the two columns
+// exist to carry. So: sample for a little longer than the window first.
+void Settle(buttons::Buttons &keys) {
+    const int64_t until =
+        esp_timer_get_time() + static_cast<int64_t>(buttons::kDebounceMs + 15) * 1000;
+    do {
+        keys.PollAll();
+        vTaskDelay(pdMS_TO_TICKS(buttons::kPollIntervalMs));
+    } while (esp_timer_get_time() < until);
+}
+
+void PrintButtonRow(buttons::Buttons &keys, size_t index) {
+    // Both answers, because they disagree exactly when something is wrong: the
+    // raw level is the wire, `Pressed()` is what the debounce believes. A pin
+    // stuck low reads pressed in both and held for the whole uptime, which is
+    // how a broken button tells itself apart from an idle one.
+    printf("%-6s GPIO%-3d %-8s raw %-8s %lu ms in this state\n", keys.Name(index),
+           static_cast<int>(keys.Gpio(index)), keys.Pressed(index) ? "pressed" : "released",
+           keys.RawPressed(index) ? "pressed" : "released",
+           static_cast<unsigned long>(keys.StableMs(index)));
+}
+
+int CmdButtons(int argc, char **argv) {
+    buttons::Buttons &keys = board::Buttons();
+    if (!keys.Ready()) {
+        printf("the buttons were not initialised at boot — nothing to read\n");
+        return 1;
+    }
+    if (argc == 1) {
+        Settle(keys);
+        for (size_t i = 0; i < keys.Count(); ++i) {
+            PrintButtonRow(keys, i);
+        }
+        return 0;
+    }
+
+    if (strcmp(argv[1], "watch") != 0 || argc > 3) {
+        printf("usage: buttons              the state of all three\n");
+        printf("       buttons watch [s]    print edges for a while (default %lu s)\n",
+               static_cast<unsigned long>(kWatchDefaultSeconds));
+        return 1;
+    }
+
+    uint32_t seconds = kWatchDefaultSeconds;
+    if (argc == 3) {
+        char *end = nullptr;
+        const unsigned long parsed = strtoul(argv[2], &end, 10);
+        if (end == argv[2] || *end != '\0' || parsed == 0 || parsed > kWatchMaxSeconds) {
+            printf("expected 1..%lu seconds, got '%s'\n",
+                   static_cast<unsigned long>(kWatchMaxSeconds), argv[2]);
+            return 1;
+        }
+        seconds = static_cast<uint32_t>(parsed);
+    }
+
+    printf("watching for %lu s — press a button; PWR is the AXP2101's, so a long\n",
+           static_cast<unsigned long>(seconds));
+    printf("press of it switches the board off rather than printing anything\n");
+
+    const int64_t started_us = esp_timer_get_time();
+    const int64_t deadline_us = started_us + static_cast<int64_t>(seconds) * 1000000;
+    // How long a press lasted is the number worth having — a debounce that is
+    // too short shows up here as a handful of 30 ms presses where the operator
+    // made one. `StableMs` cannot answer it: by the time the release edge is
+    // reported, it is timing the release.
+    int64_t pressed_at_us[buttons::kMaxButtons] = {};
+    for (size_t i = 0; i < keys.Count(); ++i) {
+        // A button already down when the watch starts gets its duration counted
+        // from here rather than from the epoch — an honest understatement beats
+        // "released after 47 minutes".
+        pressed_at_us[i] = started_us;
+    }
+    unsigned edges = 0;
+    while (esp_timer_get_time() < deadline_us) {
+        for (size_t i = 0; i < keys.Count(); ++i) {
+            const buttons::Event event = keys.Poll(i);
+            if (event == buttons::Event::kNone) {
+                continue;
+            }
+            ++edges;
+            const int64_t now_us = esp_timer_get_time();
+            const double at = static_cast<double>(now_us - started_us) / 1000000.0;
+            if (event == buttons::Event::kPressed) {
+                pressed_at_us[i] = now_us;
+                printf("  +%6.2fs  %-6s pressed\n", at, keys.Name(i));
+            } else {
+                printf("  +%6.2fs  %-6s released after %lu ms\n", at, keys.Name(i),
+                       static_cast<unsigned long>((now_us - pressed_at_us[i]) / 1000));
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(buttons::kPollIntervalMs));
+    }
+
+    printf("done, %u edge(s)\n", edges);
+    return 0;
+}
+
 int CmdPower(int, char **) {
     pmic::Axp2101 &axp = board::Pmic();
     if (!axp.Present()) {
@@ -315,6 +427,15 @@ const esp_console_cmd_t kCommands[] = {
         .help = "charge state, VBUS, battery and system voltage, die temperature",
         .hint = nullptr,
         .func = &CmdPower,
+        .argtable = nullptr,
+        .func_w_context = nullptr,
+        .context = nullptr,
+    },
+    {
+        .command = "buttons",
+        .help = "the three buttons: state now, or 'buttons watch [s]' to print edges",
+        .hint = "[watch [seconds]]",
+        .func = &CmdButtons,
         .argtable = nullptr,
         .func_w_context = nullptr,
         .context = nullptr,

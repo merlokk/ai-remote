@@ -138,13 +138,15 @@ port the monitor uses. Open one and type into it:
 idf.py -p COM4 monitor
 ```
 
-Two commands answer today (§10.7 has the rest, and why they are not here yet):
+These answer today (§10.7 has the rest, and why they are not here yet):
 
 ```
 status                        # firmware / IDF / chip versions, OTA slot, uptime, heap, storage
 power                         # the AXP2101: charge state, VBUS, battery, system rail, die temp
 date                          # the RTC and the system clock
 date set 2026-08-15 16:41:13  # write both
+buttons                       # BOOT / KEY / PWR: debounced state + the raw pin
+buttons watch 30              # print edges for 30 s (default 10, max 120)
 poweroff now                  # cut power; refused over USB, so it does nothing on the bench
 ls                            # what is in the storage partition, with sizes
 cat <path>                    # print a file from the storage partition, e.g. cat config.json

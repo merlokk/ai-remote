@@ -18,6 +18,27 @@ constexpr const char *TAG = "board";
 i2cbus::Bus bus;
 pmic::Axp2101 axp;
 rtc::Pcf85063 clock_chip;
+buttons::Buttons keys;
+
+// The pin map turned into the driver's table. The order is `button::Index`'s,
+// and the static_assert below is what keeps the two from drifting.
+//
+// **`pwr` is the odd one, and the polarity was measured rather than assumed.**
+// `BOOT` and `KEY` short their pin to ground: idle high, pressed 0. GPIO18 does
+// the opposite — it reads **0 at rest with the internal pull-up on** (so the
+// line is driven, not floating) and goes high while the button is held. That is
+// the inverse of the AXP2101's PWRON pin, which §10.1 correctly describes as
+// pressed = 0: the chip sees the button, and the ESP sees it through something
+// that inverts. Source: this board, `buttons watch`, one press.
+constexpr buttons::Config kButtonConfigs[] = {
+    {.pin = button::kBoot, .name = "boot", .active_low = true, .pull_up = true},
+    {.pin = button::kKey, .name = "key", .active_low = true, .pull_up = true},
+    {.pin = button::kPwr, .name = "pwr", .active_low = false, .pull_up = false},
+};
+static_assert(sizeof(kButtonConfigs) / sizeof(kButtonConfigs[0]) == button::kCount,
+              "the table and button::Index disagree about how many buttons there are");
+static_assert(kButtonConfigs[button::kKeyIndex].pin == button::kKey,
+              "button::Index no longer names the right row — §10.15 reads kKeyIndex");
 
 // §10.8.2: the RTC is the time source at boot — instant, offline, and correct
 // across a power cut. SNTP corrects it later, when there is a network. A clock
@@ -80,8 +101,18 @@ pmic::Axp2101 &Pmic() { return axp; }
 
 rtc::Pcf85063 &Clock() { return clock_chip; }
 
+buttons::Buttons &Buttons() { return keys; }
+
 esp_err_t Init() {
-    // The bus first: everything below it is on it. A failure here is fatal to
+    // The buttons before the bus, and deliberately: they depend on nothing, and
+    // §10.15's restore is a `KEY` read that has to happen before the config is
+    // parsed — so a bus that fails must not be able to take them with it.
+    esp_err_t button_err = keys.Init(kButtonConfigs, button::kCount);
+    if (button_err != ESP_OK) {
+        ESP_LOGE(TAG, "buttons not initialised: %s", esp_err_to_name(button_err));
+    }
+
+    // The bus next: everything below it is on it. A failure here is fatal to
     // the whole I²C half of the board, so it returns rather than continuing to
     // ask chips that cannot answer.
     esp_err_t err = bus.Init(i2c::kScl, i2c::kSda);
