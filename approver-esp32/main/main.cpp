@@ -7,9 +7,11 @@
 #include <cinttypes>
 
 #include "board.h"
+#include "console.h"
 #include "esp_app_desc.h"
 #include "esp_log.h"
 #include "esp_ota_ops.h"
+#include "storage.h"
 
 namespace {
 
@@ -26,4 +28,11 @@ extern "C" void app_main(void) {
              running->address, running->size / 1024);
 
     board::LogPinout();
+
+    // Order matters and is written down rather than implied (§10.14.1): the
+    // filesystem is mounted before the console, so `cat` has something to read
+    // the moment the prompt appears. Neither failure is fatal — a device that
+    // cannot mount its storage should still come up far enough to say so.
+    storage::Init();
+    console::Init();
 }

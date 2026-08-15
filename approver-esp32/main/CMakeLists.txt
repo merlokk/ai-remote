@@ -1,6 +1,6 @@
 idf_component_register(SRCS "main.cpp"
                     INCLUDE_DIRS "."
-                    REQUIRES boards app_update esp_app_format)
+                    REQUIRES boards storage cli app_update esp_app_format)
 
 # Build a SPIFFS image out of `spiffs_image/` and give it the `storage`
 # partition of partitions.csv. FLASH_IN_PROJECT means a plain `idf.py flash`

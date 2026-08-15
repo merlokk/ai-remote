@@ -95,7 +95,7 @@ In an activated shell, from the project directory:
 ```powershell
 idf.py set-target esp32c6
 idf.py build
-idf.py -p COM7 flash monitor      # Ctrl+] to leave the monitor
+idf.py -p COM4 flash monitor      # Ctrl+] to leave the monitor
 ```
 
 - **The port is the USB Serial/JTAG device**, and it is the same port
@@ -112,8 +112,8 @@ partition (§10.15), not the size of its contents, so a full flash carries ~11 M
 past two files. For the edit-build-run loop:
 
 ```powershell
-idf.py -p COM7 app-flash monitor   # the app only — seconds
-idf.py -p COM7 flash monitor       # + bootloader, partition table, storage.bin
+idf.py -p COM4 app-flash monitor   # the app only — seconds
+idf.py -p COM4 flash monitor       # + bootloader, partition table, storage.bin
 ```
 
 The full one is needed after a change to `partitions.csv` or to anything under
@@ -130,12 +130,23 @@ idf.py add-dependency "debsahu/espidf-nats^1.4.0"  # and the rest of §10.4
 
 ## The device console (§10.7)
 
-Registration and the headless settings go over USB Serial/JTAG, through the same
-port the monitor uses, so open one and type into it:
+**The port on this machine is `COM4`** — the board's USB-C is the C6's own USB
+Serial/JTAG, so it appears only while the board is powered and it is the same
+port the monitor uses. Open one and type into it:
 
 ```powershell
-idf.py -p COM7 monitor
+idf.py -p COM4 monitor
 ```
+
+Two commands answer today (§10.7 has the rest, and why they are not here yet):
+
+```
+status                        # firmware / IDF / chip versions, OTA slot, uptime, heap, storage
+cat <path>                    # print a file from the storage partition, e.g. cat config.json
+help                          # esp_console's own, listing the above
+```
+
+The five the console exists for, once there is a protocol under them:
 
 ```
 register <token>              # the §6 exchange
@@ -144,6 +155,29 @@ forget                        # drop the registration and the pinned server key
 bus  nats://192.168.1.5:4222
 wifi <ssid> <password>
 ```
+
+**`idf.py monitor` is interactive, which makes it useless from a script or an
+agent.** To send a command and read the answer without holding a terminal, drive
+the port directly — IDF's own venv already has `pyserial`, so nothing needs
+installing:
+
+```powershell
+& 'C:\Espressif\tools\python\v6.0.2\venv\Scripts\python.exe' -c @'
+import serial, time, sys
+s = serial.Serial(); s.port = "COM4"; s.timeout = 0.2
+s.dtr = False; s.rts = False          # do not reset the board on open
+s.open()
+for cmd in ["status", "cat config.json"]:
+    s.write((cmd + "\r\n").encode()); s.flush()
+    end = time.time() + 2
+    while time.time() < end:
+        sys.stdout.write(s.read(4096).decode("utf-8", "replace"))
+s.close()
+'@
+```
+
+Nothing else may hold the port while this runs — a monitor left open in another
+window is the usual reason it returns silence.
 
 The token comes from the host, minted by the handler:
 

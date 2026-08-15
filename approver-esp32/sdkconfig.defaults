@@ -16,3 +16,8 @@ CONFIG_PARTITION_TABLE_FILENAME="partitions.csv"
 # they are written down so a menuconfig session cannot flip them by accident.
 CONFIG_COMPILER_CXX_EXCEPTIONS=n
 CONFIG_COMPILER_CXX_RTTI=n
+
+# The console — logs and the §10.7 command line — goes to the chip's own USB
+# Serial/JTAG, which is what the board's USB-C is wired to. There is no UART
+# bridge on this board, so leaving the default UART console means a silent port.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y

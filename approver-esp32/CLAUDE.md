@@ -25,17 +25,19 @@ this file deliberately does not carry.
 
 ## Status: a skeleton that builds, and a plan above it
 
-This file is still the **plan**, not a description of code. What exists is an
-ESP-IDF project that compiles and flashes and does nothing: the partition table,
-the SPIFFS image and an `app_main` that logs which slot it booted from. Every
-other table below is a decision on paper, and the ones that need the repository
-owner's sign-off say so.
+This file is still mostly the **plan**, not a description of code. What exists
+is an ESP-IDF project that builds, flashes and boots on the real board: the
+partition table, the SPIFFS image mounted, the pin map, and a console on the USB
+port answering `status` and `cat`. Nothing of the protocol — no bus, no key, no
+screen. Every other table below is a decision on paper, and the ones that need
+the repository owner's sign-off say so.
 
 | Scope | State |
 |-------|-------|
 | The design below (roles, custody, dependencies, tests) | written, unimplemented |
 | The project skeleton — `CMakeLists.txt`, `main/main.cpp`, `sdkconfig.defaults`, `partitions.csv` (§10.12) | **generated and building** on ESP-IDF v6.0.2; two 2.5 MB OTA slots, ~10.9 MB `storage`, `nvs_keys` reserved |
 | The pin map — `components/boards/board.h` (§10.1) | **written**, from Waveshare's own pinout sheet in `docs/`; logged at boot. Nothing drives a pin yet |
+| SPIFFS mounted + the console — `components/storage`, `components/cli` (§10.7, §10.15) | **running on hardware**: flashed over COM4, `status` and `cat` answer on the USB Serial/JTAG port |
 | The language and the layering (§10.14) — C++ except where C is forced, no dynamic memory, library layer before logic, the I²C bus leased | **decided**, nothing written yet |
 | The ESP-IDF dependency set (§10.4) — LVGL + `esp_lvgl_port`, the CO5300/CST9220 drivers, libsodium for Ed25519, `debsahu/espidf-nats` for the bus | **signed off** (root §1); exact versions pinned when the first build resolves them |
 | The LVGL host preview (§10.12.1) | installed and rendering — the only part of this folder that runs today |
@@ -433,6 +435,32 @@ wifi <ssid> <password>        # the headless fallback for §10.9's screen
 That list is the interface the firmware owes; how to reach it — which serial
 command opens the console, and what it fights with for the port — is in
 [`working-with-code.md`](working-with-code.md).
+
+**What exists today is the console itself and two commands that need nothing
+else to be built** (`components/cli`, running on hardware):
+
+```
+status                        # firmware / IDF / chip versions, the running OTA
+                              # slot, uptime, heap free and low-water, storage use
+cat <path>                    # print a file from the storage partition (§10.15)
+```
+
+`status` is the answer to "is this the build I think it is, in the slot I think
+it is" — the question every one of the five commands above will be debugged
+through. `cat` is how §10.15's files are read back off a device without a
+reflash, and it was the first thing to prove the SPIFFS image had actually
+landed.
+
+It is ESP-IDF's `esp_console` REPL, not a hand-written line reader: history,
+editing, argument splitting and `help` come with the component §10.4 already
+approved. The house firmware of §10.14.4 writes its own — worth knowing when
+comparing the two, and not worth copying when the in-tree one is already a
+dependency.
+
+`cat` reads through a **fixed 4 KB buffer** (§10.14.1 — nothing here allocates),
+and a file too big for it is refused *with its size* rather than truncated into
+something that reads as complete. That is the same rule §10.15 states for
+parsing the config, arrived at from the other direction.
 
 The exchange itself is §6 verbatim, and the order of operations is the part that
 must not be "simplified":
