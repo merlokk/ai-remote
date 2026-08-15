@@ -37,7 +37,9 @@ the repository owner's sign-off say so.
 | The design below (roles, custody, dependencies, tests) | written, unimplemented |
 | The project skeleton — `CMakeLists.txt`, `main/main.cpp`, `sdkconfig.defaults`, `partitions.csv` (§10.12) | **generated and building** on ESP-IDF v6.0.2; two 2.5 MB OTA slots, ~10.9 MB `storage`, `nvs_keys` reserved |
 | The pin map — `components/boards/board.h` (§10.1) | **written**, from Waveshare's own pinout sheet in `docs/`; logged at boot. Nothing drives a pin yet |
-| SPIFFS mounted + the console — `components/storage`, `components/cli` (§10.7, §10.15) | **running on hardware**: flashed over COM4, `status` and `cat` answer on the USB Serial/JTAG port |
+| SPIFFS mounted + the console — `components/storage`, `components/cli` (§10.7, §10.15) | **running on hardware**: flashed over COM4, `status`, `power` and `cat` answer on the USB Serial/JTAG port |
+| The leased I²C bus — `components/i2cbus` (§10.14.3) | **written and running**: lease, timeout-not-block, per-address device table, bus recovery. The fake backend the host tests need is still owed (§10.11) |
+| AXP2101 — `components/pmic`, brought up from `board::Init()` (§10.1, §10.13) | **reading on hardware**: charge state, VBUS, battery mV and %, system rail, die temperature |
 | The language and the layering (§10.14) — C++ except where C is forced, no dynamic memory, library layer before logic, the I²C bus leased | **decided**, nothing written yet |
 | The ESP-IDF dependency set (§10.4) — LVGL + `esp_lvgl_port`, the CO5300/CST9220 drivers, libsodium for Ed25519, `debsahu/espidf-nats` for the bus | **signed off** (root §1); exact versions pinned when the first build resolves them |
 | The LVGL host preview (§10.12.1) | installed and rendering — the only part of this folder that runs today |
@@ -93,6 +95,11 @@ and RTC interrupts, and the driver init sequences the sheet cannot carry:
   [`waveshareteam/ESP32-C6-Touch-AMOLED-2.16`, `02_Example/ESP-IDF-v5.5.3`](https://github.com/waveshareteam/ESP32-C6-Touch-AMOLED-2.16/tree/main/02_Example/ESP-IDF-v5.5.3).
   Note the folder name: the examples are built against **ESP-IDF v5.5.3**, which
   is the number §10.4 and §10.12 are arguing about.
+- **`XPowersLib`, which that same repository vendors** — the register maps for
+  the AXP2101 live there (`src/REG/AXP2101Constants.h`,
+  `src/XPowersAXP2101.tpp`), and `components/pmic` cites them line by line
+  rather than trusting anyone's memory. It is a source to read, not a
+  dependency to add: nothing links against it.
 - The datasheets in `docs/` — CO5300, CST9220's family, AXP2101, PCF85063,
   QMI8658C, ES8311, and the C6 technical reference manual. I²C addresses are
   theirs, not `board.h`'s: they belong with each chip's driver (§10.14.2).
@@ -442,6 +449,8 @@ else to be built** (`components/cli`, running on hardware):
 ```
 status                        # firmware / IDF / chip versions, the running OTA
                               # slot, uptime, heap free and low-water, storage use
+power                         # the AXP2101: charge state, VBUS, battery mV and %,
+                              # the system rail, die temperature (§10.13's one job)
 cat <path>                    # print a file from the storage partition (§10.15)
 ```
 
@@ -1094,6 +1103,24 @@ every driver takes a lease first. In C++ that lease is a scope guard, so
   the legacy `driver/i2c.h` the older house code is written against — it is
   deprecated on IDF 5.x, and the handle-per-device model is what a lease wants
   anyway.
+
+**What is written, and what of this section is not.** `components/i2cbus` has
+the lease as a scope guard, the timeout-that-skips, the per-address device table
+(fixed at eight slots — five chips are on the wire), and `Recover()` clocking
+SCL nine times with the bus torn down and rebuilt around it. `components/pmic`
+is its first user and demonstrates the point: the ADC-enable read-modify-write
+and the whole status read each happen under **one** lease, so the numbers are a
+snapshot rather than five values from five moments.
+
+The pins are **arguments to `Bus::Init`**, not an include of `board.h` — the
+library layer knows about wires, not about which board they are on (§10.14.2),
+and `components/boards` is what puts the two together.
+
+**Still owed: the fake backend.** This section calls it a requirement, and it is
+not written — with no host tier yet (§10.11), an interface with one
+implementation would be an abstraction with no consumer. It arrives with the
+tests it exists for, and the transfer surface is deliberately four methods wide
+so that when it does, there are four functions to fake.
 
 #### 10.14.4 The house precedent — what is borrowed, and what is not
 

@@ -30,9 +30,12 @@ extern "C" void app_main(void) {
     board::LogPinout();
 
     // Order matters and is written down rather than implied (§10.14.1): the
-    // filesystem is mounted before the console, so `cat` has something to read
-    // the moment the prompt appears. Neither failure is fatal — a device that
-    // cannot mount its storage should still come up far enough to say so.
+    // I²C bus and the chips on it, then the filesystem, then the console — so
+    // that `power` and `cat` both have something to answer with the moment the
+    // prompt appears. None of these failures is fatal: a device that cannot
+    // mount its storage or reach its PMIC should still come up far enough to
+    // say so.
+    board::Init();
     storage::Init();
     console::Init();
 }

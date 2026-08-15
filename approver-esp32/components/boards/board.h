@@ -17,7 +17,10 @@
 // I²C addresses are deliberately absent. They belong to each chip's driver
 // (§10.14.2), verified against the datasheet in `docs/`; this file is wires.
 
+#include "axp2101.h"
 #include "driver/gpio.h"
+#include "esp_err.h"
+#include "i2c_bus.h"
 
 namespace board {
 
@@ -116,5 +119,19 @@ static_assert(sdcard::kSck == display::kSclk && sdcard::kMosi == display::kData0
 // Names and numbers for one log line at boot. Cheap, and the fastest way to
 // find out that a board revision moved something.
 void LogPinout();
+
+// --- The board as an object ----------------------------------------------
+// Two levels, the shape §10.14.4 borrows from the house firmware: one class
+// owns the bus, this layer owns the devices on it and whether they answered.
+// Everything here is a static object with a trivial constructor and an
+// explicit Init, in an order written down rather than left to the linker
+// (§10.14.1).
+
+// Brings up the I²C bus and the chips on it. Not fatal if a chip is missing —
+// it is reported, and `Pmic().Present()` says so afterwards.
+esp_err_t Init();
+
+i2cbus::Bus &I2c();
+pmic::Axp2101 &Pmic();
 
 }  // namespace board

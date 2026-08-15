@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstring>
 
+#include "board.h"
 #include "esp_app_desc.h"
 #include "esp_chip_info.h"
 #include "esp_console.h"
@@ -105,12 +106,59 @@ int CmdCat(int argc, char **argv) {
     }
 }
 
+int CmdPower(int, char **) {
+    pmic::Axp2101 &axp = board::Pmic();
+    if (!axp.Present()) {
+        printf("the AXP2101 did not answer at boot — nothing to report\n");
+        return 1;
+    }
+
+    pmic::Status s = {};
+    const esp_err_t err = axp.Read(&s);
+    if (err != ESP_OK) {
+        printf("read failed: %s\n", esp_err_to_name(err));
+        return 1;
+    }
+
+    printf("charger    %s (code %u)%s\n", pmic::Axp2101::ChargeStateName(s.charge_code),
+           static_cast<unsigned>(s.charge_code),
+           s.charging ? ", charging" : (s.discharging ? ", discharging" : ""));
+    printf("vbus       %s", s.vbus_present ? "present" : "absent");
+    if (s.vbus_present) {
+        printf(", %u mV", static_cast<unsigned>(s.vbus_mv));
+    }
+    printf("\n");
+
+    if (s.battery_present) {
+        printf("battery    %u mV", static_cast<unsigned>(s.battery_mv));
+        if (s.battery_percent >= 0) {
+            printf(", %d%%", s.battery_percent);
+        }
+        printf("\n");
+    } else {
+        printf("battery    none connected\n");
+    }
+
+    printf("system     %u mV\n", static_cast<unsigned>(s.system_mv));
+    printf("die temp   %.1f C\n", static_cast<double>(s.die_celsius));
+    return 0;
+}
+
 const esp_console_cmd_t kCommands[] = {
     {
         .command = "status",
         .help = "firmware, IDF and chip versions, running slot, uptime, heap, storage",
         .hint = nullptr,
         .func = &CmdStatus,
+        .argtable = nullptr,
+        .func_w_context = nullptr,
+        .context = nullptr,
+    },
+    {
+        .command = "power",
+        .help = "charge state, VBUS, battery and system voltage, die temperature",
+        .hint = nullptr,
+        .func = &CmdPower,
         .argtable = nullptr,
         .func_w_context = nullptr,
         .context = nullptr,
