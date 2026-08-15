@@ -21,6 +21,8 @@ constexpr uint8_t kRegAdcDieHigh = 0x3C;      // 0x3C/0x3D, 14 bits, raw
 constexpr uint8_t kRegBatteryPercent = 0xA4;
 constexpr uint8_t kRegCommonConfig = 0x10;  // bit 0 is the soft power-off
 constexpr uint8_t kRegVbusCurrentLimit = 0x16;
+constexpr uint8_t kRegPwronStatus = 0x20;
+constexpr uint8_t kRegKeyLevelCtrl = 0x27;  // press-on time 1:0, press-off time 3:2
 constexpr uint8_t kRegTsPinCtrl = 0x50;
 constexpr uint8_t kRegPrechargeCurrent = 0x61;
 constexpr uint8_t kRegChargeCurrent = 0x62;
@@ -49,6 +51,9 @@ constexpr uint8_t kAdcTsChannel = 1 << 1;
 
 // COMMON_CONFIG bit 0: XPowersLib's `shutdown()` sets exactly this.
 constexpr uint8_t kSoftPowerOffBit = 1 << 0;
+// COMMON_CONFIG bit 2: whether a long press on PWRON actually shuts the PMIC
+// down. Without it the chip measures the long press and does nothing.
+constexpr uint8_t kPwronShutsPmicBit = 1 << 2;
 
 // STATUS1 bit 3: a battery is connected. Bit 5: VBUS is good.
 constexpr uint8_t kStatus1BatteryPresent = 1 << 3;
@@ -118,6 +123,40 @@ esp_err_t SetRailVoltage(i2cbus::Lease &lease, uint8_t reg, uint16_t min_mv,
 }
 
 }  // namespace
+
+const char *PressOnTimeName(uint8_t code) {
+    static const char *names[] = {"128 ms", "512 ms", "1 s", "2 s"};
+    return names[code & 0x03];
+}
+
+const char *PressOffTimeName(uint8_t code) {
+    static const char *names[] = {"4 s", "6 s", "8 s", "10 s"};
+    return names[code & 0x03];
+}
+
+const char *PowerOnSourceName(uint8_t status) {
+    // PWRON_STATUS, one bit per reason. Lowest set bit wins; several can be
+    // set at once and the order below is the useful one for a desk device.
+    if (status & (1 << 0)) {
+        return "PWR button";
+    }
+    if (status & (1 << 2)) {
+        return "USB plugged in";
+    }
+    if (status & (1 << 4)) {
+        return "battery inserted";
+    }
+    if (status & (1 << 3)) {
+        return "battery charging";
+    }
+    if (status & (1 << 1)) {
+        return "IRQ pin";
+    }
+    if (status & (1 << 5)) {
+        return "EN held high";
+    }
+    return "unknown";
+}
 
 const char *Axp2101::ChargeStateName(uint8_t code) {
     switch (static_cast<ChargeState>(code)) {
@@ -329,6 +368,17 @@ esp_err_t Axp2101::Read(Status *out) {
         out->aldo2_enabled = (rails & kAldo2Bit) != 0;
         out->aldo3_enabled = (rails & kAldo3Bit) != 0;
     }
+
+    uint8_t key = 0;
+    if (lease.ReadRegister(kAddress, kRegKeyLevelCtrl, &key, 1) == ESP_OK) {
+        out->press_on_code = key & 0x03;
+        out->press_off_code = (key >> 2) & 0x03;
+    }
+    uint8_t common = 0;
+    if (lease.ReadRegister(kAddress, kRegCommonConfig, &common, 1) == ESP_OK) {
+        out->long_press_shutdown = (common & kPwronShutsPmicBit) != 0;
+    }
+    lease.ReadRegister(kAddress, kRegPwronStatus, &out->power_on_source, 1);
 
     uint8_t rail = 0;
     if (lease.ReadRegister(kAddress, kRegDc1Voltage, &rail, 1) == ESP_OK) {

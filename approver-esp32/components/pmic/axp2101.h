@@ -111,7 +111,21 @@ struct Status {
     uint16_t dc1_mv;      // the C6's own supply
     uint16_t aldo2_mv;
     uint16_t aldo3_mv;
+
+    // The PWRON key — `PWR` on the board, GPIO18, active low (§10.1). These
+    // say what the *chip* does with it, which is not something the firmware
+    // participates in: it happens whether or not any code is running.
+    uint8_t press_on_code;      // 0..3 -> 128 ms / 512 ms / 1 s / 2 s
+    uint8_t press_off_code;     // 0..3 -> 4 s / 6 s / 8 s / 10 s
+    bool long_press_shutdown;   // COMMON_CONFIG bit 2: does the long press act?
+    uint8_t power_on_source;    // PWRON_STATUS, why the board is awake
 };
+
+// Names for the three fields above. `PowerOnSourceName` decodes the first bit
+// set in PWRON_STATUS.
+const char *PressOnTimeName(uint8_t code);
+const char *PressOffTimeName(uint8_t code);
+const char *PowerOnSourceName(uint8_t status);
 
 class Axp2101 {
    public:

@@ -34,6 +34,12 @@ inline constexpr int kScreenHeight = 480;
 // --- Buttons -------------------------------------------------------------
 // `KEY` is the free one (§10.1), and §10.15 gives it its job: held at boot, it
 // restores the config. `BOOT` and `PWR` belong to the bootloader and the PMIC.
+//
+// **`PWR` is wired to the AXP2101's PWRON pin** (pressed = 0), and the chip
+// acts on it with no help from this firmware: a short press powers the board
+// on, a long press powers it off. The pin is here so the firmware can *see*
+// the button; it is not how the board is switched. §10.1 has the timings this
+// board is actually configured with.
 namespace button {
 inline constexpr gpio_num_t kBoot = GPIO_NUM_9;
 inline constexpr gpio_num_t kKey = GPIO_NUM_10;

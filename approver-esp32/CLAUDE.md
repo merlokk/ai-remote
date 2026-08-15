@@ -88,6 +88,22 @@ the display can be brought up at all; and **the TF slot shares the panel's QSPI
 wires** (only the chip select is its own), which is a second reason §10.13 gives
 that slot no job.
 
+**The `PWR` button is not the firmware's.** It is wired to the AXP2101's PWRON
+pin (pressed = 0), and the chip acts on it whether or not any code is running.
+Read off this board rather than off a datasheet — `power` prints all three:
+
+| | This board |
+|---|---|
+| Power **on** | a short press: the threshold is **128 ms**, the shortest of the chip's four (128 ms / 512 ms / 1 s / 2 s, register `0x27` bits 1:0) — **or** plugging USB in, since VBUS insert is a power-on source in its own right, as is inserting a battery |
+| Power **off** | a **6 s** long press (register `0x27` bits 3:2, of 4/6/8/10 s) — and it works only because `COMMON_CONFIG` (`0x10`) bit 2 is set. With that bit clear the chip measures the long press and does nothing. On this board it is set |
+| Why it is awake | `PWRON_STATUS` (`0x20`), one bit per reason. A freshly cabled board reports `USB plugged in` |
+
+Two consequences. **Power on and off are not features to implement** — they are
+behaviour to avoid breaking, and GPIO18 exists so the firmware can *see* the
+button, not so it can switch the board. And it is the same fact that makes
+§10.7's `poweroff` refuse over USB: VBUS insert powers the chip on, so a soft
+shutdown with the cable in is one the hardware immediately undoes.
+
 Where the rest comes from when it is needed — the TE line, backlight, the PMIC
 and RTC interrupts, and the driver init sequences the sheet cannot carry:
 

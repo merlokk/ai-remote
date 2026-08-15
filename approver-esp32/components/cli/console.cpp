@@ -202,6 +202,11 @@ int CmdPower(int, char **) {
     printf("die temp   %.1f C\n", static_cast<double>(s.die_celsius));
     // The two rails that are not decoration: ALDO3 resets the panel, ALDO2
     // powers the amplifier (§10.1). Both start off.
+    printf("pwr key    on after %s, off after %s long press (%s)\n",
+           pmic::PressOnTimeName(s.press_on_code), pmic::PressOffTimeName(s.press_off_code),
+           s.long_press_shutdown ? "enabled" : "DISABLED — long press does nothing");
+    printf("woke by    %s (0x%02x)\n", pmic::PowerOnSourceName(s.power_on_source),
+           static_cast<unsigned>(s.power_on_source));
     printf("rails      dc1 %u mV | aldo2 (audio) %u mV %s | aldo3 (panel) %u mV %s\n",
            static_cast<unsigned>(s.dc1_mv), static_cast<unsigned>(s.aldo2_mv),
            s.aldo2_enabled ? "on" : "off", static_cast<unsigned>(s.aldo3_mv),
