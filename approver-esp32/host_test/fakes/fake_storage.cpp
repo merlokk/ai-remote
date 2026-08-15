@@ -68,6 +68,15 @@ void PutFile(const char *name, const char *contents) {
     std::fclose(file);
 }
 
+void PutBinaryFile(const char *name, const void *data, size_t length) {
+    FILE *file = std::fopen(Full(name).string().c_str(), "wb");
+    if (file == nullptr) {
+        return;
+    }
+    std::fwrite(data, 1, length, file);
+    std::fclose(file);
+}
+
 bool FileExists(const char *name) {
     std::error_code ec;
     return std::filesystem::exists(Full(name), ec);

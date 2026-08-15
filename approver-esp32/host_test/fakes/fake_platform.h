@@ -27,6 +27,7 @@
 #include <cstdint>
 
 #include "driver/gpio.h"
+#include "driver/i2s_std.h"
 #include "esp_err.h"
 #include "freertos/FreeRTOS.h"
 
@@ -121,6 +122,41 @@ struct Platform {
     size_t rising_edges[kMaxPins];
     gpio_mode_t last_mode[kMaxPins];
 
+    // --- I2S, for the speaker ---
+    // The captured stream is what makes "it played the data and not the
+    // header" an assertion rather than a hope. 8 KB holds two of the driver's
+    // 4 KB buffer fills, which is more than any test here streams.
+    struct I2s {
+        static constexpr size_t kMaxCaptured = 8192;
+
+        bool channel_open;
+        bool enabled;
+        size_t enable_count;
+        size_t disable_count;
+        bool auto_clear;
+
+        uint32_t sample_rate;
+        uint32_t mclk_multiple;
+        size_t configure_count;  // init_std_mode
+        size_t reconfig_count;   // reconfig_std_clock
+
+        gpio_num_t mclk;
+        gpio_num_t bclk;
+        gpio_num_t ws;
+        gpio_num_t dout;
+        gpio_num_t din;
+        i2s_data_bit_width_t bits;
+        i2s_slot_mode_t slots;
+
+        uint8_t captured[kMaxCaptured];
+        size_t captured_length;
+        bool captured_overflowed;
+        size_t written_total;
+        size_t write_calls;
+
+        esp_err_t next_write_error;
+    } i2s;
+
     bool log_enabled;
 };
 
@@ -182,5 +218,9 @@ void AdvanceMs(uint32_t ms);
 // the first.
 void SetPinLevel(gpio_num_t pin, int level);
 size_t RisingEdges(gpio_num_t pin);
+
+// The next `i2s_channel_write` fails with `err`. One shot, the same shape the
+// I²C injection has.
+void FailNextI2sWrite(esp_err_t err);
 
 }  // namespace fake

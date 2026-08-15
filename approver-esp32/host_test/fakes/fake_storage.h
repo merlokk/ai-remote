@@ -41,6 +41,10 @@ const char *StoragePath();
 // Put a file there / read one back / ask whether it is there. `contents` is a
 // C string; the file gets exactly its bytes, with no terminator.
 void PutFile(const char *name, const char *contents);
+
+// The same, for content that is not text — a WAV is bytes, and half of
+// them are zero.
+void PutBinaryFile(const char *name, const void *data, size_t length);
 bool FileExists(const char *name);
 
 // Reads a file into `out`, NUL-terminated. Returns false if it is missing or

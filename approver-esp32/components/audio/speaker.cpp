@@ -248,6 +248,19 @@ esp_err_t Speaker::PlayWav(const char *path) {
         return ESP_ERR_NOT_SUPPORTED;
     }
 
+    // **Seek to where the parser said the audio starts, rather than trusting
+    // it to have left the position there.** It does leave it there — that is
+    // why this worked without the seek — but "correct because of where a
+    // function happened to stop reading" is a coupling nobody can see, and it
+    // breaks the moment the parser looks ahead for a second chunk. The host
+    // tests found it the honest way: hard-coding `data_offset` to the
+    // canonical 44 changed nothing, which is what a value nobody reads looks
+    // like.
+    if (fseek(file, data_offset, SEEK_SET) != 0) {
+        fclose(file);
+        return ESP_ERR_INVALID_SIZE;
+    }
+
     busy_ = true;
     err = Reconfigure(format.sample_rate);
     if (err != ESP_OK) {

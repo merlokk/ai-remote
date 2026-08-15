@@ -72,12 +72,14 @@ add_executable(host_test
     test_config.cpp
     test_buttons.cpp
     test_timezone.cpp
+    test_speaker.cpp
 
     # The fake ESP-IDF the drivers are compiled against. `fakes/` shadows the
     # framework's headers on the include path below, so the sources listed
     # after it are the ones that ship, unmodified.
     fakes/fake_platform.cpp
     fakes/fake_storage.cpp
+    fakes/fake_i2s.cpp
 
     # Under test.
     ../components/ui/navigator.cpp
@@ -86,6 +88,7 @@ add_executable(host_test
     ../components/rtc/pcf85063.cpp
     ../components/imu/qmi8658.cpp
     ../components/audio/es8311.cpp
+    ../components/audio/speaker.cpp
     ../components/config/config.cpp
     ../components/timezone/timezone.cpp
     ../components/buttons/buttons.cpp

@@ -58,7 +58,7 @@ the repository owner's sign-off say so.
 | Wi-Fi manager: scan, join, remember, reconnect (§10.9) | specified, not started |
 | Where the configuration lives (§10.15) | **decided**: all of it in JSON on SPIFFS, nothing of ours in NVS — with the cost stated (SPIFFS cannot be encrypted at rest). `spiffs_image/config.json` + `config.init.json` are flashed; nothing reads them yet |
 | The `KEY`-at-boot config restore (§10.15) | specified, not started |
-| Host-tier tests (§10.11) — `host_test/` | **running**: 161 Unity tests over `ui`, `i2cbus`, `pmic`, `rtc`, `imu`, `audio`, `config`, `buttons` and `timezone`, one command, no board. The drivers are compiled **unmodified** against a fake ESP-IDF (`host_test/fakes/`), which is §10.14.3's owed fake backend arriving in a different shape than that section specified. Built by MSVC rather than by ESP-IDF's `linux` target, which does not work on a Windows host — §10.11 records why |
+| Host-tier tests (§10.11) — `host_test/` | **running**: 188 Unity tests over `ui`, `i2cbus`, `pmic`, `rtc`, `imu`, `audio`, `config`, `buttons`, `timezone` and `speaker`, one command, no board. The drivers are compiled **unmodified** against a fake ESP-IDF (`host_test/fakes/`), which is §10.14.3's owed fake backend arriving in a different shape than that section specified, and which now covers I²S and a filesystem as well as the I²C wire. Built by MSVC rather than by ESP-IDF's `linux` target, which does not work on a Windows host — §10.11 records why |
 | Protocol parity vectors (§10.11 tier 2) | not started |
 
 Read §10.3 before anything else: it is the one part of this that changes
@@ -1070,7 +1070,7 @@ Three tiers, and the first one is where nearly everything belongs:
    ESP-IDF. One command, in [`working-with-code.md`](working-with-code.md).
 
    **What is under it today is the navigator and four of the five chips on the
-   I²C bus, the settings file, the buttons and the zone table** — 161 tests:
+   I²C bus, the settings file, the buttons, the zone table and the speaker** — 188 tests:
 
    | Subject | What is pinned |
    |---|---|
@@ -1085,6 +1085,8 @@ Three tiers, and the first one is where nearly everything belongs:
    | `components/buttons` | the debounce, which is the only part of this with logic to get wrong: a window that starts when the level is *first seen*, a bounce shorter than it swallowed, a spike that settles back reporting nothing, and the millisecond counter wrapping at ~49 days being a subtraction rather than a special case. Above it: `active_low` per button, because §10.1 found `PWR` wired the other way round; `Init` adopting a button that is **already down**, which is §10.15's whole scenario; and `HeldFor` reaching five seconds through a poll loop, giving up the moment it is released, and costing nothing on the boots where nobody is holding anything |
    | `components/timezone` | the table checked against itself — every name looks itself up, every rule passes `LooksLikePosix`, no name does — plus the aliases people actually type (`Europe/Kiev`, `Asia/Calcutta`), a shared rule named after its family rather than after a city, and the one that matters most: **an unknown zone answering `nullptr` rather than a guess**, because §10.8.2's named failure is libc silently reading a misspelling as UTC |
 
+   | `components/audio` (speaker) | mostly the RIFF parser, which is where the value is: a `LIST` chunk between `fmt ` and `data` walked past, an odd-sized chunk padded the way RIFF requires, a 40-byte `WAVE_FORMAT_EXTENSIBLE` header stepped over, and compressed-but-in-a-.wav named apart from not-a-WAV. Then what reaches the wire — the fake channel **captures the bytes**, so "it streamed the audio and not the header" is known rather than guessed; stereo and 8-bit refused without ever unmuting; a truncated `data` chunk played as far as the file goes; the codec muted again after a failed write; and a rate change stopping the channel, retuning both halves, and starting it |
+
    The fake platform is `host_test/fakes/` — an ESP-IDF-shaped set of headers
    with a register-file I²C device behind them. It models the shape all five
    chips are (a write moves the cursor, a read takes from it), knows nothing
@@ -1093,14 +1095,22 @@ Three tiers, and the first one is where nearly everything belongs:
    headers rather than the interface that section originally specified.
 
    **Every one of these was mutation-checked rather than trusted**: break the
-   rule, watch the test that covers it fail, put it back. Twelve so far — the
+   rule, watch the test that covers it fail, put it back. Sixteen so far — the
    card-outranks-navigation rule, the lease timeout, `Recover`'s handle drop,
    the battery field width, `PowerOff`'s refusal, the RTC's OS flag, and
    `config`'s three: the boot-time recovery, the restore-on-bad-file, and the
    atomic write; plus `Init` adopting a held button, `active_low` being per
    button, and the zone lookup refusing to guess. Three more needed no
    mutation, because they failed on the real code the first time they ran:
-   §10.14.3 has two, and §10.8.2 the third.
+   §10.14.3 has two, §10.8.2 the third, and §10.8.1 the fourth.
+
+   **One mutation survived, and that was the useful one.** Hard-coding the WAV
+   parser's `data_offset` to the canonical 44 changed nothing — because
+   `PlayWav` never read it, and streamed from wherever the parser happened to
+   leave the file. Correct, and correct by accident: the coupling was invisible
+   and would break the first time the parser looked ahead. `PlayWav` seeks to
+   the offset now, and the mutation fails as it should. A mutation that
+   survives is not a gap in the tests; it is a question about the code.
 
    One of those mutations would not compile, which is worth knowing before
    somebody spends ten minutes on it: `/W4 /WX` turns a now-unused variable
