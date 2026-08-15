@@ -39,6 +39,7 @@ the repository owner's sign-off say so.
 | The pin map — `components/boards/board.h` (§10.1) | **written**, from Waveshare's own pinout sheet in `docs/`; logged at boot. Nothing drives a pin yet |
 | SPIFFS mounted + the console — `components/storage`, `components/cli` (§10.7, §10.15) | **running on hardware**: flashed over COM4, `status`, `power` and `cat` answer on the USB Serial/JTAG port |
 | The leased I²C bus — `components/i2cbus` (§10.14.3) | **written and running**: lease, timeout-not-block, per-address device table, bus recovery. The fake backend the host tests need is still owed (§10.11) |
+| PCF85063 RTC — `components/rtc` (§10.8.2) | **running on hardware**: read, written and surviving a reboot; the system clock is adopted from it at boot. No timezone and no SNTP yet |
 | AXP2101 — `components/pmic`, brought up from `board::Init()` (§10.1, §10.13) | **configured and reading on hardware**: TS pin silenced, ADC channels, VBUS limit, rail voltages, charge currents — all cross-checked against the vendor's `pmicpower` component — plus `SetAldo2`/`SetAldo3` for the audio and panel rails |
 | The language and the layering (§10.14) — C++ except where C is forced, no dynamic memory, library layer before logic, the I²C bus leased | **decided**, nothing written yet |
 | The ESP-IDF dependency set (§10.4) — LVGL + `esp_lvgl_port`, the CO5300/CST9220 drivers, libsodium for Ed25519, `debsahu/espidf-nats` for the bus | **signed off** (root §1); exact versions pinned when the first build resolves them |
@@ -477,6 +478,8 @@ status                        # firmware / IDF / chip versions, the running OTA
                               # slot, uptime, heap free and low-water, storage use
 power                         # the AXP2101: charge state, VBUS, battery mV and %,
                               # the system rail, die temperature (§10.13's one job)
+date                          # the RTC, and the system clock beside it
+date set <YYYY-MM-DD> <HH:MM:SS>
 poweroff now                  # cut power — refused while USB is connected
 ls                            # what is in the storage partition, with sizes
 cat <path>                    # print a file from the storage partition (§10.15)
@@ -624,6 +627,23 @@ registered, and a gear.
   is up and writes the corrected value back. A device that has never had either
   shows `--:--`, not `00:00` — a plausible wrong time is worse than an obviously
   unset one, the same call §10.7 makes about `ts`.
+
+  **The half of this that exists** is `components/rtc` and `board::Init()`
+  adopting the RTC into the system clock at boot; the console reads and writes
+  it with `date` (§10.7). What is *not* there yet is SNTP and the `TZ` string
+  below, so everything is currently in whatever zone was typed in.
+
+  The chip makes the `--:--` rule cheap rather than a convention to remember:
+  the **OS flag** in its seconds register says the oscillator stopped or never
+  started, and `Pcf85063::Read` reports that as `valid = false` instead of
+  handing back a number. A read that succeeds and a time that can be trusted
+  are separate answers. Two details that follow from the datasheet and are
+  worth not rediscovering: the seven counters are read and written in **one**
+  burst (a read freezes them, so a burst cannot catch a carry — two accesses
+  can, and would mix minutes from one moment with hours from the next), and a
+  write stops the clock around itself for the same reason. Writing seconds is
+  also what clears OS, so a successful `date set` is what makes the clock
+  trustworthy again.
 - **This is where the repo finally has to know about timezones.** §9.1 avoided
   them by printing countdowns; a clock cannot. A POSIX `TZ` string in settings
   (`MSK-3`, `CET-1CEST,M3.5.0,M10.5.0/3`), `setenv` + `tzset`, stored in

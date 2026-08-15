@@ -21,6 +21,7 @@
 #include "driver/gpio.h"
 #include "esp_err.h"
 #include "i2c_bus.h"
+#include "pcf85063.h"
 
 namespace board {
 
@@ -139,5 +140,6 @@ esp_err_t Init();
 
 i2cbus::Bus &I2c();
 pmic::Axp2101 &Pmic();
+rtc::Pcf85063 &Clock();
 
 }  // namespace board

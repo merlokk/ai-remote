@@ -1,8 +1,11 @@
 #include "console.h"
 
+#include <sys/time.h>
+
 #include <cinttypes>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
 
 #include "board.h"
 #include "esp_app_desc.h"
@@ -78,6 +81,89 @@ int CmdStatus(int, char **) {
 // listing says so rather than looking complete.
 constexpr size_t kMaxListed = 16;
 storage::Entry entries[kMaxListed];
+
+int CmdDate(int argc, char **argv) {
+    rtc::Pcf85063 &clock = board::Clock();
+    if (!clock.Present()) {
+        printf("the PCF85063 did not answer at boot — no clock to read\n");
+        return 1;
+    }
+
+    if (argc == 1) {
+        rtc::DateTime now = {};
+        bool valid = false;
+        const esp_err_t err = clock.Read(&now, &valid);
+        if (err != ESP_OK) {
+            printf("read failed: %s\n", esp_err_to_name(err));
+            return 1;
+        }
+        if (!valid) {
+            // §10.8.2: an obviously unset clock beats a plausible wrong one.
+            printf("rtc        -------/-- --:--:--  (oscillator stopped or never set)\n");
+        } else {
+            printf("rtc        %04u-%02u-%02u %02u:%02u:%02u\n", now.year, now.month, now.day,
+                   now.hour, now.minute, now.second);
+        }
+
+        const time_t system_now = time(nullptr);
+        struct tm fields = {};
+        gmtime_r(&system_now, &fields);
+        printf("system     %04d-%02d-%02d %02d:%02d:%02d (no timezone applied yet)\n",
+               fields.tm_year + 1900, fields.tm_mon + 1, fields.tm_mday, fields.tm_hour,
+               fields.tm_min, fields.tm_sec);
+        return 0;
+    }
+
+    if (argc != 4 || strcmp(argv[1], "set") != 0) {
+        printf("usage: date              read the clock\n");
+        printf("       date set <YYYY-MM-DD> <HH:MM:SS>\n");
+        return 1;
+    }
+
+    unsigned year = 0, month = 0, day = 0, hour = 0, minute = 0, second = 0;
+    if (sscanf(argv[2], "%4u-%2u-%2u", &year, &month, &day) != 3 ||
+        sscanf(argv[3], "%2u:%2u:%2u", &hour, &minute, &second) != 3) {
+        printf("could not parse '%s %s'; expected YYYY-MM-DD HH:MM:SS\n", argv[2], argv[3]);
+        return 1;
+    }
+
+    rtc::DateTime value = {};
+    value.year = static_cast<uint16_t>(year);
+    value.month = static_cast<uint8_t>(month);
+    value.day = static_cast<uint8_t>(day);
+    value.hour = static_cast<uint8_t>(hour);
+    value.minute = static_cast<uint8_t>(minute);
+    value.second = static_cast<uint8_t>(second);
+    value.weekday = 0;  // nothing here reads it; the chip keeps counting it anyway
+
+    const esp_err_t err = clock.Write(value);
+    if (err == ESP_ERR_INVALID_ARG) {
+        printf("out of range: the chip stores 2000..2099 and no century\n");
+        return 1;
+    }
+    if (err != ESP_OK) {
+        printf("write failed: %s\n", esp_err_to_name(err));
+        return 1;
+    }
+
+    // The system clock follows, so logs and `status` agree with the chip
+    // without waiting for a reboot.
+    struct tm fields = {};
+    fields.tm_year = static_cast<int>(year) - 1900;
+    fields.tm_mon = static_cast<int>(month) - 1;
+    fields.tm_mday = static_cast<int>(day);
+    fields.tm_hour = static_cast<int>(hour);
+    fields.tm_min = static_cast<int>(minute);
+    fields.tm_sec = static_cast<int>(second);
+    const time_t seconds = mktime(&fields);
+    if (seconds > 0) {
+        const timeval tv = {.tv_sec = seconds, .tv_usec = 0};
+        settimeofday(&tv, nullptr);
+    }
+
+    printf("set to %04u-%02u-%02u %02u:%02u:%02u\n", year, month, day, hour, minute, second);
+    return 0;
+}
 
 int CmdPowerOff(int argc, char **argv) {
     // A confirmation word, because this is the one console command whose
@@ -229,6 +315,15 @@ const esp_console_cmd_t kCommands[] = {
         .help = "charge state, VBUS, battery and system voltage, die temperature",
         .hint = nullptr,
         .func = &CmdPower,
+        .argtable = nullptr,
+        .func_w_context = nullptr,
+        .context = nullptr,
+    },
+    {
+        .command = "date",
+        .help = "read the RTC, or 'date set <YYYY-MM-DD> <HH:MM:SS>' to write it",
+        .hint = "[set <YYYY-MM-DD> <HH:MM:SS>]",
+        .func = &CmdDate,
         .argtable = nullptr,
         .func_w_context = nullptr,
         .context = nullptr,

@@ -1,5 +1,9 @@
 #include "board.h"
 
+#include <sys/time.h>
+
+#include <ctime>
+
 #include "esp_log.h"
 
 namespace board {
@@ -13,6 +17,44 @@ constexpr const char *TAG = "board";
 // touches a wire until Init() runs, from app_main.
 i2cbus::Bus bus;
 pmic::Axp2101 axp;
+rtc::Pcf85063 clock_chip;
+
+// §10.8.2: the RTC is the time source at boot — instant, offline, and correct
+// across a power cut. SNTP corrects it later, when there is a network. A clock
+// the chip says it cannot vouch for is left alone: an unset system clock is
+// honest, a plausible wrong one is not.
+void AdoptClock() {
+    rtc::DateTime now = {};
+    bool valid = false;
+    if (clock_chip.Read(&now, &valid) != ESP_OK) {
+        return;
+    }
+    if (!valid) {
+        ESP_LOGW(TAG, "RTC has no trustworthy time; system clock left unset");
+        return;
+    }
+
+    struct tm fields = {};
+    fields.tm_year = now.year - 1900;
+    fields.tm_mon = now.month - 1;
+    fields.tm_mday = now.day;
+    fields.tm_hour = now.hour;
+    fields.tm_min = now.minute;
+    fields.tm_sec = now.second;
+    fields.tm_isdst = 0;
+
+    // No timezone anywhere yet: the RTC holds what was written to it and this
+    // treats it as the system clock's own reading. §10.8.2 owns the TZ string
+    // when there is a settings screen to hold it.
+    const time_t seconds = mktime(&fields);
+    if (seconds <= 0) {
+        return;
+    }
+    const timeval tv = {.tv_sec = seconds, .tv_usec = 0};
+    settimeofday(&tv, nullptr);
+    ESP_LOGI(TAG, "system clock set from RTC: %04u-%02u-%02u %02u:%02u:%02u", now.year,
+             now.month, now.day, now.hour, now.minute, now.second);
+}
 
 }  // namespace
 
@@ -36,6 +78,8 @@ i2cbus::Bus &I2c() { return bus; }
 
 pmic::Axp2101 &Pmic() { return axp; }
 
+rtc::Pcf85063 &Clock() { return clock_chip; }
+
 esp_err_t Init() {
     // The bus first: everything below it is on it. A failure here is fatal to
     // the whole I²C half of the board, so it returns rather than continuing to
@@ -54,6 +98,14 @@ esp_err_t Init() {
         // and `power` says the chip did not respond — which is more useful
         // than a boot loop (§10.10's rule about staying up to report).
         ESP_LOGE(TAG, "PMIC not initialised: %s", esp_err_to_name(err));
+    }
+
+    // The RTC after the PMIC, which backs it (§10.1).
+    err = clock_chip.Init(bus);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "RTC not initialised: %s", esp_err_to_name(err));
+    } else {
+        AdoptClock();
     }
 
     return ESP_OK;

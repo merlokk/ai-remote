@@ -143,6 +143,8 @@ Two commands answer today (§10.7 has the rest, and why they are not here yet):
 ```
 status                        # firmware / IDF / chip versions, OTA slot, uptime, heap, storage
 power                         # the AXP2101: charge state, VBUS, battery, system rail, die temp
+date                          # the RTC and the system clock
+date set 2026-08-15 16:41:13  # write both
 poweroff now                  # cut power; refused over USB, so it does nothing on the bench
 ls                            # what is in the storage partition, with sizes
 cat <path>                    # print a file from the storage partition, e.g. cat config.json
@@ -193,6 +195,17 @@ Get-CimInstance Win32_Process |
   Select-Object ProcessId, CommandLine
 Stop-Process -Id <ids> -Force
 ```
+
+Setting the clock from the host's own time, in one line:
+
+```powershell
+$now = Get-Date
+"date set $($now.ToString('yyyy-MM-dd')) $($now.ToString('HH:mm:ss'))"
+```
+
+— paste the result into the console, or feed it to the pyserial snippet above.
+There is no timezone anywhere in the firmware yet (§10.8.2), so whatever zone
+you type is the zone the device is in.
 
 The token comes from the host, minted by the handler:
 
