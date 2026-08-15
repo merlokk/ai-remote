@@ -79,6 +79,31 @@ int CmdStatus(int, char **) {
 constexpr size_t kMaxListed = 16;
 storage::Entry entries[kMaxListed];
 
+int CmdPowerOff(int argc, char **argv) {
+    // A confirmation word, because this is the one console command whose
+    // success means the operator has to walk over and press a button. The
+    // repository's stance on destructive actions (§10.8.5) is that they say
+    // what they will do and are not one keystroke away.
+    if (argc != 2 || strcmp(argv[1], "now") != 0) {
+        printf("usage: poweroff now   (cuts power; only the PWR button or a charger returns)\n");
+        return 1;
+    }
+
+    const esp_err_t err = board::Pmic().PowerOff();
+    if (err == ESP_ERR_INVALID_STATE) {
+        printf("refused: USB is connected, so the chip would power straight back on.\n");
+        printf("unplug the cable and run it again.\n");
+        return 1;
+    }
+    if (err != ESP_OK) {
+        printf("power off failed: %s\n", esp_err_to_name(err));
+        return 1;
+    }
+    // Unreachable in practice — the board is gone by now.
+    printf("powering off\n");
+    return 0;
+}
+
 int CmdLs(int, char **) {
     size_t count = 0;
     const esp_err_t err = storage::List(entries, kMaxListed, &count);
@@ -199,6 +224,15 @@ const esp_console_cmd_t kCommands[] = {
         .help = "charge state, VBUS, battery and system voltage, die temperature",
         .hint = nullptr,
         .func = &CmdPower,
+        .argtable = nullptr,
+        .func_w_context = nullptr,
+        .context = nullptr,
+    },
+    {
+        .command = "poweroff",
+        .help = "cut power (refused while USB is connected)",
+        .hint = "now",
+        .func = &CmdPowerOff,
         .argtable = nullptr,
         .func_w_context = nullptr,
         .context = nullptr,

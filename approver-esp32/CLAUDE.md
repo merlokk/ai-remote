@@ -461,6 +461,7 @@ status                        # firmware / IDF / chip versions, the running OTA
                               # slot, uptime, heap free and low-water, storage use
 power                         # the AXP2101: charge state, VBUS, battery mV and %,
                               # the system rail, die temperature (§10.13's one job)
+poweroff now                  # cut power — refused while USB is connected
 ls                            # what is in the storage partition, with sizes
 cat <path>                    # print a file from the storage partition (§10.15)
 ```
@@ -487,6 +488,20 @@ looks complete is worse than a short one that admits it. That is the rule
 `ls` also has nothing to recurse into — **SPIFFS is flat**, so its output is the
 whole filesystem rather than one level of it, and `2 file(s), 1626 bytes` next
 to `partition 2259 bytes used` is the filesystem's own overhead made visible.
+
+**`poweroff` refuses while USB is connected, and that is a driver rule rather
+than a console one** — `Axp2101::PowerOff()` reads the VBUS bits and returns
+`ESP_ERR_INVALID_STATE` without writing anything, under the same lease it would
+have written through (§10.14.3). VBUS powers this chip back on, so a shutdown
+with the cable in is one the hardware undoes: what the operator would see is
+not a device switching off but a device rebooting, which on a desk object reads
+as a crash. Saying "unplug it first" is the true answer; performing a power-off
+that does not happen is not. The console adds a confirmation word (`poweroff
+now`) for the same reason §10.8.5 makes its destructive entries two-step.
+
+**The refusal is tested on hardware; the shutdown itself is not, and cannot be
+from here** — it needs the cable out, and with the cable out there is no console
+to watch it from. That half waits for a battery-powered session.
 
 The exchange itself is §6 verbatim, and the order of operations is the part that
 must not be "simplified":

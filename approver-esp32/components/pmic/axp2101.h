@@ -138,6 +138,18 @@ class Axp2101 {
     esp_err_t SetAldo2(bool on);
     esp_err_t SetAldo3(bool on);
 
+    // Cuts power to the board — the AXP2101's soft power-off, after which only
+    // the PWR button or a charger brings it back.
+    //
+    // **Refuses while USB is connected**, returning ESP_ERR_INVALID_STATE and
+    // writing nothing. VBUS is a power-on source for this chip, so a shutdown
+    // with the cable in is a shutdown the hardware undoes: what the operator
+    // sees is not a device switching off but a device rebooting, which on a
+    // thing that sits on a desk reads as a crash. Refusing says the true thing
+    // — "unplug it first" — instead of performing a power-off that does not
+    // happen.
+    esp_err_t PowerOff();
+
     static const char *ChargeStateName(uint8_t code);
 
    private:

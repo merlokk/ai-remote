@@ -19,6 +19,7 @@ constexpr uint8_t kRegAdcVbusHigh = 0x38;     // 0x38/0x39, 14 bits, mV
 constexpr uint8_t kRegAdcSystemHigh = 0x3A;   // 0x3A/0x3B, 14 bits, mV
 constexpr uint8_t kRegAdcDieHigh = 0x3C;      // 0x3C/0x3D, 14 bits, raw
 constexpr uint8_t kRegBatteryPercent = 0xA4;
+constexpr uint8_t kRegCommonConfig = 0x10;  // bit 0 is the soft power-off
 constexpr uint8_t kRegVbusCurrentLimit = 0x16;
 constexpr uint8_t kRegTsPinCtrl = 0x50;
 constexpr uint8_t kRegPrechargeCurrent = 0x61;
@@ -46,6 +47,9 @@ constexpr uint8_t kAldo3Bit = 1 << 2;
 // ADC_CHANNEL_CTRL bit 1 is the TS pin's channel.
 constexpr uint8_t kAdcTsChannel = 1 << 1;
 
+// COMMON_CONFIG bit 0: XPowersLib's `shutdown()` sets exactly this.
+constexpr uint8_t kSoftPowerOffBit = 1 << 0;
+
 // STATUS1 bit 3: a battery is connected. Bit 5: VBUS is good.
 constexpr uint8_t kStatus1BatteryPresent = 1 << 3;
 constexpr uint8_t kStatus1VbusGood = 1 << 5;
@@ -60,6 +64,14 @@ float DieCelsius(uint16_t raw) { return 22.0f + (7274.0f - static_cast<float>(ra
 
 uint16_t Combine(uint8_t high, uint8_t low, uint8_t high_mask) {
     return static_cast<uint16_t>(((high & high_mask) << 8) | low);
+}
+
+// Two bits in two registers decide it, and both matter: STATUS1 says the VBUS
+// rail is good, STATUS2 bit 3 says it is nonetheless unusable. Kept as a pure
+// function of the two bytes — it is the piece of this driver a host test can
+// reach without a bus (§10.11).
+bool VbusPresent(uint8_t status1, uint8_t status2) {
+    return ((status1 & kStatus1VbusGood) != 0) && ((status2 & kStatus2VbusUnusable) == 0);
 }
 
 // Read-modify-write under a lease the caller already holds. `keep` is the mask
@@ -230,6 +242,40 @@ esp_err_t Axp2101::SetAldo2(bool on) { return SetRail(kAldo2Bit, on, "aldo2"); }
 
 esp_err_t Axp2101::SetAldo3(bool on) { return SetRail(kAldo3Bit, on, "aldo3"); }
 
+esp_err_t Axp2101::PowerOff() {
+    if (!present_ || bus_ == nullptr) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    auto lease = bus_->Acquire();
+    if (!lease) {
+        return ESP_ERR_TIMEOUT;
+    }
+
+    // The check and the write are under the same lease, so nothing can plug a
+    // cable in between them as far as this chip's registers are concerned —
+    // which is the other half of what §10.14.3's lease is for.
+    uint8_t status[2] = {};
+    esp_err_t err = lease.ReadRegister(kAddress, kRegStatus1, &status[0], 1);
+    if (err != ESP_OK) {
+        return err;
+    }
+    err = lease.ReadRegister(kAddress, kRegStatus2, &status[1], 1);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    if (VbusPresent(status[0], status[1])) {
+        // Refuse, and write nothing. See the header: VBUS powers this chip back
+        // on, so the shutdown would look like a reboot.
+        ESP_LOGW(TAG, "power off refused: USB is connected");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    ESP_LOGW(TAG, "powering off");
+    return Update(lease, kRegCommonConfig, 0xFF, kSoftPowerOffBit);
+}
+
 esp_err_t Axp2101::SetRail(uint8_t bit, bool on, const char *name) {
     if (!present_ || bus_ == nullptr) {
         return ESP_ERR_INVALID_STATE;
@@ -272,8 +318,7 @@ esp_err_t Axp2101::Read(Status *out) {
 
     *out = Status{};
     out->battery_present = (status[0] & kStatus1BatteryPresent) != 0;
-    out->vbus_present =
-        ((status[0] & kStatus1VbusGood) != 0) && ((status[1] & kStatus2VbusUnusable) == 0);
+    out->vbus_present = VbusPresent(status[0], status[1]);
     out->charging = ((status[1] >> 5) & 0x03) == 0x01;
     out->discharging = ((status[1] >> 5) & 0x03) == 0x02;
     out->charge_code = status[1] & 0x07;
