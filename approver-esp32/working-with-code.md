@@ -147,6 +147,7 @@ date                          # the RTC and the system clock
 date set 2026-08-15 16:41:13  # write both
 buttons                       # BOOT / KEY / PWR: debounced state + the raw pin
 buttons watch 30              # print edges for 30 s (default 10, max 120)
+term                          # switch on up-arrow history — see below
 poweroff now                  # cut power; refused over USB, so it does nothing on the bench
 ls                            # what is in the storage partition, with sizes
 cat <path>                    # print a file from the storage partition, e.g. cat config.json
@@ -162,6 +163,18 @@ forget                        # drop the registration and the pinned server key
 bus  nats://192.168.1.5:4222
 wifi <ssid> <password>
 ```
+
+**The up-arrow is off until you type `term`.** History is there (the last 32
+lines), but the line editor is disabled: the probe that would enable it runs
+while the REPL is created, and on USB Serial/JTAG nobody is attached that early
+to answer it. In a monitor session, `term` re-runs the probe, your terminal
+answers, and arrows, Ctrl-A/E and the rest start working for that session — §10.7
+has why this is a command rather than the default.
+
+**Never type `term` or `term smart` in a scripted session.** In that mode
+linenoise blocks on a cursor-position query before each prompt, and a script
+that does not answer it leaves the console silent until the board is reset. If
+it happens: send `\x1b[24;80R` to unblock it, then `term dumb`.
 
 **`idf.py monitor` is interactive, which makes it useless from a script or an
 agent.** To send a command and read the answer without holding a terminal, drive

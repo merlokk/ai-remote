@@ -493,6 +493,8 @@ date set <YYYY-MM-DD> <HH:MM:SS>
 buttons                       # BOOT / KEY / PWR: debounced state, the raw pin
                               # beside it, and how long it has been that way
 buttons watch [seconds]       # print edges as they happen, with press durations
+term                          # ask the terminal again, and turn on up-arrow history
+                              # if it answers ('term smart' / 'term dumb' to force)
 poweroff now                  # cut power — refused while USB is connected
 ls                            # what is in the storage partition, with sizes
 cat <path>                    # print a file from the storage partition (§10.15)
@@ -519,7 +521,25 @@ looks complete is worse than a short one that admits it. That is the rule
 
 `ls` also has nothing to recurse into — **SPIFFS is flat**, so its output is the
 whole filesystem rather than one level of it, and `2 file(s), 1626 bytes` next
-to `partition 2259 bytes used` is the filesystem's own overhead made visible.
+to `partition 2259 of 10474481 bytes used (0%)` is the filesystem's own overhead
+made visible. The percentage is there because neither absolute answers "is this
+filling up" at a glance against an 11 MB partition — and `(0%)` is the honest
+reading of two config files in it, not a bug.
+
+**The up-arrow, and why it needs asking for.** `esp_console` already keeps the
+last 32 lines and adds every one typed, so history costs nothing — but the line
+editor that reaches it is switched off on this port. `linenoiseProbe()` runs
+once, while the REPL is being created, and asks the terminal to identify
+itself; on USB Serial/JTAG the host opens the port seconds later, so nobody
+answers, and dumb mode is latched for the session no matter who attaches
+afterwards. **Turning it on at boot instead was tried and is worse than the
+problem**: with dumb mode off, linenoise asks for the cursor position before
+every prompt and *blocks* reading the reply, so a port driven by something that
+does not speak escape sequences — the pyserial snippet in
+[`working-with-code.md`](working-with-code.md), for one — goes silent until the
+board is reset. Measured on this board, not feared in the abstract. Hence
+`term`: the probe re-run when there is somebody there to answer it, bounded at
+500 ms, and `term smart` / `term dumb` when the answer is wrong.
 
 **`buttons` prints two answers per button — the debounced state and the raw
 pin — because they disagree exactly when something is wrong.** A pin held low

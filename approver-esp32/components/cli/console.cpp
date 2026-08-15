@@ -21,6 +21,7 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "linenoise/linenoise.h"
 #include "storage.h"
 
 namespace console {
@@ -36,6 +37,10 @@ constexpr const char *TAG = "cli";
 // as complete.
 constexpr size_t kFileBufferSize = 4096;
 char file_buffer[kFileBufferSize];
+
+// How many lines `term smart` gives the up-arrow. `esp_console`'s own default,
+// named here because `term` prints it.
+constexpr int kHistoryLength = 32;
 
 int CmdStatus(int, char **) {
     const esp_app_desc_t *app = esp_app_get_description();
@@ -216,9 +221,17 @@ int CmdLs(int, char **) {
     size_t total = 0;
     size_t used = 0;
     if (storage::Info(&total, &used) == ESP_OK) {
-        printf("%u file(s), %u bytes; partition %u of %u bytes used\n",
+        // The percentage is the number that answers "is this filling up", which
+        // neither of the two absolutes does at a glance against an 11 MB
+        // partition. Rounded to whole percent, in 64-bit because used * 100
+        // does not have to fit in a size_t on a 32-bit target.
+        const unsigned percent =
+            total == 0 ? 0
+                       : static_cast<unsigned>((static_cast<uint64_t>(used) * 100 + total / 2) /
+                                               total);
+        printf("%u file(s), %u bytes; partition %u of %u bytes used (%u%%)\n",
                static_cast<unsigned>(count), static_cast<unsigned>(listed_bytes),
-               static_cast<unsigned>(used), static_cast<unsigned>(total));
+               static_cast<unsigned>(used), static_cast<unsigned>(total), percent);
     }
     return 0;
 }
@@ -363,6 +376,46 @@ int CmdButtons(int argc, char **argv) {
     return 0;
 }
 
+int CmdTerm(int argc, char **argv) {
+    if (argc > 2) {
+        printf("usage: term          ask the terminal again, and follow its answer\n");
+        printf("       term smart    line editing and history on, regardless\n");
+        printf("       term dumb     back to plain lines\n");
+        return 1;
+    }
+
+    if (argc == 2) {
+        if (strcmp(argv[1], "smart") == 0) {
+            linenoiseSetDumbMode(0);
+            printf("line editing on — up-arrow walks the last %d commands.\n", kHistoryLength);
+            printf("if the console goes silent from here, the other end of this port does\n");
+            printf("not answer escape sequences; reset the board to get it back.\n");
+            return 0;
+        }
+        if (strcmp(argv[1], "dumb") == 0) {
+            linenoiseSetDumbMode(1);
+            printf("plain lines; no history, no editing, nothing to hang on\n");
+            return 0;
+        }
+        printf("expected 'smart' or 'dumb', got '%s'\n", argv[1]);
+        return 1;
+    }
+
+    // The probe the REPL ran at boot, run again now that somebody is here to
+    // answer it. It is bounded (500 ms, non-blocking reads), which is what
+    // makes this safe to type where forcing the mode is not.
+    const bool answered = linenoiseProbe() == 0;
+    linenoiseSetDumbMode(!answered);
+    if (answered) {
+        printf("the terminal answered: line editing and history are on\n");
+    } else {
+        printf("no answer — staying on plain lines.\n");
+        printf("that is the right result for a script driving this port, and the wrong\n");
+        printf("one for a terminal that was slow to reply; 'term smart' overrides it.\n");
+    }
+    return 0;
+}
+
 int CmdPower(int, char **) {
     pmic::Axp2101 &axp = board::Pmic();
     if (!axp.Present()) {
@@ -441,6 +494,15 @@ const esp_console_cmd_t kCommands[] = {
         .context = nullptr,
     },
     {
+        .command = "term",
+        .help = "turn line editing and up-arrow history on ('term smart'), or ask the terminal",
+        .hint = "[smart|dumb]",
+        .func = &CmdTerm,
+        .argtable = nullptr,
+        .func_w_context = nullptr,
+        .context = nullptr,
+    },
+    {
         .command = "date",
         .help = "read the RTC, or 'date set <YYYY-MM-DD> <HH:MM:SS>' to write it",
         .hint = "[set <YYYY-MM-DD> <HH:MM:SS>]",
@@ -485,6 +547,7 @@ esp_err_t Init() {
     esp_console_repl_config_t repl_config = ESP_CONSOLE_REPL_CONFIG_DEFAULT();
     repl_config.prompt = "approver>";
     repl_config.max_cmdline_length = 256;
+    repl_config.max_history_len = kHistoryLength;
 
     const esp_console_dev_usb_serial_jtag_config_t dev_config =
         ESP_CONSOLE_DEV_USB_SERIAL_JTAG_CONFIG_DEFAULT();
@@ -494,6 +557,23 @@ esp_err_t Init() {
         ESP_LOGE(TAG, "console init failed: %s", esp_err_to_name(err));
         return err;
     }
+
+    // **History exists; the editor that reaches it is switched off, and `term`
+    // is how it gets switched on.** `esp_console` already keeps the last
+    // `max_history_len` lines and adds every line typed, so up-arrow costs
+    // nothing to have. What disables it is `linenoiseProbe()`, run once inside
+    // the call above: it asks the terminal to identify itself, and on USB
+    // Serial/JTAG nobody is attached that early — the host opens the port
+    // seconds later — so it times out and linenoise latches dumb mode for the
+    // rest of the session, whoever attaches afterwards.
+    //
+    // Overruling that at boot was tried and is worse than the problem: with
+    // dumb mode off, linenoise asks for the cursor position before printing
+    // each prompt and **blocks** reading the answer, so a port whose other end
+    // does not speak escape sequences goes silent until the board is reset.
+    // Measured on this board, not feared in the abstract.
+    //
+    // So the mode is a command, taken when there is someone there to answer.
 
     ESP_ERROR_CHECK(esp_console_register_help_command());
     for (const esp_console_cmd_t &cmd : kCommands) {
