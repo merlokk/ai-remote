@@ -1,0 +1,16 @@
+## Managed dependencies (CLAUDE.md §10.4). Versions are pinned here and locked
+## in `dependencies.lock`, which is committed — the same rule `uv.lock` and
+## `Cargo.lock` follow for the other halves of this repository.
+dependencies:
+  idf:
+    version: ">=5.5"
+
+  ## cJSON, for `config.json` (§10.15) and later for the wire format of §7.
+  ##
+  ## It is on this list for a reason worth recording: §10.4 approved cJSON as an
+  ## **in-tree** component, and in ESP-IDF v6 it is not one — it was moved out of
+  ## the framework and onto the component registry. So the library is unchanged
+  ## and already signed off; only its delivery is new. It is also one more entry
+  ## on the v5.5.3-versus-v6.0.2 ledger of §10.12: on the version §10.4 pins,
+  ## this line would not exist.
+  espressif/cjson: "^1.7.18"

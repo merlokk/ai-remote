@@ -5,6 +5,8 @@
 #include <ctime>
 
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 namespace board {
 
@@ -19,7 +21,14 @@ i2cbus::Bus bus;
 pmic::Axp2101 axp;
 rtc::Pcf85063 clock_chip;
 ::imu::Qmi8658 motion;
+::audio::Es8311 codec;
+::audio::Speaker sound;
 buttons::Buttons keys;
+
+// The rate the sounds in `spiffs_image/` are converted to. One number, in one
+// place: the codec is configured for it at boot and `Speaker` retunes both
+// halves if a file turns out to be something else.
+constexpr uint32_t kAudioSampleRate = 16000;
 
 // The pin map turned into the driver's table. The order is `button::Index`'s,
 // and the static_assert below is what keeps the two from drifting.
@@ -106,6 +115,10 @@ buttons::Buttons &Buttons() { return keys; }
 
 ::imu::Qmi8658 &Imu() { return motion; }
 
+::audio::Es8311 &Codec() { return codec; }
+
+::audio::Speaker &Sound() { return sound; }
+
 bool ImuInterrupt1() { return gpio_get_level(imu::kInterrupt1) != 0; }
 
 bool ImuInterrupt2() { return gpio_get_level(imu::kInterrupt2) != 0; }
@@ -157,6 +170,37 @@ esp_err_t Init() {
     // nothing subscribed. The pull-down makes an undriven line read a steady
     // low, so "the chip is not using this pin" and "the pin is floating" do not
     // look the same on the console (§10.13's readout, not a feature).
+    // Audio, and the order inside it is a hardware fact rather than taste
+    // (§10.1): the amplifier's enable is the PMIC's ALDO2, so the rail comes
+    // up first and the codec is talked to second. It is left **on** while the
+    // board is on and the codec stays muted between sounds — the alternative,
+    // switching the rail per chirp, trades hiss for a pop and a settling delay
+    // in front of every sound.
+    if (axp.Present()) {
+        const esp_err_t rail = axp.SetAldo2(true);
+        if (rail != ESP_OK) {
+            ESP_LOGE(TAG, "audio rail (ALDO2) not enabled: %s", esp_err_to_name(rail));
+        } else {
+            vTaskDelay(pdMS_TO_TICKS(20));  // let the rail settle before I²C to the codec
+        }
+    }
+
+    err = codec.Init(bus, kAudioSampleRate);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "codec not initialised: %s", esp_err_to_name(err));
+    } else {
+        const ::audio::SpeakerPins pins = {
+            .mclk = audio::kMclk,
+            .bclk = audio::kSclk,
+            .lrck = audio::kLrck,
+            .data_out = audio::kDsdin,
+        };
+        err = sound.Init(codec, pins, kAudioSampleRate);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "speaker not initialised: %s", esp_err_to_name(err));
+        }
+    }
+
     gpio_config_t interrupt_pins = {};
     interrupt_pins.pin_bit_mask = (1ULL << static_cast<uint32_t>(imu::kInterrupt1)) |
                                   (1ULL << static_cast<uint32_t>(imu::kInterrupt2));

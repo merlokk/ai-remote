@@ -1,30 +1,21 @@
 {
-    "Wifi": {
-        "Active" : false,
-        "Mode":"Client",
-        "APName":"Approver",
-        "APPassword":"88889999",
-        "APChannel":5,
-        "APHidden":false,
-        "OnTimer1":60000,
-        "ClientCredentials": [
-            {
-                "Name":"point1",
-                "Password":"passwd1_"
-            },
-            {
-                "Name":"point2",
-                "Password":"passwd2_"
-            },
-            {
-                "Name":"point3",
-                "Password":"passwd3_"
-            }
-        ]
+    "wifi": {
+        "active": false,
+        "networks": []
     },
-    "WEB": {
-        "Port":80,
-        "Login":"",
-        "Password":""
+    "bus": {
+        "url": "nats://192.168.1.5:4222"
+    },
+    "time": {
+        "timezone": "UTC0",
+        "sntp": "pool.ntp.org"
+    },
+    "display": {
+        "brightness": 80,
+        "dimSeconds": 30,
+        "blankSeconds": 120
+    },
+    "audio": {
+        "volume": 80
     }
 }

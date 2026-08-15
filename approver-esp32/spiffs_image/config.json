@@ -1,39 +1,26 @@
 {
-    "Wifi": {
-        "Active" : true,
-        "Mode":"Client",
-        "APName":"Approver",
-        "APPassword":"88889999",
-        "APChannel":5,
-        "APHidden":false,
-        "OnTimer1":60000,
-        "ClientCredentials": [
+    "wifi": {
+        "active": false,
+        "networks": [
             {
-                "Name":"YOUR_SSID",
-                "Password":"CHANGEME",
-                "StaticNetworkCred":
-                {
-                    "Active": false,
-                    "IPAddress": "192.168.10.55",
-                    "Netmask": "255.255.0.0",
-                    "Gateway": "192.168.10.1",
-                    "PrimaryDNS": "8.8.8.8",
-                    "SecondaryDNS": "8.8.4.4"
-                }
-            },
-            {
-                "Name":"point2",
-                "Password":"passwd2_"
-            },
-            {
-                "Name":"point3",
-                "Password":"passwd3_"
+                "ssid": "YOUR_SSID",
+                "password": "CHANGEME"
             }
         ]
     },
-    "WEB": {
-        "Port":80,
-        "Login":"admin",
-        "Password":"CHANGEME"
+    "bus": {
+        "url": "nats://192.168.1.5:4222"
+    },
+    "time": {
+        "timezone": "UTC0",
+        "sntp": "pool.ntp.org"
+    },
+    "display": {
+        "brightness": 80,
+        "dimSeconds": 30,
+        "blankSeconds": 120
+    },
+    "audio": {
+        "volume": 80
     }
 }

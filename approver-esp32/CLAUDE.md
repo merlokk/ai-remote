@@ -40,6 +40,8 @@ the repository owner's sign-off say so.
 | SPIFFS mounted + the console — `components/storage`, `components/cli` (§10.7, §10.15) | **running on hardware**: flashed over COM4, `status`, `power` and `cat` answer on the USB Serial/JTAG port |
 | The leased I²C bus — `components/i2cbus` (§10.14.3) | **written and running**: lease, timeout-not-block, per-address device table, bus recovery. The fake backend the host tests need is still owed (§10.11) |
 | The buttons — `components/buttons` (§10.1, §10.15) | **running on hardware**: debounced BOOT / KEY / PWR, polled, with a blocking `HeldFor` for §10.15's KEY-at-boot. It is what found that GPIO18 reads `PWR` **inverted**. No consumer yet — the config restore is still unwritten |
+| ES8311 codec + speaker — `components/audio` (§10.8.1, §10.13) | **playing on hardware**: the codec configured from its datasheet, an I²S transmit channel, uncompressed WAV streamed off SPIFFS. `poweron.wav` at boot, `alert.wav` on `play`. No microphone, no decoder |
+| Settings — `components/config` (§10.15) | **read, written and surviving a reboot**: `config.json` parsed into a fixed struct at boot, `reload` / `save` / `restore` on the console, and the codec's volume is the first setting that round-trips |
 | QMI8658C IMU — `components/imu` (§10.13) | **reading on hardware**: 0x6B, six axes, tilt and die temperature through `imu`. A diagnostic and nothing more — §10.13's rule that no gesture approves anything is unchanged |
 | PCF85063 RTC — `components/rtc` (§10.8.2) | **running on hardware**: read, written and surviving a reboot; the system clock is adopted from it at boot. No timezone and no SNTP yet |
 | AXP2101 — `components/pmic`, brought up from `board::Init()` (§10.1, §10.13) | **configured and reading on hardware**: TS pin silenced, ADC channels, VBUS limit, rail voltages, charge currents — all cross-checked against the vendor's `pmicpower` component — plus `SetAldo2`/`SetAldo3` for the audio and panel rails |
@@ -311,12 +313,29 @@ In-tree, arriving with ESP-IDF itself and needing no new supply chain:
 |-----------|-----|
 | `esp_wifi`, `lwip` | the network, BSD sockets |
 | `mbedtls` | base64 (`mbedtls_base64_*`), and TLS on the socket if §10.3 goes that way |
-| `json` (cJSON) | parsing requests, building replies — and the config files of §10.15 |
+| `json` (cJSON) — **not in-tree any more**, see below | parsing requests, building replies — and the config files of §10.15 |
 | `spiffs` | the `storage` partition: `config.json`, `config.init.json`, `registration.json` (§10.15) |
 | `nvs_flash` | **nothing of ours** (§10.15) — initialised because `esp_wifi` needs it for calibration and PHY data |
 | `esp_hmac`, `efuse` | the key custody of §10.6 |
 | `esp_console`, `esp_vfs_usb_serial_jtag` | the provisioning commands of §10.7 |
 | `esp_lcd`, `driver` (I²C/SPI), `esp_timer`, `esp_event` | display transport, buses, the clock |
+
+**cJSON left the framework, and that is the first thing v6.0.2 has actually
+cost.** On the v5.5.3 this section pins it is the in-tree `json` component; on
+the installed v6.0.2 it does not exist at all, and building against it means
+`espressif/cjson` from the registry — which is what `main/idf_component.yml`
+now declares (resolved: **1.7.19~2**, locked in the committed
+`dependencies.lock`). The library is unchanged and was already signed off; only
+its delivery is new. Two consequences worth recording: this is the project's
+first managed dependency and therefore the first `dependencies.lock`, and it is
+one more entry on the version ledger of §10.12 — on v5.5.3 the line would not
+exist.
+
+**And one host-side tool joined, which is not a dependency of anything.**
+`ffmpeg` converts the sounds to the uncompressed WAV the firmware plays
+(§10.8.1); it runs on this machine, nothing links against it, and the command
+is in [`working-with-code.md`](working-with-code.md). The firmware deliberately
+has **no decoder** — the argument is in `components/audio/speaker.h`.
 
 New dependencies, all four approved:
 
@@ -496,6 +515,9 @@ buttons                       # BOOT / KEY / PWR: debounced state, the raw pin
 buttons watch [seconds]       # print edges as they happen, with press durations
 imu                           # the QMI8658C: all six axes, tilt, die temperature
 imu watch [seconds]           # a line a second of the same six numbers
+play [file]                   # play a WAV from the storage partition (alert.wav)
+play volume [0..100]          # read it, or set it and save it to config.json
+config [reload|save|restore]  # the settings of §10.15, parsed into fields
 term                          # ask the terminal again, and turn on up-arrow history
                               # if it answers ('term smart' / 'term dumb' to force)
 poweroff now                  # cut power — refused while USB is connected
@@ -1379,7 +1401,7 @@ The files, built from `spiffs_image/` and flashed with the project (§10.12):
 
 | File | Written by | Holds |
 |------|-----------|-------|
-| `config.json` | the firmware, whenever a setting changes | everything the operator can set: Wi-Fi networks **and their passwords**, the bus URL, the `TZ` string and SNTP server, display timeouts |
+| `config.json` | the firmware, whenever a setting changes | everything the operator can set: Wi-Fi networks **and their passwords**, the bus URL, the `TZ` string and SNTP server, display timeouts, and the speaker's volume |
 | `registration.json` | §10.7, once, on a verified `ok:true` | the registered `key_id` and the pinned handler `server_key` |
 | `config.init.json` | **nobody, ever** | the factory defaults, and the only thing a restore has to copy from |
 
@@ -1464,6 +1486,18 @@ decision above, should it ever be taken.
   rename over `config.json`. A power cut mid-restore that leaves a truncated
   config would break exactly the recovery path being used. Every runtime write
   of `config.json` goes the same way, for the same reason.
+
+  **SPIFFS does not implement that plan, and the difference is now handled
+  rather than assumed.** `rename()` onto an existing name fails with EIO
+  (errno 5) — measured on this board, and the first `play volume` refused to
+  save because of it. SPIFFS renames only onto a free name, so the write is:
+  temp file → `remove` the old → `rename`. That leaves a real window in which
+  `config.json` is gone and a *complete* `config.json.new` is not yet called
+  anything, so `config::Init` closes it before reading: both files present
+  means the temp is a leftover and is dropped; only the temp present means the
+  crash landed in the window and finishing the rename is the recovery — never
+  restoring the defaults, which would throw away a good config to fix a naming
+  problem.
 - **The same restore is reachable from Settings** (§10.8.5), where there is a
   screen to confirm on and the blind five seconds are not needed.
 
@@ -1489,6 +1523,29 @@ decision above, should it ever be taken.
   git and now *is* the real store, which makes the temptation to leave a working
   WPA key in it much stronger than before. `CHANGEME` is what belongs there; a
   real key committed once is a real key in the history.
+
+#### What is written, and the shape the files now have
+
+`components/config` is the component: `Init` at boot, `Reload`, `Save`,
+`Restore`, and a `Data` struct the rest of the firmware reads fields off. It
+replaced the placeholder schema the two files were carrying — an AP-mode Wi-Fi
+block and a `WEB` section, both inherited from the house firmware of §10.14.4
+and belonging to a device this one is not. What is in them now is what this
+firmware has or is specified to have: `wifi.networks[]` (§10.9, four of them),
+`bus.url` (§10.3), `time.timezone` / `time.sntp` (§10.8.2), the display
+timeouts (§10.8.5) and `audio.volume`.
+
+**The volume is the first setting that round-trips**, and it is worth having as
+the proof of the whole path: `play volume 45` writes the field and the file,
+the codec follows immediately, and after a hard reset the boot sound comes back
+at 45 % because `main` applies `config.audio.volume` to the codec. `play` with
+no arguments uses the *file's* volume rather than whatever the codec was last
+set to — the file is the record of what the operator chose.
+
+Where that application happens is deliberate: `main` reads the config and sets
+the codec, because `config` knows nothing about a codec and `board` knows
+nothing about a file (§10.14.2). It is also why boot order changed — storage
+and the settings on it now come up **before** the hardware they configure.
 
 #### Tests (§10.11, host tier — none of this needs a board)
 

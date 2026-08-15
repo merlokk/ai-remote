@@ -17,9 +17,10 @@ constexpr const char *TAG = "storage";
 
 bool mounted = false;
 
-// Builds an absolute path in the caller's buffer. Accepts what the operator is
-// likely to type: with the mount point or without it.
-bool BuildPath(const char *path, char *out, size_t capacity) {
+}  // namespace
+
+// The header explains why this is public rather than a local helper.
+bool ResolvePath(const char *path, char *out, size_t capacity) {
     if (path == nullptr || path[0] == '\0') {
         return false;
     }
@@ -28,7 +29,6 @@ bool BuildPath(const char *path, char *out, size_t capacity) {
     return written > 0 && static_cast<size_t>(written) < capacity;
 }
 
-}  // namespace
 
 esp_err_t Init() {
     const esp_vfs_spiffs_conf_t conf = {
@@ -75,7 +75,7 @@ esp_err_t ReadFile(const char *path, char *out, size_t capacity, size_t *length)
     }
 
     char full[kMaxPathLength];
-    if (!BuildPath(path, full, sizeof(full))) {
+    if (!ResolvePath(path, full, sizeof(full))) {
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -148,7 +148,7 @@ esp_err_t List(Entry *out, size_t capacity, size_t *count) {
         // dropped.
         slot.size = 0;
         char full[kMaxPathLength];
-        if (BuildPath(slot.name, full, sizeof(full))) {
+        if (ResolvePath(slot.name, full, sizeof(full))) {
             struct stat info = {};
             if (stat(full, &info) == 0) {
                 slot.size = static_cast<size_t>(info.st_size);

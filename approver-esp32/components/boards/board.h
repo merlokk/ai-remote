@@ -24,6 +24,7 @@
 #include "i2c_bus.h"
 #include "pcf85063.h"
 #include "qmi8658.h"
+#include "speaker.h"
 
 namespace board {
 
@@ -181,5 +182,16 @@ buttons::Buttons &Buttons();
 // history is ambiguous about whether these pins are enabled at all.
 bool ImuInterrupt1();
 bool ImuInterrupt2();
+
+// The codec and the speaker in front of it. §10.13 gives this hardware one job
+// — a short chirp on a new request (§10.8.1) — and `Init` brings it up far
+// enough to do it: the amplifier's rail (ALDO2, §10.1) on, the codec
+// configured and **muted**, the I²S channel running.
+//
+// The `::` is the same shadowing guard `Imu()` needs: `board::audio` is this
+// file's namespace of I²S pins, and it hides the driver's `audio` inside
+// `namespace board`.
+::audio::Es8311 &Codec();
+::audio::Speaker &Sound();
 
 }  // namespace board

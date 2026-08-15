@@ -33,6 +33,16 @@ esp_err_t Init();
 
 bool Mounted();
 
+// Builds an absolute path in the caller's buffer, accepting what the operator
+// is likely to type: with the mount point or without it. False when the result
+// would not fit or the input is empty — never a truncated path, which would
+// open the wrong file rather than fail.
+//
+// Public because playback streams a file itself rather than reading it whole
+// (`audio::Speaker`), and one convention about what a path may look like beats
+// two implementations of it.
+bool ResolvePath(const char *path, char *out, size_t capacity);
+
 // Bytes the filesystem accounts for. `total` is smaller than the partition:
 // SPIFFS keeps its own metadata.
 esp_err_t Info(size_t *total_bytes, size_t *used_bytes);

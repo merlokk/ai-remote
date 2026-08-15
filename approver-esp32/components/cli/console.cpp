@@ -11,6 +11,7 @@
 
 #include "board.h"
 #include "buttons.h"
+#include "config.h"
 #include "esp_app_desc.h"
 #include "esp_chip_info.h"
 #include "esp_console.h"
@@ -24,6 +25,7 @@
 #include "freertos/task.h"
 #include "linenoise/linenoise.h"
 #include "qmi8658.h"
+#include "speaker.h"
 #include "storage.h"
 
 namespace console {
@@ -548,6 +550,170 @@ int CmdImu(int argc, char **argv) {
     return 0;
 }
 
+int CmdConfig(int argc, char **argv) {
+    if (argc > 2) {
+        printf("usage: config [reload|save|restore]\n");
+        return 1;
+    }
+
+    if (argc == 2) {
+        esp_err_t err = ESP_OK;
+        const char *what = argv[1];
+        if (strcmp(what, "reload") == 0) {
+            err = config::Reload();
+        } else if (strcmp(what, "save") == 0) {
+            err = config::Save();
+        } else if (strcmp(what, "restore") == 0) {
+            // §10.15's restore, minus the five blind seconds of holding KEY at
+            // boot. It puts the defaults back over the settings and leaves the
+            // registration alone — the whole reason those are two files.
+            err = config::Restore();
+        } else {
+            printf("expected reload, save or restore; got '%s'\n", what);
+            return 1;
+        }
+        if (err != ESP_OK) {
+            printf("%s failed: %s\n", what, esp_err_to_name(err));
+            return 1;
+        }
+        printf("%s ok\n", what);
+        if (strcmp(what, "save") == 0) {
+            return 0;
+        }
+        // A reload or a restore changed the fields; the codec is holding the
+        // old number until something tells it otherwise.
+        if (board::Codec().Present()) {
+            board::Codec().SetVolume(config::Get().audio.volume_percent);
+        }
+    }
+
+    const config::Data &c = config::Get();
+    printf("source     %s%s\n", config::kPath, config::Loaded() ? "" : " (built-in defaults)");
+    printf("wifi       %s, %u network(s)\n", c.wifi.active ? "on" : "off",
+           static_cast<unsigned>(c.wifi.network_count));
+    for (uint8_t i = 0; i < c.wifi.network_count; ++i) {
+        // **The password is never printed** (§10.8.6, §10.15): it is a secret
+        // from the moment it is typed, and a console dump is exactly the place
+        // it must not turn up.
+        printf("           %u. %s (password %s)\n", static_cast<unsigned>(i + 1),
+               c.wifi.networks[i].ssid,
+               c.wifi.networks[i].password[0] == '\0' ? "not set" : "set");
+    }
+    printf("bus        %s\n", c.bus.url);
+    printf("time       TZ=%s, sntp %s\n", c.time.timezone, c.time.sntp_server);
+    printf("display    %u%%, dim after %us, blank after %us\n",
+           static_cast<unsigned>(c.display.brightness),
+           static_cast<unsigned>(c.display.dim_seconds),
+           static_cast<unsigned>(c.display.blank_seconds));
+    printf("audio      volume %u%%\n", static_cast<unsigned>(c.audio.volume_percent));
+    return 0;
+}
+
+int CmdPlay(int argc, char **argv) {
+    ::audio::Speaker &sound = board::Sound();
+    ::audio::Es8311 &codec = board::Codec();
+
+    if (argc > 1 && strcmp(argv[1], "volume") == 0) {
+        if (argc == 2) {
+            printf("volume %u%% (config says %u%%)\n", static_cast<unsigned>(codec.Volume()),
+                   static_cast<unsigned>(config::Get().audio.volume_percent));
+            return 0;
+        }
+        if (argc != 3) {
+            printf("usage: play volume [0..100]\n");
+            return 1;
+        }
+        char *end = nullptr;
+        const unsigned long percent = strtoul(argv[2], &end, 10);
+        if (end == argv[2] || *end != '\0' || percent > 100) {
+            printf("expected 0..100, got '%s'\n", argv[2]);
+            return 1;
+        }
+        const esp_err_t err = codec.SetVolume(static_cast<uint8_t>(percent));
+        if (err != ESP_OK) {
+            printf("volume not set: %s\n", esp_err_to_name(err));
+            return 1;
+        }
+
+        // Into the field, then to the file. A volume that survives the codec
+        // but not a reboot is the more annoying of the two failures, so the
+        // save is not optional and its failure is reported rather than logged
+        // out of sight.
+        config::Get().audio.volume_percent = static_cast<uint8_t>(percent);
+        const esp_err_t saved = config::Save();
+        if (saved != ESP_OK) {
+            printf("volume %lu%% set, but %s was not written: %s\n", percent, config::kPath,
+                   esp_err_to_name(saved));
+            return 1;
+        }
+        printf("volume %lu%%, saved to %s\n", percent, config::kPath);
+        return 0;
+    }
+
+    if (!codec.Present()) {
+        printf("the ES8311 did not answer at boot — no codec to play through\n");
+        return 1;
+    }
+    if (!sound.Ready()) {
+        printf("the I2S channel is not running — see the boot log\n");
+        return 1;
+    }
+
+    const char *path = argc > 1 ? argv[1] : "alert.wav";
+    if (argc > 2) {
+        printf("usage: play [file]        default alert.wav\n");
+        printf("       play volume <0..100>\n");
+        return 1;
+    }
+
+    ::audio::WavFormat format = {};
+    esp_err_t err = sound.Describe(path, &format);
+    switch (err) {
+        case ESP_OK:
+            break;
+        case ESP_ERR_NOT_FOUND:
+            printf("no such file: %s\n", path);
+            return 1;
+        case ESP_ERR_NOT_SUPPORTED:
+            // The container is right and the contents are not — the one case
+            // worth spelling out, because "it is a .wav" is exactly what the
+            // operator will be sure of.
+            printf("%s is not uncompressed PCM; convert it (see working-with-code.md)\n", path);
+            return 1;
+        default:
+            printf("could not read %s: %s\n", path, esp_err_to_name(err));
+            return 1;
+    }
+
+    printf("%s: %" PRIu32 " Hz, %u channel(s), %u-bit, %.1f s\n", path, format.sample_rate,
+           static_cast<unsigned>(format.channels), static_cast<unsigned>(format.bits),
+           format.sample_rate == 0 || format.channels == 0
+               ? 0.0
+               : static_cast<double>(format.data_bytes) /
+                     static_cast<double>(format.sample_rate * format.channels * (format.bits / 8)));
+
+    // The volume for this playback comes from the file, not from whatever the
+    // codec happens to be set to: `config.json` is the record of what the
+    // operator chose, and a `play` that is quieter than the last one for no
+    // visible reason is a bug report waiting to happen.
+    const uint8_t wanted = config::Get().audio.volume_percent;
+    if (codec.Volume() != wanted) {
+        codec.SetVolume(wanted);
+    }
+
+    err = sound.PlayWav(path);
+    if (err == ESP_ERR_NOT_SUPPORTED) {
+        printf("this driver plays 16-bit mono PCM at 8/16/32/44.1/48 kHz, and that is not it\n");
+        return 1;
+    }
+    if (err != ESP_OK) {
+        printf("playback failed: %s\n", esp_err_to_name(err));
+        return 1;
+    }
+    printf("played at volume %u%%\n", static_cast<unsigned>(codec.Volume()));
+    return 0;
+}
+
 int CmdTerm(int argc, char **argv) {
     if (argc > 2) {
         printf("usage: term          ask the terminal again, and follow its answer\n");
@@ -624,7 +790,9 @@ int CmdPower(int, char **) {
     printf("system     %u mV\n", static_cast<unsigned>(s.system_mv));
     printf("die temp   %.1f C\n", static_cast<double>(s.die_celsius));
     // The two rails that are not decoration: ALDO3 resets the panel, ALDO2
-    // powers the amplifier (§10.1). Both start off.
+    // powers the amplifier (§10.1). ALDO3 is **already on out of reset** — the
+    // PMIC's own default on this board, not something the firmware writes —
+    // while ALDO2 is off until `board::Init` turns it on for the codec.
     printf("pwr key    on after %s, off after %s long press (%s)\n",
            pmic::PressOnTimeName(s.press_on_code), pmic::PressOffTimeName(s.press_off_code),
            s.long_press_shutdown ? "enabled" : "DISABLED — long press does nothing");
@@ -670,6 +838,24 @@ const esp_console_cmd_t kCommands[] = {
         .help = "the QMI8658C: acceleration and rotation on all six axes, tilt, temperature",
         .hint = "[watch [seconds]]",
         .func = &CmdImu,
+        .argtable = nullptr,
+        .func_w_context = nullptr,
+        .context = nullptr,
+    },
+    {
+        .command = "config",
+        .help = "print the parsed config, or reload / save / restore it (§10.15)",
+        .hint = "[reload|save|restore]",
+        .func = &CmdConfig,
+        .argtable = nullptr,
+        .func_w_context = nullptr,
+        .context = nullptr,
+    },
+    {
+        .command = "play",
+        .help = "play a WAV from the storage partition, or 'play volume <0..100>'",
+        .hint = "[file|volume <0..100>]",
+        .func = &CmdPlay,
         .argtable = nullptr,
         .func_w_context = nullptr,
         .context = nullptr,

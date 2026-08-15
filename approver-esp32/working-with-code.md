@@ -149,6 +149,9 @@ buttons                       # BOOT / KEY / PWR: debounced state + the raw pin
 buttons watch 30              # print edges for 30 s (default 10, max 120)
 imu                           # the QMI8658C: six axes, tilt, die temperature
 imu watch 10                  # a line a second of the same numbers
+play                          # play alert.wav; `play poweron.wav` for the other one
+play volume 45                # set it and save it to config.json (§10.15)
+config                        # the parsed settings; `config reload|save|restore`
 term                          # switch on up-arrow history — see below
 poweroff now                  # cut power; refused over USB, so it does nothing on the bench
 ls                            # what is in the storage partition, with sizes
@@ -229,6 +232,31 @@ The token comes from the host, minted by the handler:
 ```powershell
 py approver/registration_handler.py --get-token approver-esp32
 ```
+
+## Sounds: mp3 in, WAV out (§10.8.1)
+
+The firmware has **no decoder** and does not want one (`components/audio/speaker.h`
+argues it), so anything that gets played is converted on this machine first.
+`ffmpeg` is installed here by winget — `Gyan.FFmpeg`, which puts it under
+`%LOCALAPPDATA%\Microsoft\WinGet\Packages\...` and on `PATH` for new shells:
+
+```powershell
+ffmpeg -y -i poweron.mp3 -ac 1 -ar 16000 -c:a pcm_s16le -map_metadata -1 -fflags +bitexact poweron.wav
+```
+
+- `-ac 1 -ar 16000 -c:a pcm_s16le` is exactly what the driver plays: mono,
+  16 kHz, signed 16-bit PCM. Other rates work (8 k / 32 k / 44.1 k / 48 k) and
+  cost proportionally more flash; stereo and anything compressed are refused by
+  name at `play` time.
+- `-map_metadata -1 -fflags +bitexact` keeps the encoder from adding a `LIST`
+  chunk. The parser walks chunks and would survive one, but a header that is
+  only `fmt ` and `data` is the one to ship.
+- Three seconds of 16 kHz mono is ~100 KB. The `storage` partition is 10.9 MB,
+  so this is the resource the board has to spare.
+
+**After changing anything under `spiffs_image/`, the full `idf.py flash` is
+required** — `app-flash` does not write the image, and the symptom is a device
+happily playing yesterday's file.
 
 ## Parity vectors for the tests (§10.11)
 
