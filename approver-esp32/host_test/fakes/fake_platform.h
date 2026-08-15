@@ -104,8 +104,20 @@ struct Platform {
     // invisible on hardware because it still works.
     uint32_t delay_ms_while_held;
 
+    // **The clock, in microseconds, and it only moves when a test says so.**
+    // `esp_timer_get_time()` reads it and `vTaskDelay` advances it — which is
+    // not a convenience but a requirement: `Buttons::HeldFor` polls in a loop
+    // with a delay between, so a clock that stood still would spin forever and
+    // a clock that ran on its own would make "held for five seconds" a race.
+    uint64_t clock_us;
+
     // --- GPIO ---
     int level[kMaxPins];
+    // **Whether the world is holding this pin**, as opposed to an internal
+    // pull deciding it. A button shorted to ground beats a pull-up, so
+    // `gpio_config` must not overwrite a level a test has set — which is
+    // exactly §10.15's case: the finger is on `KEY` before `Init` runs.
+    bool level_forced[kMaxPins];
     size_t rising_edges[kMaxPins];
     gpio_mode_t last_mode[kMaxPins];
 
@@ -159,5 +171,16 @@ bool WroteRegister(uint8_t address, uint8_t reg, uint8_t value);
 // task is holding the lease" without threads.
 void TakeMutexFromAnotherTask();
 void GiveMutexFromAnotherTask();
+
+// Moves the fake clock. `vTaskDelay` does the same thing, so a driver that
+// waits does not need help from the test to get there.
+void AdvanceMs(uint32_t ms);
+
+// Sets what a pin reads, **without counting an edge**. Edges belong to what
+// the firmware drives (`Bus::Recover` clocking SCL); this is the world putting
+// a level on an input, which is a different thing and must not be mistaken for
+// the first.
+void SetPinLevel(gpio_num_t pin, int level);
+size_t RisingEdges(gpio_num_t pin);
 
 }  // namespace fake

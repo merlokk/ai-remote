@@ -70,6 +70,8 @@ add_executable(host_test
     test_imu.cpp
     test_es8311.cpp
     test_config.cpp
+    test_buttons.cpp
+    test_timezone.cpp
 
     # The fake ESP-IDF the drivers are compiled against. `fakes/` shadows the
     # framework's headers on the include path below, so the sources listed
@@ -86,6 +88,7 @@ add_executable(host_test
     ../components/audio/es8311.cpp
     ../components/config/config.cpp
     ../components/timezone/timezone.cpp
+    ../components/buttons/buttons.cpp
 
     # cJSON, the real one, out of the managed component `idf.py build` fetched.
     "${CJSON_DIR}/cJSON.c"
@@ -104,6 +107,7 @@ target_include_directories(host_test PRIVATE
     ../components/audio
     ../components/config
     ../components/timezone
+    ../components/buttons
     ../components/storage
     "${CJSON_DIR}"
     "${UNITY_DIR}"

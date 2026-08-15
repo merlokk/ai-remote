@@ -186,6 +186,25 @@ bool WroteRegister(uint8_t address, uint8_t reg, uint8_t value) {
     return t != nullptr && t->write[1] == value;
 }
 
+void AdvanceMs(uint32_t ms) { platform.clock_us += static_cast<uint64_t>(ms) * 1000; }
+
+void SetPinLevel(gpio_num_t pin, int level) {
+    const size_t index = static_cast<size_t>(pin);
+    if (pin < 0 || index >= Platform::kMaxPins) {
+        return;
+    }
+    platform.level[index] = level != 0 ? 1 : 0;
+    platform.level_forced[index] = true;
+}
+
+size_t RisingEdges(gpio_num_t pin) {
+    const size_t index = static_cast<size_t>(pin);
+    if (pin < 0 || index >= Platform::kMaxPins) {
+        return 0;
+    }
+    return platform.rising_edges[index];
+}
+
 void TakeMutexFromAnotherTask() { platform.mutex_taken = true; }
 
 void GiveMutexFromAnotherTask() { platform.mutex_taken = false; }
@@ -255,6 +274,9 @@ BaseType_t xSemaphoreGive(SemaphoreHandle_t handle) {
 void vTaskDelay(TickType_t ticks) {
     fake::Platform &p = fake::P();
     p.delay_ms_total += ticks;
+    // A delay moves the clock. Without this, anything that polls in a loop
+    // waiting for time to pass never finishes.
+    p.clock_us += static_cast<uint64_t>(ticks) * 1000;
     if (p.mutex_taken) {
         // §10.14.3: a lease is held briefly and nothing sleeps under it. This
         // is the only place that rule can be observed at all — on hardware a
@@ -263,15 +285,30 @@ void vTaskDelay(TickType_t ticks) {
     }
 }
 
-void esp_rom_delay_us(uint32_t us) { (void)us; }
+void esp_rom_delay_us(uint32_t us) { fake::P().clock_us += us; }
+
+int64_t esp_timer_get_time(void) { return static_cast<int64_t>(fake::P().clock_us); }
 
 // --- GPIO ------------------------------------------------------------------
 
 esp_err_t gpio_config(const gpio_config_t *config) {
     fake::Platform &p = fake::P();
     for (size_t pin = 0; pin < fake::Platform::kMaxPins; ++pin) {
-        if ((config->pin_bit_mask >> pin) & 1ULL) {
-            p.last_mode[pin] = config->mode;
+        if (((config->pin_bit_mask >> pin) & 1ULL) == 0) {
+            continue;
+        }
+        p.last_mode[pin] = config->mode;
+        // **The pull decides the idle level** — but only when nothing else
+        // is driving the pin. A button held down shorts to ground and wins
+        // over a pull-up, which is §10.15's scenario and would be silently
+        // undone if configuring the pin reset it.
+        if (p.level_forced[pin]) {
+            continue;
+        }
+        if (config->pull_up_en == GPIO_PULLUP_ENABLE) {
+            p.level[pin] = 1;
+        } else if (config->pull_down_en == GPIO_PULLDOWN_ENABLE) {
+            p.level[pin] = 0;
         }
     }
     return ESP_OK;

@@ -27,6 +27,8 @@ void RegisterRtcTests(void);
 void RegisterImuTests(void);
 void RegisterEs8311Tests(void);
 void RegisterConfigTests(void);
+void RegisterButtonsTests(void);
+void RegisterTimezoneTests(void);
 
 void setUp(void) { fake::Reset(); }
 
@@ -64,6 +66,8 @@ int main(int argc, char **argv) {
     if (Wanted("imu")) RegisterImuTests();
     if (Wanted("es8311")) RegisterEs8311Tests();
     if (Wanted("config")) RegisterConfigTests();
+    if (Wanted("buttons")) RegisterButtonsTests();
+    if (Wanted("timezone")) RegisterTimezoneTests();
 
     return UNITY_END();
 }

@@ -196,10 +196,21 @@ bool LooksLikePosix(const char *value) {
     if (value == nullptr || value[0] == '\0') {
         return false;
     }
-    // A zone name always has one, and a POSIX rule never does. That single
-    // character separates the two cases better than any amount of parsing.
-    if (strchr(value, '/') != nullptr) {
-        return false;
+    // **A slash means different things in the two, and where it sits is what
+    // separates them.** This used to reject any string containing one, on the
+    // grounds that a zone name has a slash and a rule does not — which is
+    // wrong, and wrong about most of the table: a transition time is written
+    // `M3.5.0/3`, so `EET-2EEST,M3.5.0/3,M10.5.0/4` was refused as "not a
+    // POSIX rule". §10.8.2 promises a raw rule is accepted anywhere a name is,
+    // and it was not. Found by the host tests, which asked whether the table's
+    // own rules pass this check.
+    //
+    // In a rule every slash follows a digit; in a name it separates letters.
+    // That is the actual distinction.
+    for (const char *p = strchr(value, '/'); p != nullptr; p = strchr(p + 1, '/')) {
+        if (p == value || *(p - 1) < '0' || *(p - 1) > '9') {
+            return false;
+        }
     }
     // The rule needs an abbreviation and an offset: at least three characters
     // of name, then a sign or a digit somewhere. "UTC0" is the shortest real

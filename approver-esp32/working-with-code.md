@@ -283,14 +283,14 @@ approver-esp32\host_test\run.cmd i2c pmic   # several
 ```
 
 A suite name is matched as a substring, and the names are `navigator`, `i2c`,
-`pmic`, `rtc`, `imu`, `es8311` and `config`. Run everything before committing;
+`pmic`, `rtc`, `imu`, `es8311`, `config`, `buttons` and `timezone`. Run everything before committing;
 filter while debugging, because scrolling past a hundred lines of `PASS` to
 find the one that matters is how a suite stops being run.
 
 The tail of a good run:
 
 ```
-124 Tests 0 Failures 0 Ignored
+161 Tests 0 Failures 0 Ignored
 OK
 ```
 
@@ -308,8 +308,13 @@ preview below, CMake and Ninja from ESP-IDF. Two paths it needs:
 **Mutation-check anything worth trusting.** The habit this suite is built on:
 break the rule the test claims to protect, run it, watch the right test fail,
 put it back. It takes a minute and it is the difference between a test and a
-line that always passes. Nine invariants have been through it so far; §10.11
+line that always passes. Twelve invariants have been through it so far; §10.11
 lists them.
+
+One trap in doing it: **`/W4 /WX` turns a now-unused variable into a build
+error**, so a mutation has to keep consuming whatever it stops using —
+`Reset(false, now)` fails to compile where `Reset(level && false, now)` does
+the same damage and builds.
 
 ```powershell
 # the shape of it

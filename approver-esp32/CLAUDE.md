@@ -58,7 +58,7 @@ the repository owner's sign-off say so.
 | Wi-Fi manager: scan, join, remember, reconnect (§10.9) | specified, not started |
 | Where the configuration lives (§10.15) | **decided**: all of it in JSON on SPIFFS, nothing of ours in NVS — with the cost stated (SPIFFS cannot be encrypted at rest). `spiffs_image/config.json` + `config.init.json` are flashed; nothing reads them yet |
 | The `KEY`-at-boot config restore (§10.15) | specified, not started |
-| Host-tier tests (§10.11) — `host_test/` | **running**: 124 Unity tests over `ui`, `i2cbus`, `pmic`, `rtc`, `imu`, `audio` and `config`, one command, no board. The drivers are compiled **unmodified** against a fake ESP-IDF (`host_test/fakes/`), which is §10.14.3's owed fake backend arriving in a different shape than that section specified. Built by MSVC rather than by ESP-IDF's `linux` target, which does not work on a Windows host — §10.11 records why |
+| Host-tier tests (§10.11) — `host_test/` | **running**: 161 Unity tests over `ui`, `i2cbus`, `pmic`, `rtc`, `imu`, `audio`, `config`, `buttons` and `timezone`, one command, no board. The drivers are compiled **unmodified** against a fake ESP-IDF (`host_test/fakes/`), which is §10.14.3's owed fake backend arriving in a different shape than that section specified. Built by MSVC rather than by ESP-IDF's `linux` target, which does not work on a Windows host — §10.11 records why |
 | Protocol parity vectors (§10.11 tier 2) | not started |
 
 Read §10.3 before anything else: it is the one part of this that changes
@@ -813,6 +813,17 @@ registered, and a gear.
   string that is neither, because libc reads a misspelled zone as UTC and says
   nothing.
 
+  **That last promise was not being kept, and the host tests are what
+  noticed.** `LooksLikePosix` rejected any string containing a `/`, on the
+  reasoning that a zone name has one and a rule does not — which is wrong
+  about most of this table, because a transition *time* is written `M3.5.0/3`.
+  So `EET-2EEST,M3.5.0/3,M10.5.0/4` was refused as "not a POSIX rule", and the
+  escape hatch above did not exist for exactly the zones most likely to need
+  it. The test that found it asked the question nobody had: do the table's own
+  rules pass the check the console gates on? The real distinction is where the
+  slash sits — in a rule every one of them follows a digit, in a name they
+  separate letters.
+
   Two costs, stated rather than discovered later: the table is **curated**, so
   a missing zone means typing a rule; and transition rules **change**, so a
   country that moves its dates needs the table edited and the firmware
@@ -1059,7 +1070,7 @@ Three tiers, and the first one is where nearly everything belongs:
    ESP-IDF. One command, in [`working-with-code.md`](working-with-code.md).
 
    **What is under it today is the navigator and four of the five chips on the
-   I²C bus, and the settings file** — 124 tests:
+   I²C bus, the settings file, the buttons and the zone table** — 161 tests:
 
    | Subject | What is pinned |
    |---|---|
@@ -1071,6 +1082,9 @@ Three tiers, and the first one is where nearly everything belongs:
    | `components/audio` | the volume mapping where 0 is silence rather than full scale; clamping; the codec coming up muted; rates refused rather than approximated — and the two lease rules of §10.14.3 that this suite **found broken here and in the IMU**: a bounded number of leases across a configuration sequence, and zero milliseconds slept while holding the bus |
    | `components/config` | every test §10.15 asks for, and the one it spends the most words on: **the write that is not allowed to half-happen**. All three post-crash states are exercised — a leftover temp dropped, a temp with no `config.json` finished into place, and a clean save leaving nothing behind — against a filesystem where `rename()` refuses to replace, exactly as SPIFFS does. Plus: the **committed** `spiffs_image/` files parsed rather than a fixture, so an edit that breaks them fails here instead of on a flash; the password placeholder still being `CHANGEME`; a missing, truncated, non-JSON or oversized file all ending in a restore; `Reload` deliberately **not** restoring; `registration.json` untouched by one; unknown fields lost on the next write; and a named zone filling in its POSIX rule |
 
+   | `components/buttons` | the debounce, which is the only part of this with logic to get wrong: a window that starts when the level is *first seen*, a bounce shorter than it swallowed, a spike that settles back reporting nothing, and the millisecond counter wrapping at ~49 days being a subtraction rather than a special case. Above it: `active_low` per button, because §10.1 found `PWR` wired the other way round; `Init` adopting a button that is **already down**, which is §10.15's whole scenario; and `HeldFor` reaching five seconds through a poll loop, giving up the moment it is released, and costing nothing on the boots where nobody is holding anything |
+   | `components/timezone` | the table checked against itself — every name looks itself up, every rule passes `LooksLikePosix`, no name does — plus the aliases people actually type (`Europe/Kiev`, `Asia/Calcutta`), a shared rule named after its family rather than after a city, and the one that matters most: **an unknown zone answering `nullptr` rather than a guess**, because §10.8.2's named failure is libc silently reading a misspelling as UTC |
+
    The fake platform is `host_test/fakes/` — an ESP-IDF-shaped set of headers
    with a register-file I²C device behind them. It models the shape all five
    chips are (a write moves the cursor, a read takes from it), knows nothing
@@ -1079,12 +1093,18 @@ Three tiers, and the first one is where nearly everything belongs:
    headers rather than the interface that section originally specified.
 
    **Every one of these was mutation-checked rather than trusted**: break the
-   rule, watch the test that covers it fail, put it back. Nine so far — the
+   rule, watch the test that covers it fail, put it back. Twelve so far — the
    card-outranks-navigation rule, the lease timeout, `Recover`'s handle drop,
    the battery field width, `PowerOff`'s refusal, the RTC's OS flag, and
    `config`'s three: the boot-time recovery, the restore-on-bad-file, and the
-   atomic write. Two more needed no mutation, because they failed on the real
-   code the first time it was run: §10.14.3 has them.
+   atomic write; plus `Init` adopting a held button, `active_low` being per
+   button, and the zone lookup refusing to guess. Three more needed no
+   mutation, because they failed on the real code the first time they ran:
+   §10.14.3 has two, and §10.8.2 the third.
+
+   One of those mutations would not compile, which is worth knowing before
+   somebody spends ten minutes on it: `/W4 /WX` turns a now-unused variable
+   into an error, so a mutation has to keep consuming what it stops using.
 
    Two things the host build costs, both recorded because they will look
    arbitrary later. It needs **`managed_components/`** — the config tests use
