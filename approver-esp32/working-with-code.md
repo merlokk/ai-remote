@@ -26,7 +26,7 @@ which splits the install in two and leaves a manifest naming both halves —
 | **The activation script** | `C:\Espressif\tools\Microsoft.v6.0.2.PowerShell_profile.ps1` |
 | Its undo | `C:\Espressif\tools\Microsoft.v6.0.2.PowerShell_deactivate.ps1` |
 
-Installed version: **v6.0.2**. §10.4 pins v5.5.2, and the paragraph in §10.12
+Installed version: **v6.0.2**. §10.4 pins v5.5.3, and the paragraph in §10.12
 says what to do about that — a decision to take at the first real build, not
 something to work around here. Targets this install carries: `esp32`, `esp32c6`,
 `esp32p4`, `esp32s3` — so `set-target esp32c6` works.

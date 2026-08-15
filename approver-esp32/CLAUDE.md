@@ -35,6 +35,7 @@ owner's sign-off say so.
 |-------|-------|
 | The design below (roles, custody, dependencies, tests) | written, unimplemented |
 | The project skeleton — `CMakeLists.txt`, `main/main.cpp`, `sdkconfig.defaults`, `partitions.csv` (§10.12) | **generated and building** on ESP-IDF v6.0.2; two 2.5 MB OTA slots, ~10.9 MB `storage`, `nvs_keys` reserved |
+| The pin map — `components/boards/board.h` (§10.1) | **written**, from Waveshare's own pinout sheet in `docs/`; logged at boot. Nothing drives a pin yet |
 | The language and the layering (§10.14) — C++ except where C is forced, no dynamic memory, library layer before logic, the I²C bus leased | **decided**, nothing written yet |
 | The ESP-IDF dependency set (§10.4) — LVGL + `esp_lvgl_port`, the CO5300/CST9220 drivers, libsodium for Ed25519, `debsahu/espidf-nats` for the bus | **signed off** (root §1); exact versions pinned when the first build resolves them |
 | The LVGL host preview (§10.12.1) | installed and rendering — the only part of this folder that runs today |
@@ -69,10 +70,33 @@ something outside this folder.
 | BOOT / PWR / KEY | three buttons; `KEY` is the free one | GPIO |
 | TF slot, USB-C, exposed I²C/UART pads | — | — |
 
-**The GPIO map is not written here on purpose.** Waveshare publishes it in the
-board's demo projects, and a pin number invented from memory costs a bricked
-evening. Take the pin definitions from the vendor demo's board header, in one
-place (`components/board/`), and cite the demo's version next to them.
+**The GPIO map is not written here on purpose** — a pin number invented from
+memory costs a bricked evening, and this document is not where numbers are
+checked. It lives in exactly one place, **`components/boards/board.h`**, and
+that file names its source: `docs/ESP32-C6-Touch-AMOLED-2.16-details-inter.jpg`,
+Waveshare's own pinout sheet, kept in the repository so the numbers can be read
+back against what they came from.
+
+Two things it records that are not pins, and that shape boot order rather than
+decorate it: **the panel's reset and the amplifier's enable are PMIC rails**
+(ALDO3 and ALDO2), so the I²C bus and the AXP2101 driver have to be up before
+the display can be brought up at all; and **the TF slot shares the panel's QSPI
+wires** (only the chip select is its own), which is a second reason §10.13 gives
+that slot no job.
+
+Where the rest comes from when it is needed — the TE line, backlight, the PMIC
+and RTC interrupts, and the driver init sequences the sheet cannot carry:
+
+- **The vendor's own examples**, which are the authority for this board:
+  [`waveshareteam/ESP32-C6-Touch-AMOLED-2.16`, `02_Example/ESP-IDF-v5.5.3`](https://github.com/waveshareteam/ESP32-C6-Touch-AMOLED-2.16/tree/main/02_Example/ESP-IDF-v5.5.3).
+  Note the folder name: the examples are built against **ESP-IDF v5.5.3**, which
+  is the number §10.4 and §10.12 are arguing about.
+- The datasheets in `docs/` — CO5300, CST9220's family, AXP2101, PCF85063,
+  QMI8658C, ES8311, and the C6 technical reference manual. I²C addresses are
+  theirs, not `board.h`'s: they belong with each chip's driver (§10.14.2).
+
+Anything taken from either goes into `board.h` with the source cited next to it,
+never into a driver directly.
 
 Two consequences that shape the firmware rather than decorate it:
 
@@ -223,11 +247,15 @@ repository owner as argued below, and recorded in root §1. The alternatives sta
 in the tables because they are the fallbacks if one of these turns out not to
 work, not because the choice is still open.
 
-**ESP-IDF v5.5.2** — the version Waveshare recommends for this board and builds
-its demos against; other versions are documented as possibly incompatible with
-the display/touch drivers. Pin it (`idf_component.yml` + a note in the README),
-the way `uv.lock` and `Cargo.lock` pin the rest of the repo. **What is installed
-on this machine is v6.0.2** — §10.12 is where that conflict gets settled, and
+**ESP-IDF v5.5.x** — the version line Waveshare builds this board's examples
+against; other versions are documented as possibly incompatible with the
+display/touch drivers. The exact number is the vendor's to state, and it has
+moved: the published examples now live in
+[`02_Example/ESP-IDF-v5.5.3`](https://github.com/waveshareteam/ESP32-C6-Touch-AMOLED-2.16/tree/main/02_Example/ESP-IDF-v5.5.3),
+so **v5.5.3** is what a pin should say, not the v5.5.2 this section carried
+before. Pin it (`idf_component.yml` + a note in the README), the way `uv.lock`
+and `Cargo.lock` pin the rest of the repo. **What is installed on this machine
+is v6.0.2** — §10.12 is where that conflict gets settled, and
 [`working-with-code.md`](working-with-code.md) has the paths.
 
 In-tree, arriving with ESP-IDF itself and needing no new supply chain:
@@ -772,15 +800,17 @@ of it is a decision. What belongs here is what the commands cannot say.
 
 The first of those is a decision waiting to be taken:
 
-**The installed version is v6.0.2, and §10.4 pins v5.5.2.** That is an open
-conflict, not an oversight: v5.5.2 is what Waveshare builds this board's demos
-against (display and touch drivers are the parts documented as version-
+**The installed version is v6.0.2, and §10.4 pins v5.5.3.** That is an open
+conflict, not an oversight: v5.5.3 is what Waveshare's published examples are
+built against (display and touch drivers are the parts documented as version-
 sensitive), and `debsahu/espidf-nats` advertises 4.4–6.0, which v6.0.2 is
 already past the top of. `eim` installs versions side by side and `eim select`
-switches between them, so the resolution is a decision — install v5.5.2
+switches between them, so the resolution is a decision — install v5.5.3
 alongside and build against it, or re-argue the pin against v6.0.x with the
 vendor drivers in hand — to be taken at the first real build, and recorded in
-§10.4 when it is. The targets this install has support for are `esp32`,
+§10.4 when it is. **What is built today is on v6.0.2 and does not settle it**:
+the skeleton, the partition table and `components/boards` touch nothing
+version-sensitive. The display and touch drivers are what will decide it. The targets this install has support for are `esp32`,
 `esp32c6`, `esp32p4` and `esp32s3`, so `set-target esp32c6` is not the blocker.
 
 The project those commands run in is **generated** — `create-project` plus a

@@ -6,6 +6,7 @@
 
 #include <cinttypes>
 
+#include "board.h"
 #include "esp_app_desc.h"
 #include "esp_log.h"
 #include "esp_ota_ops.h"
@@ -23,4 +24,6 @@ extern "C" void app_main(void) {
     ESP_LOGI(TAG, "%s %s, running from %s at 0x%" PRIx32 " (%" PRIu32 " KB)",
              desc->project_name, desc->version, running->label,
              running->address, running->size / 1024);
+
+    board::LogPinout();
 }
