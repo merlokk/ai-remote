@@ -44,7 +44,7 @@ the repository owner's sign-off say so.
 | Settings — `components/config` (§10.15) | **read, written and surviving a reboot**: `config.json` parsed into a fixed struct at boot, `reload` / `save` / `restore` on the console, and the codec's volume is the first setting that round-trips |
 | QMI8658C IMU — `components/imu` (§10.13) | **reading on hardware**: 0x6B, six axes, tilt and die temperature through `imu`. A diagnostic and nothing more — §10.13's rule that no gesture approves anything is unchanged |
 | PCF85063 RTC — `components/rtc` (§10.8.2) | **running on hardware**: read, written and surviving a reboot; the system clock is adopted from it at boot, **in UTC**. No SNTP yet |
-| Named time zones — `components/timezone` (§10.8.2) | **running on hardware**: 68 zones compiled in, `Europe/Kyiv` rather than a POSIX rule, applied at boot from `config.json`. The clock stays UTC; a zone only changes what is printed and how a typed time is read |
+| Named time zones — `components/timezone` (§10.8.2) | **running on hardware**: 72 zones compiled in, `Europe/Kyiv` or plain `EET` rather than a POSIX rule, applied at boot from `config.json`. The clock stays UTC; a zone only changes what is printed and how a typed time is read |
 | AXP2101 — `components/pmic`, brought up from `board::Init()` (§10.1, §10.13) | **configured and reading on hardware**: TS pin silenced, ADC channels, VBUS limit, rail voltages, charge currents — all cross-checked against the vendor's `pmicpower` component — plus `SetAldo2`/`SetAldo3` for the audio and panel rails |
 | The language and the layering (§10.14) — C++ except where C is forced, no dynamic memory, library layer before logic, the I²C bus leased | **decided**, nothing written yet |
 | The ESP-IDF dependency set (§10.4) — LVGL + `esp_lvgl_port`, the CO5300/CST9220 drivers, libsodium for Ed25519, `debsahu/espidf-nats` for the bus | **signed off** (root §1); exact versions pinned when the first build resolves them |
@@ -744,7 +744,12 @@ registered, and a gear.
   **Named zones, from a table compiled into the firmware.** libc understands
   POSIX `TZ` strings and nothing else, and ESP-IDF ships no IANA database (v6
   checked, not assumed) — so `components/timezone` maps `Europe/Kyiv` to
-  `EET-2EEST,M3.5.0/3,M10.5.0/4`, and `config.json` keeps **both**: `time.zone`
+  `EET-2EEST,M3.5.0/3,M10.5.0/4`. The EU's three zone families are in there
+  under their own names as well (`WET`, `CET`, `EET`), because "I am on Eastern
+  European Time" is how some operators know where they are; they sit first in
+  the table, which is also what makes the reverse lookup name a shared rule
+  after its family instead of after whichever city was listed first. And
+  `config.json` keeps **both**: `time.zone`
   is what a person reads, `time.posix` is what libc is given. That pair is the
   house firmware's shape (§10.14.4, its `TimeUtil`), and it is what lets a zone
   whose transitions moved be corrected on the device — write `posix` — without

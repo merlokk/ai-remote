@@ -26,6 +26,16 @@ constexpr const char *TAG = "tz";
 constexpr Zone kZones[] = {
     {"UTC", "UTC0"},
 
+    // The EU's three zones by their own names, no city attached. tzdata carries
+    // these as zones in their own right, and they are what someone who knows
+    // they are "on Eastern European Time" will type. Same rules as the cities
+    // below — the EU switches together — so `EET` and `Europe/Kyiv` are the
+    // same clock with different labels, and which one is stored is the
+    // operator's choice about how they think of where they are.
+    {"WET", "WET0WEST,M3.5.0/1,M10.5.0"},   // Western European Time, UTC+0/+1
+    {"CET", "CET-1CEST,M3.5.0,M10.5.0/3"},  // Central European Time, UTC+1/+2
+    {"EET", "EET-2EEST,M3.5.0/3,M10.5.0/4"},  // Eastern European Time, UTC+2/+3
+
     // Western Europe
     {"Europe/London", "GMT0BST,M3.5.0/1,M10.5.0"},
     {"Europe/Dublin", "GMT0IST,M3.5.0/1,M10.5.0"},
@@ -73,6 +83,10 @@ constexpr Zone kZones[] = {
     {"Asia/Jerusalem", "IST-2IDT,M3.4.4/26,M10.5.0"},
     {"Asia/Karachi", "PKT-5"},
     {"Asia/Kolkata", "IST-5:30"},
+    // Cyprus is in the EU, so it switches on the EU's dates rather than on any
+    // Asian rule — the same line as Kyiv and Athens above. tzdata files it
+    // under Asia and links Europe/Nicosia to it; both names work here.
+    {"Asia/Nicosia", "EET-2EEST,M3.5.0/3,M10.5.0/4"},
     {"Asia/Seoul", "KST-9"},
     {"Asia/Shanghai", "CST-8"},
     {"Asia/Singapore", "<+08>-8"},
@@ -123,6 +137,7 @@ struct Alias {
 
 constexpr Alias kAliases[] = {
     {"Europe/Kiev", "Europe/Kyiv"},
+    {"Europe/Nicosia", "Asia/Nicosia"},
     {"Asia/Calcutta", "Asia/Kolkata"},
     {"Etc/UTC", "UTC"},
     {"GMT", "UTC"},
@@ -165,6 +180,10 @@ const char *NameFor(const char *posix) {
     if (posix == nullptr) {
         return nullptr;
     }
+    // First match wins, and the table's order is what makes that answer decent:
+    // `WET`/`CET`/`EET` sit at the top, so a rule shared by a dozen cities is
+    // named after the zone family rather than after whichever city happened to
+    // be listed first.
     for (const Zone &zone : kZones) {
         if (strcmp(posix, zone.posix) == 0) {
             return zone.name;
