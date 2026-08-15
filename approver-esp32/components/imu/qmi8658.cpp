@@ -92,21 +92,38 @@ esp_err_t Qmi8658::Identify(uint8_t address) {
 }
 
 esp_err_t Qmi8658::Configure(const Config &config) {
+    // **Two leases, split exactly at the wait**, and that is §10.14.3 rather
+    // than taste: nothing sleeps while holding the bus. Fifteen milliseconds of
+    // held wire is a dropped touch read and a skipped clock tick for nothing —
+    // and it is invisible on hardware, because it works either way. The host
+    // tests are what caught it, here and in the codec.
+    {
+        auto lease = bus_->Acquire();
+        if (!lease) {
+            return ESP_ERR_TIMEOUT;
+        }
+
+        // The reset comes first and the configuration after it, never the other
+        // way round: 0xB0 puts every CTRL register back to its default, so a
+        // reset that followed the writes would silently discard them.
+        const esp_err_t err = lease.WriteRegister(address_, kRegReset, kResetCommand);
+        if (err != ESP_OK) {
+            return err;
+        }
+    }
+
+    // The datasheet gives no reset time; the vendor drivers wait ~10 ms and the
+    // chip is unreachable until it is done, so this is a wait, not a delay.
+    vTaskDelay(pdMS_TO_TICKS(15));
+
     auto lease = bus_->Acquire();
     if (!lease) {
         return ESP_ERR_TIMEOUT;
     }
 
-    // The reset comes first and the configuration after it, never the other way
-    // round: 0xB0 puts every CTRL register back to its default, so a reset that
-    // followed the writes would silently discard them.
-    esp_err_t err = lease.WriteRegister(address_, kRegReset, kResetCommand);
-    if (err != ESP_OK) {
-        return err;
-    }
-    // The datasheet gives no reset time; the vendor drivers wait ~10 ms and the
-    // chip is unreachable until it is done, so this is a wait, not a delay.
-    vTaskDelay(pdMS_TO_TICKS(15));
+    // Everything below is one uninterrupted sequence: the chip is sampling
+    // against whatever is written by the time CTRL7 turns the sensors on.
+    esp_err_t err = ESP_OK;
 
     uint8_t ctrl1 = kCtrl1AddrAutoIncrement;
     ctrl1 &= static_cast<uint8_t>(~kCtrl1BigEndian);

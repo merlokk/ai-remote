@@ -77,10 +77,25 @@ class Es8311 {
     bool Muted() const { return muted_; }
 
    private:
-    esp_err_t Identify(uint8_t address);
-    esp_err_t WriteRegister(uint8_t reg, uint8_t value);
-    esp_err_t ReadRegister(uint8_t reg, uint8_t *value);
-    esp_err_t UpdateRegister(uint8_t reg, uint8_t keep_mask, uint8_t set_bits);
+    // **Every one of these takes the lease rather than acquiring it**, and that
+    // is the whole shape of this class (§10.14.3). The public methods above own
+    // one `Acquire()` each and hand it down; a helper that took the bus itself
+    // would make a twenty-register configuration sequence twenty separate
+    // leases, which is the per-call locking §10.14.3 argues against and which
+    // this driver did until the host tests noticed.
+    esp_err_t Identify(i2cbus::Lease &lease, uint8_t address);
+    esp_err_t WriteRegister(i2cbus::Lease &lease, uint8_t reg, uint8_t value);
+    esp_err_t ReadRegister(i2cbus::Lease &lease, uint8_t reg, uint8_t *value);
+    esp_err_t UpdateRegister(i2cbus::Lease &lease, uint8_t reg, uint8_t keep_mask,
+                             uint8_t set_bits);
+
+    // The register work behind the public setters, so `Init` can do all of it
+    // under the lease it already holds instead of re-entering through them.
+    // **Re-entering would deadlock, not just churn**: the bus mutex is a plain
+    // FreeRTOS mutex, not a recursive one.
+    esp_err_t ApplySampleRate(i2cbus::Lease &lease, uint32_t rate);
+    esp_err_t ApplyVolume(i2cbus::Lease &lease, uint8_t percent);
+    esp_err_t ApplyMute(i2cbus::Lease &lease, bool muted);
 
     i2cbus::Bus *bus_ = nullptr;
     uint8_t address_ = 0;

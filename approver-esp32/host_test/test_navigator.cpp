@@ -14,9 +14,6 @@ using ui::Nav;
 using ui::Navigator;
 using ui::ScreenId;
 
-void setUp(void) {}
-void tearDown(void) {}
-
 namespace {
 
 // Walks a fresh navigator to a screen, so a test can say where it starts
@@ -243,9 +240,7 @@ void test_answering_nothing_is_refused_rather_than_wrapping(void) {
 
 }  // namespace
 
-int main(void) {
-    UNITY_BEGIN();
-
+void RegisterNavigatorTests(void) {
     RUN_TEST(test_starts_on_the_clock_with_nothing_pending);
 
     RUN_TEST(test_clock_reaches_limits_by_either_swipe);
@@ -264,6 +259,4 @@ int main(void) {
     RUN_TEST(test_answering_one_brings_the_next_up_immediately);
     RUN_TEST(test_the_queue_is_bounded_and_says_so);
     RUN_TEST(test_answering_nothing_is_refused_rather_than_wrapping);
-
-    return UNITY_END();
 }

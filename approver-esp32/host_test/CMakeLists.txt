@@ -29,7 +29,12 @@ cmake_minimum_required(VERSION 3.22)
 project(approver_esp32_host_test C CXX)
 
 set(CMAKE_C_STANDARD 11)
-set(CMAKE_CXX_STANDARD 17)
+
+# **C++20, because the drivers use designated initialisers.** ESP-IDF compiles
+# them as gnu++26 and GCC accepts the syntax far earlier as an extension; MSVC
+# does not, and refuses below /std:c++20. Nothing here needs C++20 for its own
+# sake — this is the number that lets the shipping code compile unchanged.
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Where Unity lives inside the framework. Overridable so this is not pinned to
@@ -46,13 +51,39 @@ if(NOT EXISTS "${UNITY_DIR}/unity.c")
 endif()
 
 add_executable(host_test
+    test_main.cpp
     test_navigator.cpp
+    test_i2c_bus.cpp
+    test_pmic.cpp
+    test_rtc.cpp
+    test_imu.cpp
+    test_es8311.cpp
+
+    # The fake ESP-IDF the drivers are compiled against. `fakes/` shadows the
+    # framework's headers on the include path below, so the sources listed
+    # after it are the ones that ship, unmodified.
+    fakes/fake_platform.cpp
+
+    # Under test.
     ../components/ui/navigator.cpp
+    ../components/i2cbus/i2c_bus.cpp
+    ../components/pmic/axp2101.cpp
+    ../components/rtc/pcf85063.cpp
+    ../components/imu/qmi8658.cpp
+    ../components/audio/es8311.cpp
+
     "${UNITY_DIR}/unity.c"
 )
 
 target_include_directories(host_test PRIVATE
+    .
+    fakes                   # must come before anything that could be real IDF
     ../components/ui
+    ../components/i2cbus
+    ../components/pmic
+    ../components/rtc
+    ../components/imu
+    ../components/audio
     "${UNITY_DIR}"
 )
 

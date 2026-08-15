@@ -58,7 +58,7 @@ the repository owner's sign-off say so.
 | Wi-Fi manager: scan, join, remember, reconnect (§10.9) | specified, not started |
 | Where the configuration lives (§10.15) | **decided**: all of it in JSON on SPIFFS, nothing of ours in NVS — with the cost stated (SPIFFS cannot be encrypted at rest). `spiffs_image/config.json` + `config.init.json` are flashed; nothing reads them yet |
 | The `KEY`-at-boot config restore (§10.15) | specified, not started |
-| Host-tier tests (§10.11) — `host_test/` | **running**: fifteen Unity tests over `components/ui`, one command, no board. Built by MSVC rather than by ESP-IDF's `linux` target, which does not work on a Windows host — §10.11 records why |
+| Host-tier tests (§10.11) — `host_test/` | **running**: 100 Unity tests over `ui`, `i2cbus`, `pmic`, `rtc`, `imu` and `audio`, one command, no board. The drivers are compiled **unmodified** against a fake ESP-IDF (`host_test/fakes/`), which is §10.14.3's owed fake backend arriving in a different shape than that section specified. Built by MSVC rather than by ESP-IDF's `linux` target, which does not work on a Windows host — §10.11 records why |
 | Protocol parity vectors (§10.11 tier 2) | not started |
 
 Read §10.3 before anything else: it is the one part of this that changes
@@ -1058,15 +1058,31 @@ Three tiers, and the first one is where nearly everything belongs:
    already here for §10.12.1's LVGL preview, CMake and Ninja ship with
    ESP-IDF. One command, in [`working-with-code.md`](working-with-code.md).
 
-   **What is under it today is `components/ui`** — the navigation machine of
-   §10.8.1, fifteen tests: every transition of §10.8's table, swipes that must
-   *not* navigate on the settings and Wi-Fi screens, a request preempting all
-   four screens without moving any of them, navigation vanishing entirely
-   while the card is up, the screen underneath surviving both an answer and an
-   expiry, and the pending queue refusing a fifth arrival rather than
-   absorbing it. That component's `CMakeLists.txt` has an empty `REQUIRES`,
-   which is not an omission: a navigator that included LVGL would be a
-   navigator that needs a board.
+   **What is under it today is the navigator and four of the five chips on the
+   I²C bus** — 100 tests:
+
+   | Subject | What is pinned |
+   |---|---|
+   | `components/ui` | every transition of §10.8's table; swipes that must *not* navigate on the settings and Wi-Fi screens; a request preempting all four screens without moving any of them; navigation vanishing entirely while the card is up; the screen underneath surviving both an answer and an expiry; the pending queue refusing a fifth arrival. Its `CMakeLists.txt` has an empty `REQUIRES`, which is not an omission — a navigator that included LVGL would be a navigator that needs a board |
+   | `components/i2cbus` | §10.14.3's three: contention, an acquire that **times out rather than blocks** (asserted as the tick count it asked for, which is why the fake mutex never sleeps), and a recovery that clocks SCL nine times and drops the device handles with the old bus. Plus the device table's per-device clock, its reopen-on-speed-change, and its refusal when full |
+   | `components/pmic` | the 13-bit battery field against the 14-bit ones — the width that gives a *plausible* wrong voltage when wrong; the TS-pin silencing and the ADC read-modify-write; VBUS needing both status bits; `PowerOff` refusing over USB **and writing nothing**; and `Read` being one snapshot rather than a dozen moments |
+   | `components/rtc` | BCD both ways; the seven counters in one burst; the OS flag making a *successful* read untrustworthy, and being masked out of the seconds it shares a register with; the clock stopped and restarted around a write — including after a write that failed |
+   | `components/imu` | 0x6B, the inverse of the habit; CTRL1's auto-increment, without which fourteen bytes are TEMP_L fourteen times; the range actually changing the scale; signed counts; tilt |
+   | `components/audio` | the volume mapping where 0 is silence rather than full scale; clamping; the codec coming up muted; rates refused rather than approximated — and the two lease rules of §10.14.3 that this suite **found broken here and in the IMU**: a bounded number of leases across a configuration sequence, and zero milliseconds slept while holding the bus |
+
+   The fake platform is `host_test/fakes/` — an ESP-IDF-shaped set of headers
+   with a register-file I²C device behind them. It models the shape all five
+   chips are (a write moves the cursor, a read takes from it), knows nothing
+   about any particular one, and can be told to NACK, to fail the *n*th
+   transfer, or to hand the bus to another task. §10.14.3 records why it is
+   headers rather than the interface that section originally specified.
+
+   **Every one of these was mutation-checked rather than trusted**: break the
+   rule, watch the test that covers it fail, put it back. Six so far — the
+   card-outranks-navigation rule, the lease timeout, `Recover`'s handle drop,
+   the battery field width, `PowerOff`'s refusal, and the OS flag. Two more
+   needed no mutation, because they failed on the real code the first time it
+   was run: §10.14.3 has them.
 
    Three things the screens add to it, all of them logic rather than pixels:
    **the navigation state machine** (a request preempts every screen; it cannot
@@ -1492,11 +1508,45 @@ handle, not permission to skip the lease. A lease it could not get is a dropped
 frame's read and a counter the `display` command prints, never a block — this
 section already named touch as the case where that is the right answer.
 
-**Still owed: the fake backend.** This section calls it a requirement, and it is
-not written — with no host tier yet (§10.11), an interface with one
-implementation would be an abstraction with no consumer. It arrives with the
-tests it exists for, and the transfer surface is deliberately four methods wide
-so that when it does, there are four functions to fake.
+**The fake exists now, and it is not the interface this section asked for.**
+The requirement was "an interface with two implementations: the IDF driver, and
+a host-side fake". What was built instead shadows ESP-IDF's *headers* on the
+host include path (`host_test/fakes/`), so `i2c_bus.cpp` compiles unmodified
+and the file under test is the file that ships. One fact decided it: **the
+lease's mutex is a FreeRTOS object and is not behind any bus backend**, so a
+`Backend` interface would have needed the FreeRTOS shims anyway and then added
+a vtable on every transfer on top of them. The property this section wanted —
+contention, timeout and recovery testable without hardware — is delivered
+either way; this way costs no production code.
+
+What it bought beyond the bus is the argument for it: every driver on this
+board includes exactly `i2c_bus.h`, `esp_err.h`, `esp_log.h` and FreeRTOS, so
+the same shims made the PMIC, the RTC, the IMU and the codec testable at no
+extra cost. §10.11 lists what is covered.
+
+**And it found two things, both now fixed.** Neither was visible on hardware,
+which is the point of the tier existing at all — the board worked either way.
+
+- **`Es8311` took the lease per call.** Its private helpers each did their own
+  `Acquire()`, so a two-dozen-register init was two dozen separate leases:
+  precisely the per-call locking this section argues against and quotes the
+  house firmware for. They take a `i2cbus::Lease &` now and the public methods
+  own one acquire each. Note the trap that shape carries: `Init` may not call
+  its own `SetVolume`/`Mute`, because the bus mutex is **not recursive** — the
+  `Apply…` helpers exist for exactly that, and the header says so.
+- **Both `Es8311` and `Qmi8658` slept while holding the bus** — 20 ms and 15 ms
+  respectively, waiting out a chip's reset. This section's other rule ("nothing
+  sleeps, retries a network, or draws while holding the bus") had no way to be
+  checked before: on a board it simply works, at the cost of a dropped touch
+  read and a skipped clock tick nobody would ever trace back. Both drivers now
+  cut the sequence exactly at the wait, so a lease is either side of it and
+  never across it.
+
+The fake counts milliseconds slept with the mutex held, which is what makes the
+second one an assertion rather than a code-review habit. The first is asserted
+as a lease *count* — not "exactly one", because a driver that must let go
+around a wait legitimately takes more than one, and a bound is the honest form
+of the rule.
 
 #### 10.14.4 The house precedent — what is borrowed, and what is not
 

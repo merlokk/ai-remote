@@ -285,6 +285,23 @@ tools are already on this machine for other reasons — MSVC for the LVGL
 preview below, CMake and Ninja from ESP-IDF — and `IDF_PATH` is only needed to
 find Unity's sources, with `E:\esp\v6.0.2\esp-idf` as the built-in fallback.
 
+**The drivers are compiled unmodified.** `host_test/fakes/` shadows ESP-IDF's
+headers on the include path, so `i2c_bus.cpp`, `axp2101.cpp`, `pcf85063.cpp`,
+`qmi8658.cpp` and `es8311.cpp` are the files that ship. Two consequences worth
+knowing before they bite:
+
+- **The fakes have to match ESP-IDF's struct field order.** The drivers fill
+  those configs with designated initialisers, so a field out of place is a
+  compile error here rather than a silent difference — which is the good case,
+  but it means an IDF upgrade that reorders one is a `fakes/` edit.
+- **MSVC is stricter in different places than GCC.** It needs `/std:c++20` for
+  designated initialisers that GCC accepts far earlier, and its `/W4 /WX`
+  objects to things `-Wall -Wextra` does not (a bare `0xFF` in a Unity
+  `HEX8` assertion, for one). Fix the test, not the driver.
+
+Adding a suite is a file, one `Register…Tests()` line in `test_main.cpp`, and
+the source under test in `CMakeLists.txt`.
+
 **It is not `idf.py --preview set-target linux`, and the reason is worth not
 rediscovering.** That target is listed by this install and does not work on a
 Windows host: it selects esp-clang and then tries to link a Windows PE against
