@@ -27,6 +27,9 @@ statusline-config.json
 # IDE
 .idea/
 
+# A working scratchpad in the repository root. Personal, not part of the project.
+/notes.txt
+
 # Responder / handler runtime configs — hold secrets (Ed25519 private key,
 # live token secrets in pending_tokens). Never commit.
 # (The *.example.json siblings carry no secrets and ARE committed.)
