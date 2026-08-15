@@ -23,6 +23,7 @@
 #include "esp_err.h"
 #include "i2c_bus.h"
 #include "pcf85063.h"
+#include "qmi8658.h"
 
 namespace board {
 
@@ -162,5 +163,23 @@ i2cbus::Bus &I2c();
 pmic::Axp2101 &Pmic();
 rtc::Pcf85063 &Clock();
 buttons::Buttons &Buttons();
+
+// §10.13 gives the IMU no job, and this accessor does not give it one: the
+// console reads it, nothing else may.
+//
+// The `::` is not decoration: `board::imu` above is this file's own namespace
+// of interrupt pins, and inside `namespace board` it hides the driver's `imu`
+// completely. Leaving it off is a compile error today and would be a subtler
+// one if the two ever held names in common.
+::imu::Qmi8658 &Imu();
+
+// The IMU's two interrupt lines, **observed and never acted on** (§10.13).
+// `Init` configures them as plain inputs with a pull-down, so a line the chip
+// is not driving reads a steady low instead of noise; nothing subscribes to
+// them and no ISR is installed. They are here because the only way to answer
+// "does INT2 actually pulse" is to look, and the datasheet's own revision
+// history is ambiguous about whether these pins are enabled at all.
+bool ImuInterrupt1();
+bool ImuInterrupt2();
 
 }  // namespace board

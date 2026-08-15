@@ -40,6 +40,7 @@ the repository owner's sign-off say so.
 | SPIFFS mounted + the console — `components/storage`, `components/cli` (§10.7, §10.15) | **running on hardware**: flashed over COM4, `status`, `power` and `cat` answer on the USB Serial/JTAG port |
 | The leased I²C bus — `components/i2cbus` (§10.14.3) | **written and running**: lease, timeout-not-block, per-address device table, bus recovery. The fake backend the host tests need is still owed (§10.11) |
 | The buttons — `components/buttons` (§10.1, §10.15) | **running on hardware**: debounced BOOT / KEY / PWR, polled, with a blocking `HeldFor` for §10.15's KEY-at-boot. It is what found that GPIO18 reads `PWR` **inverted**. No consumer yet — the config restore is still unwritten |
+| QMI8658C IMU — `components/imu` (§10.13) | **reading on hardware**: 0x6B, six axes, tilt and die temperature through `imu`. A diagnostic and nothing more — §10.13's rule that no gesture approves anything is unchanged |
 | PCF85063 RTC — `components/rtc` (§10.8.2) | **running on hardware**: read, written and surviving a reboot; the system clock is adopted from it at boot. No timezone and no SNTP yet |
 | AXP2101 — `components/pmic`, brought up from `board::Init()` (§10.1, §10.13) | **configured and reading on hardware**: TS pin silenced, ADC channels, VBUS limit, rail voltages, charge currents — all cross-checked against the vendor's `pmicpower` component — plus `SetAldo2`/`SetAldo3` for the audio and panel rails |
 | The language and the layering (§10.14) — C++ except where C is forced, no dynamic memory, library layer before logic, the I²C bus leased | **decided**, nothing written yet |
@@ -493,6 +494,8 @@ date set <YYYY-MM-DD> <HH:MM:SS>
 buttons                       # BOOT / KEY / PWR: debounced state, the raw pin
                               # beside it, and how long it has been that way
 buttons watch [seconds]       # print edges as they happen, with press durations
+imu                           # the QMI8658C: all six axes, tilt, die temperature
+imu watch [seconds]           # a line a second of the same six numbers
 term                          # ask the terminal again, and turn on up-arrow history
                               # if it answers ('term smart' / 'term dumb' to force)
 poweroff now                  # cut power — refused while USB is connected
@@ -525,6 +528,19 @@ to `partition 2259 of 10474481 bytes used (0%)` is the filesystem's own overhead
 made visible. The percentage is there because neither absolute answers "is this
 filling up" at a glance against an 11 MB partition — and `(0%)` is the honest
 reading of two config files in it, not a bug.
+
+**`imu` prints a magnitude, and that line is the point of the command.** Six
+plausible-looking numbers say nothing on their own: a range bit that did not
+take, or a burst read that returned one register six times, both produce a
+steady, believable table. At rest the acceleration vector must be 1 g, so
+`magnitude 0.964 g (1.000 at rest)` is the single line that says the other six
+mean something — and it is what caught the two real traps in this chip
+(§10.1's inverted addresses, and CTRL1's address auto-increment being **off** by
+default). The sign convention is the other thing worth stating once: an
+accelerometer at rest reads +1 g along the axis pointing *up*, so the axis
+gravity acts along is the negation of the dominant reading. Getting that
+backwards is invisible on a desk and exactly wrong the moment the board is
+turned over.
 
 **The up-arrow, and why it needs asking for.** `esp_console` already keeps the
 last 32 lines and adds every one typed, so history costs nothing — but the line
@@ -1043,6 +1059,70 @@ Two rules about believing what it shows:
   do not: they are on the board, which is not a reason to use them. In
   particular, **no gesture ever approves anything** — a wrist-flick verdict is
   precisely the reflex §10.8.4 is built to prevent.
+
+  **The IMU has a driver anyway, and that changes nothing above.**
+  `components/imu` and the `imu` command exist so the chip can be read from the
+  console — the same class of thing `power` and `date` are, and the only way to
+  find out that a part of the board is alive. Nothing in the approval path may
+  read it; a tilt is not a press. What reading it established, which the
+  datasheet could not: this board's QMI8658C answers at **0x6B** (SA0 pulled
+  down — and note the addresses are the inverse of the habit, 0x6A being the
+  floating one) with revision 0x7c, and two of its three axes are now tied to
+  the case — by putting the board in a known position and reading it, which is
+  the only way this is ever known:
+
+  | The board is | Gravity reads | So |
+  |---|---|---|
+  | flat on the desk, screen up | along **+Z** | +Z points out of the back; the screen faces −Z |
+  | stood on its USB connector, buttons up | along **−Y** | +Y points at the button edge, −Y at the connector |
+  | stood on its card slot, speaker up | along **+X** | +X points at the card-slot edge, −X at the speaker |
+
+  Right-handed, and every row of it was read off the board in a known position
+  rather than taken from a drawing — which is the only way the *sign* is ever
+  right. Half of the work in `imu` is that sign: an accelerometer at rest reads
+  +1 g along the axis pointing **up**, so the axis gravity acts along is the
+  negation of the dominant reading, and getting it backwards is invisible until
+  the thing is turned over.
+
+  Numbers worth writing down before someone calls them a bug: the acceleration
+  magnitude at rest reads **0.964 g** flat, **1.062 g** on the USB edge, **1.018
+  g** on the card edge and **0.980 g** on the speaker edge, against 1.000 every
+  time, and the gyroscope sits at about **−3 dps on X** while perfectly still.
+
+  **The two interrupt lines do nothing, and finding out why produced the one
+  fact the datasheet does not carry.** §6.1 says INT1 is general purpose (a
+  ~4 ms chip-ready pulse after reset, the CTRL9 handshake, wake-on-motion) and
+  INT2 means data-ready — *pulsed* at the output rate rather than held, because
+  this driver leaves `syncSmpl` clear in CTRL7. Both read a steady low on this
+  board, and not for want of anything to report: **CTRL1 bits 4 and 3 are the
+  INT1 and INT2 pin enables**, which rev 0.9 calls reserved while its own
+  revision history says it "updated the INT1/INT2 enable bit in CTRL1". Setting
+  them starts INT2 pulsing and clearing them stops it — measured, both ways.
+
+  Two things came out of that experiment. INT1 stays low **even enabled**, which
+  is correct: nothing in this firmware runs a CTRL9 command, wake-on-motion or a
+  motion engine, so there is nothing to raise it. And the pulse rate came out at
+  ~225 Hz against a configured ODR of `0101` — which is the datasheet's **6DOF**
+  column, 235 Hz, not the 250 Hz of its accelerometer-only one. Note 13 of
+  Table 26 says the rate is derived from the gyroscope when both sensors are on;
+  this is that note, confirmed on the board.
+
+  The enables stay **off**, as a `Config` flag rather than an omission: toggling
+  a pin a couple of hundred times a second for a line nobody polls is current
+  spent on nothing. The pins are configured as inputs with a pull-down so that
+  "the chip is not driving this" and "the pin is floating" do not read the same,
+  and `imu` counts edges over 20 ms rather than sampling a level — the datasheet
+  is explicit that the INT2 pulse width depends on the ODR and that a level
+  read is not to be trusted.
+
+  **X was read in both directions, and that pair separates offset from scale**
+  — which no single reading can. Card-slot down gives −1.016 g, speaker down
+  gives +0.978: half their difference is the sensitivity, **0.997 g**, and half
+  their sum is the bias, **−0.019 g**. So the ±8 g range and the LSB-per-g
+  conversion are right to 0.3 %, and every deviation above is zero offset of the
+  ordinary uncalibrated kind. Doing the same for Y and Z means turning the board
+  over twice more; nobody has needed it, because — per the rule above — nothing
+  uses the IMU.
 
 ### 10.14 How it is written — the language, and the layer that comes first
 

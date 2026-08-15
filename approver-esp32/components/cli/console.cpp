@@ -3,6 +3,7 @@
 #include <sys/time.h>
 
 #include <cinttypes>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -22,6 +23,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "linenoise/linenoise.h"
+#include "qmi8658.h"
 #include "storage.h"
 
 namespace console {
@@ -376,6 +378,176 @@ int CmdButtons(int argc, char **argv) {
     return 0;
 }
 
+// Which way the case is lying, named by the device axis gravity pulls along.
+//
+// **All three axes are tied to the case, and every one of them was measured by
+// putting the board in a known position and reading it** — never derived from a
+// drawing, which is how a sign ends up backwards. §10.13 has the table; the
+// short form is +Z out of the back (the screen faces −Z), +Y at the button
+// edge, +X at the card-slot edge.
+//
+// **The sign is the part that is easy to get backwards.** An accelerometer at
+// rest reads +1 g along the axis pointing *up* — it measures the support force,
+// not the pull — so the axis gravity acts along is the negation of the dominant
+// reading. Getting this wrong is invisible on a desk and exactly wrong when the
+// board is turned over.
+const char *GravityAxis(const imu::Sample &sample) {
+    const float x = sample.accel_g[0];
+    const float y = sample.accel_g[1];
+    const float z = sample.accel_g[2];
+    const float ax = fabsf(x), ay = fabsf(y), az = fabsf(z);
+
+    // Below this, no axis is dominant enough to name one — the device is on a
+    // corner, or moving.
+    constexpr float kDominant = 0.7f;
+    if (az >= ax && az >= ay && az >= kDominant) {
+        return z > 0 ? "along -Z (screen down)" : "along +Z (screen up)";
+    }
+    if (ay >= ax && ay >= az && ay >= kDominant) {
+        return y > 0 ? "along -Y (standing on the USB edge)"
+                     : "along +Y (standing on the button edge)";
+    }
+    if (ax >= ay && ax >= az && ax >= kDominant) {
+        return x > 0 ? "along -X (standing on the speaker edge)"
+                     : "along +X (standing on the card-slot edge)";
+    }
+    return "spread across axes — tilted or moving";
+}
+
+void PrintImuSample(const imu::Sample &sample) {
+    printf("accel      x %+8.3f  y %+8.3f  z %+8.3f  g\n", static_cast<double>(sample.accel_g[0]),
+           static_cast<double>(sample.accel_g[1]), static_cast<double>(sample.accel_g[2]));
+    printf("gyro       x %+8.2f  y %+8.2f  z %+8.2f  dps\n",
+           static_cast<double>(sample.gyro_dps[0]), static_cast<double>(sample.gyro_dps[1]),
+           static_cast<double>(sample.gyro_dps[2]));
+
+    float pitch = 0.0f;
+    float roll = 0.0f;
+    imu::Qmi8658::Tilt(sample, &pitch, &roll);
+    printf("tilt       pitch %+.1f, roll %+.1f degrees; gravity %s\n",
+           static_cast<double>(pitch), static_cast<double>(roll), GravityAxis(sample));
+
+    // At rest this is 1.000 g. It is the cheapest statement that the six
+    // numbers above mean anything — a scale factor off by a range setting, or a
+    // burst read that returned the same byte six times, both show up here.
+    printf("magnitude  %.3f g (1.000 at rest)\n",
+           static_cast<double>(imu::Qmi8658::Magnitude(sample)));
+    printf("die temp   %.1f C\n", static_cast<double>(sample.celsius));
+    printf("status     %s, %s\n", sample.accel_fresh ? "accel fresh" : "accel stale",
+           sample.gyro_fresh ? "gyro fresh" : "gyro stale");
+}
+
+// **What the two interrupt lines are doing, measured rather than reasoned
+// about.** §6.1 of the datasheet says INT1 is general purpose (a ~4 ms
+// chip-ready pulse after reset, the CTRL9 handshake, wake-on-motion) and INT2
+// means data-ready — and that with `syncSmpl = 0`, which is what this driver
+// leaves in CTRL7, INT2 is *pulsed at the output data rate* rather than held.
+// Whether the pins are enabled at all is the ambiguous part: rev 0.9 calls
+// CTRL1 bits 4:1 reserved while its own revision history mentions "the
+// INT1/INT2 enable bit in CTRL1". So this counts edges for a window instead of
+// believing either reading. Nothing acts on these lines (§10.13); this is the
+// console looking at them.
+void PrintImuInterrupts() {
+    constexpr int64_t kWindowUs = 20000;  // 20 ms: ~5 pulses at the 250 Hz ODR
+
+    bool level1 = board::ImuInterrupt1();
+    bool level2 = board::ImuInterrupt2();
+    const bool started1 = level1;
+    const bool started2 = level2;
+    unsigned edges1 = 0;
+    unsigned edges2 = 0;
+
+    const int64_t deadline = esp_timer_get_time() + kWindowUs;
+    while (esp_timer_get_time() < deadline) {
+        const bool now1 = board::ImuInterrupt1();
+        const bool now2 = board::ImuInterrupt2();
+        if (now1 != level1) {
+            ++edges1;
+            level1 = now1;
+        }
+        if (now2 != level2) {
+            ++edges2;
+            level2 = now2;
+        }
+    }
+
+    printf("int1       GPIO%d ", static_cast<int>(board::imu::kInterrupt1));
+    if (edges1 == 0) {
+        printf("steady %s (idle: nothing here uses it)\n", started1 ? "high" : "low");
+    } else {
+        printf("%u edges in 20 ms\n", edges1);
+    }
+
+    printf("int2       GPIO%d ", static_cast<int>(board::imu::kInterrupt2));
+    if (edges2 == 0) {
+        printf("steady %s (data-ready line not pulsing)\n", started2 ? "high" : "low");
+    } else {
+        // Two edges per pulse, and one pulse per sample at the ODR.
+        printf("%u edges in 20 ms — pulsing at about %u Hz (data-ready, ODR)\n", edges2,
+               edges2 * 25);
+    }
+}
+
+int CmdImu(int argc, char **argv) {
+    imu::Qmi8658 &chip = board::Imu();
+    if (!chip.Present()) {
+        printf("the QMI8658C did not answer at boot — nothing to read\n");
+        return 1;
+    }
+
+    uint32_t seconds = 0;
+    if (argc > 1) {
+        if (strcmp(argv[1], "watch") != 0 || argc > 3) {
+            printf("usage: imu              one sample: all six axes, tilt, temperature\n");
+            printf("       imu watch [s]    a line a second (default %lu s, max %lu)\n",
+                   static_cast<unsigned long>(kWatchDefaultSeconds),
+                   static_cast<unsigned long>(kWatchMaxSeconds));
+            return 1;
+        }
+        seconds = kWatchDefaultSeconds;
+        if (argc == 3) {
+            char *end = nullptr;
+            const unsigned long parsed = strtoul(argv[2], &end, 10);
+            if (end == argv[2] || *end != '\0' || parsed == 0 || parsed > kWatchMaxSeconds) {
+                printf("expected 1..%lu seconds, got '%s'\n",
+                       static_cast<unsigned long>(kWatchMaxSeconds), argv[2]);
+                return 1;
+            }
+            seconds = static_cast<uint32_t>(parsed);
+        }
+    }
+
+    imu::Sample sample = {};
+    const esp_err_t err = chip.Read(&sample);
+    if (err != ESP_OK) {
+        printf("read failed: %s\n", esp_err_to_name(err));
+        return 1;
+    }
+
+    if (seconds == 0) {
+        printf("chip       QMI8658C at 0x%02x, revision 0x%02x\n", chip.Address(),
+               chip.Revision());
+        PrintImuSample(sample);
+        PrintImuInterrupts();
+        return 0;
+    }
+
+    printf("      accel x       y       z  |   gyro x       y       z\n");
+    const int64_t deadline_us = esp_timer_get_time() + static_cast<int64_t>(seconds) * 1000000;
+    while (esp_timer_get_time() < deadline_us) {
+        if (chip.Read(&sample) != ESP_OK) {
+            printf("read failed\n");
+            return 1;
+        }
+        printf("%+8.3f%+8.3f%+8.3f  |%+8.2f%+8.2f%+8.2f\n",
+               static_cast<double>(sample.accel_g[0]), static_cast<double>(sample.accel_g[1]),
+               static_cast<double>(sample.accel_g[2]), static_cast<double>(sample.gyro_dps[0]),
+               static_cast<double>(sample.gyro_dps[1]), static_cast<double>(sample.gyro_dps[2]));
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+    return 0;
+}
+
 int CmdTerm(int argc, char **argv) {
     if (argc > 2) {
         printf("usage: term          ask the terminal again, and follow its answer\n");
@@ -489,6 +661,15 @@ const esp_console_cmd_t kCommands[] = {
         .help = "the three buttons: state now, or 'buttons watch [s]' to print edges",
         .hint = "[watch [seconds]]",
         .func = &CmdButtons,
+        .argtable = nullptr,
+        .func_w_context = nullptr,
+        .context = nullptr,
+    },
+    {
+        .command = "imu",
+        .help = "the QMI8658C: acceleration and rotation on all six axes, tilt, temperature",
+        .hint = "[watch [seconds]]",
+        .func = &CmdImu,
         .argtable = nullptr,
         .func_w_context = nullptr,
         .context = nullptr,

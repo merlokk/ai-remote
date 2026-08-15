@@ -147,6 +147,8 @@ date                          # the RTC and the system clock
 date set 2026-08-15 16:41:13  # write both
 buttons                       # BOOT / KEY / PWR: debounced state + the raw pin
 buttons watch 30              # print edges for 30 s (default 10, max 120)
+imu                           # the QMI8658C: six axes, tilt, die temperature
+imu watch 10                  # a line a second of the same numbers
 term                          # switch on up-arrow history — see below
 poweroff now                  # cut power; refused over USB, so it does nothing on the bench
 ls                            # what is in the storage partition, with sizes

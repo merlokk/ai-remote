@@ -18,6 +18,7 @@ constexpr const char *TAG = "board";
 i2cbus::Bus bus;
 pmic::Axp2101 axp;
 rtc::Pcf85063 clock_chip;
+::imu::Qmi8658 motion;
 buttons::Buttons keys;
 
 // The pin map turned into the driver's table. The order is `button::Index`'s,
@@ -103,6 +104,12 @@ rtc::Pcf85063 &Clock() { return clock_chip; }
 
 buttons::Buttons &Buttons() { return keys; }
 
+::imu::Qmi8658 &Imu() { return motion; }
+
+bool ImuInterrupt1() { return gpio_get_level(imu::kInterrupt1) != 0; }
+
+bool ImuInterrupt2() { return gpio_get_level(imu::kInterrupt2) != 0; }
+
 esp_err_t Init() {
     // The buttons before the bus, and deliberately: they depend on nothing, and
     // §10.15's restore is a `KEY` read that has to happen before the config is
@@ -137,6 +144,28 @@ esp_err_t Init() {
         ESP_LOGE(TAG, "RTC not initialised: %s", esp_err_to_name(err));
     } else {
         AdoptClock();
+    }
+
+    // The IMU last, because it is the only chip here nothing depends on
+    // (§10.13). A failure is a console readout that says so, and no more.
+    err = motion.Init(bus);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "IMU not initialised: %s", esp_err_to_name(err));
+    }
+
+    // Its two interrupt lines as inputs, and that is all: no ISR, no handler,
+    // nothing subscribed. The pull-down makes an undriven line read a steady
+    // low, so "the chip is not using this pin" and "the pin is floating" do not
+    // look the same on the console (§10.13's readout, not a feature).
+    gpio_config_t interrupt_pins = {};
+    interrupt_pins.pin_bit_mask = (1ULL << static_cast<uint32_t>(imu::kInterrupt1)) |
+                                  (1ULL << static_cast<uint32_t>(imu::kInterrupt2));
+    interrupt_pins.mode = GPIO_MODE_INPUT;
+    interrupt_pins.pull_up_en = GPIO_PULLUP_DISABLE;
+    interrupt_pins.pull_down_en = GPIO_PULLDOWN_ENABLE;
+    interrupt_pins.intr_type = GPIO_INTR_DISABLE;
+    if (gpio_config(&interrupt_pins) != ESP_OK) {
+        ESP_LOGW(TAG, "IMU interrupt pins not configured as inputs");
     }
 
     return ESP_OK;
