@@ -109,9 +109,9 @@ esp_err_t Parse(const char *json, Data *out) {
         }
     }
 
-    const cJSON *bus = cJSON_GetObjectItemCaseSensitive(root, "bus");
-    if (cJSON_IsObject(bus)) {
-        CopyString(bus, "url", out->bus.url, sizeof(out->bus.url));
+    const cJSON *nats = cJSON_GetObjectItemCaseSensitive(root, "nats");
+    if (cJSON_IsObject(nats)) {
+        CopyString(nats, "url", out->nats.url, sizeof(out->nats.url));
     }
 
     const cJSON *time = cJSON_GetObjectItemCaseSensitive(root, "time");
@@ -174,9 +174,9 @@ esp_err_t Serialise(const Data &in, size_t *length) {
         }
     }
 
-    cJSON *bus = cJSON_AddObjectToObject(root, "bus");
-    if (bus != nullptr) {
-        cJSON_AddStringToObject(bus, "url", in.bus.url);
+    cJSON *nats = cJSON_AddObjectToObject(root, "nats");
+    if (nats != nullptr) {
+        cJSON_AddStringToObject(nats, "url", in.nats.url);
     }
 
     cJSON *time = cJSON_AddObjectToObject(root, "time");
@@ -296,7 +296,7 @@ void FillDefaults(Data *out) {
     *out = Data{};
     out->wifi.active = false;
     out->wifi.network_count = 0;
-    snprintf(out->bus.url, sizeof(out->bus.url), "nats://192.168.1.5:4222");
+    snprintf(out->nats.url, sizeof(out->nats.url), "nats://192.168.1.5:4222");
     snprintf(out->time.timezone, sizeof(out->time.timezone), "UTC0");
     snprintf(out->time.sntp_server, sizeof(out->time.sntp_server), "pool.ntp.org");
     out->display.brightness = 80;

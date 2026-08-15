@@ -550,9 +550,114 @@ int CmdImu(int argc, char **argv) {
     return 0;
 }
 
+// `config set` writes a field and **nothing else** — no file, on purpose. The
+// split is the point: editing and persisting are two decisions, and a device
+// where every keystroke reaches flash is one that wears the partition out
+// experimenting. `config save` is the second half, and every path here says so
+// rather than leaving the operator to wonder.
+//
+// A number field, its bounds, and where it lives. Strings are handled below;
+// the Wi-Fi networks are not settable from here — they are a list of pairs and
+// belong to the screen of §10.8.6, not to a one-line console setter.
+int SetConfigField(const char *key, const char *value) {
+    config::Data &c = config::Get();
+
+    struct NumberField {
+        const char *name;
+        long min;
+        long max;
+        const char *unit;
+    };
+    constexpr NumberField kNumbers[] = {
+        {"volume", 0, 100, "%"},
+        {"brightness", 0, 100, "%"},
+        {"dim", 0, 65535, " s"},
+        {"blank", 0, 65535, " s"},
+    };
+
+    for (const NumberField &field : kNumbers) {
+        if (strcmp(key, field.name) != 0) {
+            continue;
+        }
+        char *end = nullptr;
+        const long parsed = strtol(value, &end, 10);
+        if (end == value || *end != '\0' || parsed < field.min || parsed > field.max) {
+            printf("%s takes %ld..%ld, got '%s'\n", field.name, field.min, field.max, value);
+            return 1;
+        }
+        if (strcmp(key, "volume") == 0) {
+            c.audio.volume_percent = static_cast<uint8_t>(parsed);
+            // Applied where it belongs, so the next `play` is audibly the
+            // number just typed. That is a live setting, not a saved one.
+            if (board::Codec().Present()) {
+                board::Codec().SetVolume(c.audio.volume_percent);
+            }
+        } else if (strcmp(key, "brightness") == 0) {
+            c.display.brightness = static_cast<uint8_t>(parsed);
+        } else if (strcmp(key, "dim") == 0) {
+            c.display.dim_seconds = static_cast<uint16_t>(parsed);
+        } else {
+            c.display.blank_seconds = static_cast<uint16_t>(parsed);
+        }
+        printf("%s = %ld%s, in memory only — 'config save' writes it to %s\n", field.name, parsed,
+               field.unit, config::kPath);
+        return 0;
+    }
+
+    struct StringField {
+        const char *name;
+        char *target;
+        size_t capacity;
+    };
+    const StringField strings[] = {
+        {"nats", c.nats.url, sizeof(c.nats.url)},
+        {"tz", c.time.timezone, sizeof(c.time.timezone)},
+        {"sntp", c.time.sntp_server, sizeof(c.time.sntp_server)},
+    };
+
+    for (const StringField &field : strings) {
+        if (strcmp(key, field.name) != 0) {
+            continue;
+        }
+        if (strlen(value) >= field.capacity) {
+            // Refused rather than truncated, the same call `config.cpp` makes
+            // when parsing: half a URL fails in a way that looks like the
+            // network.
+            printf("%s holds %u characters, '%s' is %u\n", field.name,
+                   static_cast<unsigned>(field.capacity - 1), value,
+                   static_cast<unsigned>(strlen(value)));
+            return 1;
+        }
+        snprintf(field.target, field.capacity, "%s", value);
+        printf("%s = %s, in memory only — 'config save' writes it to %s\n", field.name, value,
+               config::kPath);
+        return 0;
+    }
+
+    if (strcmp(key, "wifi") == 0) {
+        if (strcmp(value, "on") == 0 || strcmp(value, "off") == 0) {
+            c.wifi.active = strcmp(value, "on") == 0;
+            printf("wifi = %s, in memory only — 'config save' writes it to %s\n", value,
+                   config::kPath);
+            return 0;
+        }
+        printf("wifi takes on or off, got '%s'\n", value);
+        return 1;
+    }
+
+    printf("unknown field '%s'. settable: volume, brightness, dim, blank, nats, tz, sntp, wifi\n",
+           key);
+    printf("the Wi-Fi networks are a list of ssid/password pairs and are not set from here\n");
+    return 1;
+}
+
 int CmdConfig(int argc, char **argv) {
+    if (argc == 4 && strcmp(argv[1], "set") == 0) {
+        return SetConfigField(argv[2], argv[3]);
+    }
     if (argc > 2) {
         printf("usage: config [reload|save|restore]\n");
+        printf("       config set <field> <value>\n");
         return 1;
     }
 
@@ -599,7 +704,7 @@ int CmdConfig(int argc, char **argv) {
                c.wifi.networks[i].ssid,
                c.wifi.networks[i].password[0] == '\0' ? "not set" : "set");
     }
-    printf("bus        %s\n", c.bus.url);
+    printf("nats       %s\n", c.nats.url);
     printf("time       TZ=%s, sntp %s\n", c.time.timezone, c.time.sntp_server);
     printf("display    %u%%, dim after %us, blank after %us\n",
            static_cast<unsigned>(c.display.brightness),

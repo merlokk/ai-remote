@@ -518,6 +518,7 @@ imu watch [seconds]           # a line a second of the same six numbers
 play [file]                   # play a WAV from the storage partition (alert.wav)
 play volume [0..100]          # read it, or set it and save it to config.json
 config [reload|save|restore]  # the settings of §10.15, parsed into fields
+config set <field> <value>    # into memory only; `config save` is what writes
 term                          # ask the terminal again, and turn on up-arrow history
                               # if it answers ('term smart' / 'term dumb' to force)
 poweroff now                  # cut power — refused while USB is connected
@@ -1401,7 +1402,7 @@ The files, built from `spiffs_image/` and flashed with the project (§10.12):
 
 | File | Written by | Holds |
 |------|-----------|-------|
-| `config.json` | the firmware, whenever a setting changes | everything the operator can set: Wi-Fi networks **and their passwords**, the bus URL, the `TZ` string and SNTP server, display timeouts, and the speaker's volume |
+| `config.json` | the firmware, whenever a setting changes | everything the operator can set: Wi-Fi networks **and their passwords**, the NATS URL, the `TZ` string and SNTP server, display timeouts, and the speaker's volume |
 | `registration.json` | §10.7, once, on a verified `ok:true` | the registered `key_id` and the pinned handler `server_key` |
 | `config.init.json` | **nobody, ever** | the factory defaults, and the only thing a restore has to copy from |
 
@@ -1532,8 +1533,23 @@ replaced the placeholder schema the two files were carrying — an AP-mode Wi-Fi
 block and a `WEB` section, both inherited from the house firmware of §10.14.4
 and belonging to a device this one is not. What is in them now is what this
 firmware has or is specified to have: `wifi.networks[]` (§10.9, four of them),
-`bus.url` (§10.3), `time.timezone` / `time.sntp` (§10.8.2), the display
+`nats.url` (§10.3), `time.timezone` / `time.sntp` (§10.8.2), the display
 timeouts (§10.8.5) and `audio.volume`.
+
+The server's address is `nats.url` rather than `bus.url` for the reason the
+name suggests: there is one bus here and it is NATS, so an address reads as an
+address instead of as an abstraction with a single implementation.
+
+**Editing and persisting are two commands, deliberately.** `config set <field>
+<value>` writes the field and nothing else — the settable ones are `volume`,
+`brightness`, `dim`, `blank`, `nats`, `tz`, `sntp` and `wifi`, and every one of
+them says "in memory only" when it succeeds; `config save` is what reaches the
+filesystem. A console where each keystroke lands in flash is a console that
+wears the partition out during an experiment, and `config reload` is then the
+cheap undo for anything not saved. The Wi-Fi networks are the exception and are
+not settable this way: they are a list of ssid/password pairs and belong to the
+screen of §10.8.6. `volume` is also the one field applied as it is set, so the
+next `play` is audibly the number just typed.
 
 **The volume is the first setting that round-trips**, and it is worth having as
 the proof of the whole path: `play volume 45` writes the field and the file,

@@ -59,9 +59,12 @@ struct Wifi {
     uint8_t network_count;
 };
 
-struct Bus {
-    // The NATS server on the LAN (§10.3). No credentials: that bus has none,
-    // and the day it does this grows a field rather than a design.
+// Named after what it is rather than after its role: there is exactly one bus
+// here and it is NATS (§10.3), so `nats.url` reads as an address and `bus.url`
+// read as an abstraction with one implementation.
+struct Nats {
+    // The server on the LAN. No credentials: that bus has none, and the day it
+    // does this grows a field rather than a design.
     char url[kUrlSize];
 };
 
@@ -82,7 +85,7 @@ struct Audio {
 
 struct Data {
     Wifi wifi;
-    Bus bus;
+    Nats nats;
     Time time;
     Display display;
     Audio audio;

@@ -8,7 +8,7 @@
             }
         ]
     },
-    "bus": {
+    "nats": {
         "url": "nats://192.168.1.5:4222"
     },
     "time": {
@@ -21,6 +21,6 @@
         "blankSeconds": 120
     },
     "audio": {
-        "volume": 80
+        "volume": 60
     }
 }

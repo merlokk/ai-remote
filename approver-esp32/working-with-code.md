@@ -152,6 +152,9 @@ imu watch 10                  # a line a second of the same numbers
 play                          # play alert.wav; `play poweron.wav` for the other one
 play volume 45                # set it and save it to config.json (§10.15)
 config                        # the parsed settings; `config reload|save|restore`
+config set volume 35          # into memory only
+config set nats nats://192.168.1.77:4222
+config save                   # …and this is what puts it in the file
 term                          # switch on up-arrow history — see below
 poweroff now                  # cut power; refused over USB, so it does nothing on the bench
 ls                            # what is in the storage partition, with sizes
