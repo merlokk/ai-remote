@@ -103,6 +103,21 @@ idf.py -p COM7 flash monitor      # Ctrl+] to leave the monitor
   `register` cannot both hold it.
 - `idf.py size-components` is how the dependency decisions of §10.4 get costed;
   §10.12 asks for those numbers to be recorded when they are taken.
+- `idf.py partition-table` prints the layout `partitions.csv` produced — the
+  quick check that an offset edit landed where it was meant to.
+
+**`flash` writes 11 MB of SPIFFS every time, and usually you do not want that.**
+`spiffs_create_partition_image` builds an image the size of the whole `storage`
+partition (§10.15), not the size of its contents, so a full flash carries ~11 MB
+past two files. For the edit-build-run loop:
+
+```powershell
+idf.py -p COM7 app-flash monitor   # the app only — seconds
+idf.py -p COM7 flash monitor       # + bootloader, partition table, storage.bin
+```
+
+The full one is needed after a change to `partitions.csv` or to anything under
+`spiffs_image/`.
 
 Creating the tree, once — it is **generated**, not copied from another board
 (§10.12, §10.14.4):

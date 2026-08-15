@@ -1,0 +1,30 @@
+{
+    "Wifi": {
+        "Active" : false,
+        "Mode":"Client",
+        "APName":"Approver",
+        "APPassword":"88889999",
+        "APChannel":5,
+        "APHidden":false,
+        "OnTimer1":60000,
+        "ClientCredentials": [
+            {
+                "Name":"point1",
+                "Password":"passwd1_"
+            },
+            {
+                "Name":"point2",
+                "Password":"passwd2_"
+            },
+            {
+                "Name":"point3",
+                "Password":"passwd3_"
+            }
+        ]
+    },
+    "WEB": {
+        "Port":80,
+        "Login":"",
+        "Password":""
+    }
+}

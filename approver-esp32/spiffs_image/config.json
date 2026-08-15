@@ -1,0 +1,39 @@
+{
+    "Wifi": {
+        "Active" : true,
+        "Mode":"Client",
+        "APName":"Approver",
+        "APPassword":"88889999",
+        "APChannel":5,
+        "APHidden":false,
+        "OnTimer1":60000,
+        "ClientCredentials": [
+            {
+                "Name":"YOUR_SSID",
+                "Password":"CHANGEME",
+                "StaticNetworkCred":
+                {
+                    "Active": false,
+                    "IPAddress": "192.168.10.55",
+                    "Netmask": "255.255.0.0",
+                    "Gateway": "192.168.10.1",
+                    "PrimaryDNS": "8.8.8.8",
+                    "SecondaryDNS": "8.8.4.4"
+                }
+            },
+            {
+                "Name":"point2",
+                "Password":"passwd2_"
+            },
+            {
+                "Name":"point3",
+                "Password":"passwd3_"
+            }
+        ]
+    },
+    "WEB": {
+        "Port":80,
+        "Login":"admin",
+        "Password":"CHANGEME"
+    }
+}

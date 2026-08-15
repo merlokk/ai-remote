@@ -23,15 +23,18 @@ dependency allowlist) stay in that root file. Its one companion is
 this machine and how to get a shell in which `idf.py` exists — mechanics, which
 this file deliberately does not carry.
 
-## Status: nothing is built yet
+## Status: a skeleton that builds, and a plan above it
 
-This file is the **plan**, not a description of code. The folder holds no
-firmware; every table below is a decision on paper, and the ones that need the
-repository owner's sign-off say so.
+This file is still the **plan**, not a description of code. What exists is an
+ESP-IDF project that compiles and flashes and does nothing: the partition table,
+the SPIFFS image and an `app_main` that logs which slot it booted from. Every
+other table below is a decision on paper, and the ones that need the repository
+owner's sign-off say so.
 
 | Scope | State |
 |-------|-------|
 | The design below (roles, custody, dependencies, tests) | written, unimplemented |
+| The project skeleton — `CMakeLists.txt`, `main/main.cpp`, `sdkconfig.defaults`, `partitions.csv` (§10.12) | **generated and building** on ESP-IDF v6.0.2; two 2.5 MB OTA slots, ~10.9 MB `storage`, `nvs_keys` reserved |
 | The language and the layering (§10.14) — C++ except where C is forced, no dynamic memory, library layer before logic, the I²C bus leased | **decided**, nothing written yet |
 | The ESP-IDF dependency set (§10.4) — LVGL + `esp_lvgl_port`, the CO5300/CST9220 drivers, libsodium for Ed25519, `debsahu/espidf-nats` for the bus | **signed off** (root §1); exact versions pinned when the first build resolves them |
 | The LVGL host preview (§10.12.1) | installed and rendering — the only part of this folder that runs today |
@@ -39,6 +42,8 @@ repository owner's sign-off say so.
 | Firmware: NATS client, registration, signing | not started |
 | The five screens — clock, limits, request, settings, Wi-Fi (§10.8) | specified, not started |
 | Wi-Fi manager: scan, join, remember, reconnect (§10.9) | specified, not started |
+| Where the configuration lives (§10.15) | **decided**: all of it in JSON on SPIFFS, nothing of ours in NVS — with the cost stated (SPIFFS cannot be encrypted at rest). `spiffs_image/config.json` + `config.init.json` are flashed; nothing reads them yet |
+| The `KEY`-at-boot config restore (§10.15) | specified, not started |
 | Host-tier tests + protocol parity vectors (§10.11) | not started |
 
 Read §10.3 before anything else: it is the one part of this that changes
@@ -231,8 +236,9 @@ In-tree, arriving with ESP-IDF itself and needing no new supply chain:
 |-----------|-----|
 | `esp_wifi`, `lwip` | the network, BSD sockets |
 | `mbedtls` | base64 (`mbedtls_base64_*`), and TLS on the socket if §10.3 goes that way |
-| `json` (cJSON) | parsing requests, building replies |
-| `nvs_flash` | the registered `key_id`, the pinned `server_key`, Wi-Fi and bus settings |
+| `json` (cJSON) | parsing requests, building replies — and the config files of §10.15 |
+| `spiffs` | the `storage` partition: `config.json`, `config.init.json`, `registration.json` (§10.15) |
+| `nvs_flash` | **nothing of ours** (§10.15) — initialised because `esp_wifi` needs it for calibration and PHY data |
 | `esp_hmac`, `efuse` | the key custody of §10.6 |
 | `esp_console`, `esp_vfs_usb_serial_jtag` | the provisioning commands of §10.7 |
 | `esp_lcd`, `driver` (I²C/SPI), `esp_timer`, `esp_event` | display transport, buses, the clock |
@@ -410,13 +416,13 @@ must not be "simplified":
    nonce, ts}` and wait on the private inbox.
 3. **Verify the handler's Ed25519 signature over the reply before reading
    `ok`** — `registration_reply_signing_bytes`, context string included; check
-   the `nonce` echo; if a `server_key` is already pinned in NVS, require it to be
+   the `nonce` echo; if a `server_key` is already pinned, require it to be
    exactly that one. This is `responder.verify_server_reply` in C, and it is not
    optional: an unsigned `{"ok":false,"error":"expired"}` from anyone on the bus
    would otherwise send the operator hunting a problem that does not exist.
 4. Only on a verified `ok:true`: write `key_id` and the pinned `server_key` to
-   NVS. A rejection changes nothing — the same ordering all three existing
-   responders use.
+   `registration.json` (§10.15). A rejection changes nothing — the same ordering
+   all three existing responders use.
 
 **Trust on first use, and the screen is what closes it.** The first registration
 has nothing to compare the handler's key against, so show it: the device displays
@@ -507,8 +513,8 @@ registered, and a gear.
   unset one, the same call §10.7 makes about `ts`.
 - **This is where the repo finally has to know about timezones.** §9.1 avoided
   them by printing countdowns; a clock cannot. A POSIX `TZ` string in settings
-  (`MSK-3`, `CET-1CEST,M3.5.0,M10.5.0/3`), `setenv` + `tzset`, stored in NVS.
-  Not a timezone database, not a lookup by IP.
+  (`MSK-3`, `CET-1CEST,M3.5.0,M10.5.0/3`), `setenv` + `tzset`, stored in
+  `config.json` (§10.15). Not a timezone database, not a lookup by IP.
 - **A clock that cannot approve says so on the clock.** Unregistered, or the
   boot self-test (§10.6) failed, or no bus — it is on this screen, in words, not
   buried in settings. The device's whole value is that a glance at the desk tells
@@ -594,12 +600,15 @@ One list, no cleverness:
 | Display | brightness, idle-dim and blank timeouts |
 | Time | the `TZ` string and the SNTP server |
 | About | firmware version, chip and MAC, uptime, and the heap **low-water mark** rather than the current free heap (§10.14.1 — the minimum ever seen is the number that says whether the device is safe) |
-| Factory reset | wipes NVS: Wi-Fi, bus, registration. Two-step, and it says exactly what will be lost |
+| Restore config | puts `config.init.json` back over `config.json` (§10.15) — the same thing holding `KEY` at boot does, with a screen to confirm on. Wi-Fi, bus and display go back to defaults; the registration survives |
+| Factory reset | that, **and** deletes `registration.json`. Two-step, and it says exactly what will be lost |
 
-`forget` and `Factory reset` are the only destructive entries, they are the only
-two that confirm, and they say what breaks: after either, `clients[key_id]` on
-the handler still names a key this device can no longer prove it has, and a new
-token is needed (§6).
+`forget`, `Restore config` and `Factory reset` are the only destructive entries
+and the only three that confirm. Two of them cost a token and say so: after
+`forget` or `Factory reset`, `clients[key_id]` on the handler still names a key
+this device can no longer prove it has, and a new one is needed (§6).
+`Restore config` is the cheap one, and the difference between them is the whole
+reason §10.15 keeps the registration in a separate file.
 
 #### 10.8.6 Wi-Fi settings — the screen
 
@@ -611,9 +620,10 @@ takes a hidden SSID by hand.
 
 Rules the screen has to keep because of what it is:
 
-- **The password is a secret from the moment it is typed.** It goes to NVS
-  encrypted (§10.9), it is never logged, and it never appears in a console dump
-  or a crash trace.
+- **The password is a secret from the moment it is typed.** It goes into
+  `config.json` (§10.15) — which is *not* encrypted, and §10.15 owns that
+  trade — so the handling rules are the part that has to hold: never logged,
+  never in a console dump, never in a crash trace.
 - **Scanning while connected costs the connection a beat** — the radio has to
   leave the channel. Do not scan on a timer, only when this screen is open; and
   a request arriving mid-scan still preempts it (§10.8.1).
@@ -647,13 +657,13 @@ NO_CREDENTIALS ──join──► CONNECTING ──got IP──► ONLINE ─�
 - Only `ONLINE` releases the bus task. The NATS client waits on "got IP", and on
   the way down it tears the socket rather than letting it hang on a dead route.
 
-**Storage.** Credentials live in **our** NVS namespace, in encrypted NVS
-(`nvs_keys` in the partition table, §10.12), not in the driver's own store: set
-`esp_wifi_set_storage(WIFI_STORAGE_RAM)` so there is exactly one record of what
-this device knows, in one place, under one encryption decision. Remember a small
-number of networks (four is plenty), try last-successful first — a desk device
-that moves between a home and an office is the entire use case; roaming between
-dozens is not.
+**Storage.** Credentials live in `config.json` (§10.15), not in the driver's own
+store: set `esp_wifi_set_storage(WIFI_STORAGE_RAM)` so there is exactly one
+record of what this device knows, in one place, and one restore that clears it.
+§10.15 states what that costs — SPIFFS cannot be encrypted, so the WPA key is
+readable from a flash dump. Remember a small number of networks (four is
+plenty), try last-successful first — a desk device that moves between a home and
+an office is the entire use case; roaming between dozens is not.
 
 **What the radio can and cannot do**, because these are support questions, not
 bugs:
@@ -713,7 +723,8 @@ Three tiers, and the first one is where nearly everything belongs:
    logic runs under Unity on the development machine: the signing-bytes
    assembly, the reply builder, payload validation (not JSON, fields missing,
    values out of range, a `MSG` with no reply-to), the base64 helpers, the
-   `int64` `ts` round-trip, and the NVS-shaped config with every field missing.
+   `int64` `ts` round-trip, and the config files of §10.15 with every field
+   missing.
    The frame-level parser is no longer ours — it moved into
    `debsahu/espidf-nats` with §10.4's decision, so firing truncated and
    oversized frames at it is a device-tier job (§10.5). The **I²C lease** of
@@ -782,10 +793,12 @@ Notes that will otherwise be rediscovered the hard way:
   `esp_console` serves the §10.7 commands on — the monitor and a manual `register`
   cannot both hold it.
 - **16 MB of flash, and a partition table that says so.** The default table
-  assumes 2 MB or 4 MB; LVGL plus Wi-Fi plus TLS will not fit it. Plan for a
-  custom `partitions.csv` with `nvs`, `nvs_keys` (encrypted NVS), and two OTA
-  slots if OTA is ever wanted — deciding that after the first `nvs` layout ships
-  means re-registering the device.
+  assumes 2 MB or 4 MB; LVGL plus Wi-Fi plus TLS will not fit it. `partitions.csv`
+  is the custom one and it is **written**: `nvs`, `nvs_keys` (reserved and empty,
+  §10.15), `otadata`, two 2.5 MB OTA slots and ~10.9 MB of `storage`, which
+  carries the SPIFFS image built from `spiffs_image/`. Changing an offset after a
+  device is registered means reflashing it, which is why the table was settled
+  before any of it was needed.
 - **Flash encryption and Secure Boot are what make §10.6's fallback meaningful**
   and they are one-way operations on real hardware. Read Espressif's docs
   before burning anything, and keep a development board that has not been
@@ -963,8 +976,9 @@ Two layers, built in this order, and the order is the design:
 
 1. **The library layer** — the board and the outside world as small,
    self-contained services: the I²C bus (below) and the chips on it (touch, RTC,
-   PMIC, codec), the display transport, NVS-backed settings, Wi-Fi (§10.9), the
-   NATS link (§10.5), crypto (§10.6). Each one is usable, and testable, without
+   PMIC, codec), the display transport, the JSON-backed settings of §10.15,
+   Wi-Fi (§10.9), the NATS link (§10.5), crypto (§10.6). Each one is usable, and
+   testable, without
    the rest.
 2. **The logic** — the §7 flow, the screens of §10.8, registration (§10.7).
 
@@ -1070,3 +1084,132 @@ pattern, not a file to copy.
 What that produces is four files; adapting another chip's tree, with its
 `sdkconfig` and its IDF 4.x assumptions, is more work than typing them and ends
 somewhere less honest.
+
+### 10.15 The configuration lives in JSON, and one button puts it back
+
+**Everything this device is configured with is a JSON file in the `storage`
+partition. NVS holds nothing of ours.** That is the decision; the rest of this
+section is what it buys, what it costs, and the button that undoes it.
+
+The files, built from `spiffs_image/` and flashed with the project (§10.12):
+
+| File | Written by | Holds |
+|------|-----------|-------|
+| `config.json` | the firmware, whenever a setting changes | everything the operator can set: Wi-Fi networks **and their passwords**, the bus URL, the `TZ` string and SNTP server, display timeouts |
+| `registration.json` | §10.7, once, on a verified `ok:true` | the registered `key_id` and the pinned handler `server_key` |
+| `config.init.json` | **nobody, ever** | the factory defaults, and the only thing a restore has to copy from |
+
+This is the house pattern of §10.14.4 — their `config.json` /
+`defaultconfig.json` — with the defaults renamed to say what they are. Shipping
+defaults *as a file* rather than as a `constexpr` struct is what makes a restore
+one copy instead of a serializer that has to stay in step with the parser, and
+it means the defaults can be read off a flashed device without a build.
+
+**Why two written files rather than one.** The split is by *lifetime*, not by
+secrecy: `config.json` is what the button restores, and `registration.json` is
+what it must not touch. A device that comes back on default settings is a
+minute's work; a device that comes back unregistered needs a new token minted on
+the host and typed over USB (§6, §10.7). Same format, same filesystem, same
+parser — one file is simply out of the blast radius.
+
+#### What this gives up, stated plainly
+
+The earlier draft of this section put Wi-Fi passwords and the pinned key in
+**encrypted NVS**. That is now gone, and the honest accounting is:
+
+- **SPIFFS cannot be encrypted at rest — at all.** ESP-IDF's flash encryption is
+  implemented for FATFS and LittleFS; NVS has its own scheme; SPIFFS has
+  neither. So the WPA password in `config.json` is readable by anyone who can
+  run `esptool read_flash` against the `storage` partition. There is no
+  Kconfig switch that fixes this.
+- **What was given up is smaller than it sounds.** NVS is only encrypted when
+  flash encryption is enabled and `nvs_keys` is populated — a one-way eFuse
+  operation nobody has performed here (§10.12). Until that day, NVS and SPIFFS
+  are equally readable, so the plan was promising a property it did not have.
+  Trading a future property for one file, one parser and one restore is a
+  defensible trade; pretending nothing was traded is not.
+- **If encryption at rest is ever required, the filesystem changes, not the
+  format.** `storage` becomes `fat` in `partitions.csv` with the `encrypted`
+  flag, `spiffs_create_partition_image` becomes `fatfs_create_partition_image`,
+  and the JSON is untouched. Doing it now would cost nothing; doing it after the
+  first `config.json` ships costs a reflash of the partition. Worth deciding at
+  the same time as the §10.12 encryption question rather than separately.
+
+**What is still in no file, and this is the one that matters.** The device's
+Ed25519 *private key* is derived per boot from an eFuse key through the HMAC
+peripheral and exists only in RAM (§10.6). Nothing in this section changes that.
+So a dumped flash yields the network password and the device's public identity —
+it does **not** yield the ability to sign a decision. The property §10.10 and §7
+depend on is intact; what is exposed is the same class of thing that a stolen
+device exposes anyway, and §10.13 already accepted that boundary when it decided
+there is no authentication on the device.
+
+#### The `nvs` partitions, now that nothing of ours is in them
+
+`nvs` stays in `partitions.csv` and is still initialised at boot: `esp_wifi`
+requires `nvs_flash_init` for its own calibration and PHY data. It simply holds
+no namespace of ours. `nvs_keys` stays **reserved and empty** — 4 KB, and
+deleting it would shift every offset after it, which is a reflash of a device
+that has already been registered. The one thing that could still put a namespace
+there is §10.6's *fallback* key custody — the branch where the signing seed is
+generated once and stored rather than derived from an eFuse — and that branch
+would be the reason to populate `nvs_keys` rather than leave it empty. It is
+there for that, and for the FATFS/NVS encryption
+decision above, should it ever be taken.
+
+#### The button
+
+**`KEY`** — §10.1's free one, and the only one that is free.
+
+- **Sampled early in boot, before the config is read.** The failure this button
+  exists for is a config that stops the device booting; a restore that runs
+  after the parse cannot rescue that. A GPIO read with no dependencies: before
+  the filesystem, before the panel, before Wi-Fi.
+- **Held ≥ 5 s → `config.init.json` is copied over `config.json`**, and boot
+  continues on the defaults. Released early, nothing happens — there is no
+  feedback that early in boot to make a partial press meaningful, which is the
+  argument for a long threshold rather than a short one.
+- **`registration.json` is not touched**, so the device comes back on default
+  settings and still registered. Dropping the registration is `forget`, and
+  wiping both is `Factory reset` (§10.8.5) — two screen entries, both two-step,
+  because both cost a token.
+- **Say it happened.** The panel is not up that early, so: one log line at the
+  time, and the screen states `config restored` as soon as there is a screen. A
+  restore the operator cannot confirm is a restore they will do twice.
+- **The copy is not allowed to half-happen.** Write `config.json.new`, then
+  rename over `config.json`. A power cut mid-restore that leaves a truncated
+  config would break exactly the recovery path being used. Every runtime write
+  of `config.json` goes the same way, for the same reason.
+- **The same restore is reachable from Settings** (§10.8.5), where there is a
+  screen to confirm on and the blind five seconds are not needed.
+
+#### Reading and writing it
+
+- A `config.json` that is missing, oversized or unparseable is **restored
+  automatically** from `config.init.json`, one log line, boot continues. Same
+  call §10.10 makes about the bus: bad input is recovered from, never a reboot
+  loop. A missing `config.init.json` is a *build* error — it ships in the
+  image — not a runtime state to design around.
+- A missing `registration.json` is not an error at all: it is the unregistered
+  state, which §10.8.2 already requires the clock to announce.
+- Parsing is cJSON into a fixed struct (§10.14.1: no heap in our code, one-shot
+  setup paths may use what the libraries allocate). Cap the file size before
+  parsing. **Unknown fields are ignored and lost on the next write** — a config
+  written by a newer firmware does not survive a downgrade, which is the honest
+  behaviour of a fixed struct and worth knowing before it surprises someone.
+- **A password is a secret from the moment it is typed**, and the file being
+  readable does not relax that: never logged, never in a console dump, never in
+  a crash trace, and the §10.8.6 show/hide toggle stays a deliberate operator
+  action.
+- **What is committed carries placeholders.** `spiffs_image/config.json` is in
+  git and now *is* the real store, which makes the temptation to leave a working
+  WPA key in it much stronger than before. `CHANGEME` is what belongs there; a
+  real key committed once is a real key in the history.
+
+#### Tests (§10.11, host tier — none of this needs a board)
+
+Defaults parse; every field missing; a truncated file and a non-JSON file both
+ending in a restore; a restore leaving `registration.json` untouched; `forget`
+removing it; and `config.json` and `config.init.json` having the same shape —
+the last one is the test that catches the two drifting apart.
+
