@@ -461,6 +461,7 @@ status                        # firmware / IDF / chip versions, the running OTA
                               # slot, uptime, heap free and low-water, storage use
 power                         # the AXP2101: charge state, VBUS, battery mV and %,
                               # the system rail, die temperature (§10.13's one job)
+ls                            # what is in the storage partition, with sizes
 cat <path>                    # print a file from the storage partition (§10.15)
 ```
 
@@ -478,8 +479,14 @@ dependency.
 
 `cat` reads through a **fixed 4 KB buffer** (§10.14.1 — nothing here allocates),
 and a file too big for it is refused *with its size* rather than truncated into
-something that reads as complete. That is the same rule §10.15 states for
-parsing the config, arrived at from the other direction.
+something that reads as complete. `ls` lists into a fixed sixteen-entry array
+and says "and more" when it fills, for the same reason: a bounded listing that
+looks complete is worse than a short one that admits it. That is the rule
+§10.15 states for parsing the config, arrived at from the other direction.
+
+`ls` also has nothing to recurse into — **SPIFFS is flat**, so its output is the
+whole filesystem rather than one level of it, and `2 file(s), 1626 bytes` next
+to `partition 2259 bytes used` is the filesystem's own overhead made visible.
 
 The exchange itself is §6 verbatim, and the order of operations is the part that
 must not be "simplified":

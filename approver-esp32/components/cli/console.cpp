@@ -74,6 +74,40 @@ int CmdStatus(int, char **) {
     return 0;
 }
 
+// Sixteen names is far more than §10.15 puts in this partition; over that, the
+// listing says so rather than looking complete.
+constexpr size_t kMaxListed = 16;
+storage::Entry entries[kMaxListed];
+
+int CmdLs(int, char **) {
+    size_t count = 0;
+    const esp_err_t err = storage::List(entries, kMaxListed, &count);
+    if (err != ESP_OK && err != ESP_ERR_INVALID_SIZE) {
+        printf("list failed: %s\n", esp_err_to_name(err));
+        return 1;
+    }
+
+    size_t listed_bytes = 0;
+    for (size_t i = 0; i < count; ++i) {
+        printf("%8u  %s\n", static_cast<unsigned>(entries[i].size), entries[i].name);
+        listed_bytes += entries[i].size;
+    }
+
+    if (err == ESP_ERR_INVALID_SIZE) {
+        printf("... and more; this console lists at most %u\n",
+               static_cast<unsigned>(kMaxListed));
+    }
+
+    size_t total = 0;
+    size_t used = 0;
+    if (storage::Info(&total, &used) == ESP_OK) {
+        printf("%u file(s), %u bytes; partition %u of %u bytes used\n",
+               static_cast<unsigned>(count), static_cast<unsigned>(listed_bytes),
+               static_cast<unsigned>(used), static_cast<unsigned>(total));
+    }
+    return 0;
+}
+
 int CmdCat(int argc, char **argv) {
     if (argc != 2) {
         printf("usage: cat <path>   e.g. cat config.json\n");
@@ -165,6 +199,15 @@ const esp_console_cmd_t kCommands[] = {
         .help = "charge state, VBUS, battery and system voltage, die temperature",
         .hint = nullptr,
         .func = &CmdPower,
+        .argtable = nullptr,
+        .func_w_context = nullptr,
+        .context = nullptr,
+    },
+    {
+        .command = "ls",
+        .help = "list the storage partition (SPIFFS is flat — this is all of it)",
+        .hint = nullptr,
+        .func = &CmdLs,
         .argtable = nullptr,
         .func_w_context = nullptr,
         .context = nullptr,

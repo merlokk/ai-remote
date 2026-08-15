@@ -21,6 +21,10 @@ inline constexpr size_t kMaxOpenFiles = 4;
 // Longest absolute path this layer will build, base path included.
 inline constexpr size_t kMaxPathLength = 64;
 
+// SPIFFS stores names of at most `--obj-name-len` bytes, and the image is
+// generated with 32 (see `spiffs_create_partition_image` in main/CMakeLists.txt).
+inline constexpr size_t kMaxNameLength = 32;
+
 // Mounts the partition. **Does not format on failure**, on purpose: formatting
 // would throw away `config.init.json`, which is the one file §10.15's recovery
 // path needs, and it would do it silently. A mount failure is reported and left
@@ -42,5 +46,22 @@ esp_err_t Info(size_t *total_bytes, size_t *used_bytes);
 // `*length` is the byte count, not counting the terminator. `length` may be
 // null. Nothing here allocates (§10.14.1): the buffer is the caller's.
 esp_err_t ReadFile(const char *path, char *out, size_t capacity, size_t *length);
+
+struct Entry {
+    char name[kMaxNameLength];
+    size_t size;
+};
+
+// Fills `out` with what is in the partition and writes how many entries were
+// written to `*count`. The array is the caller's — nothing here allocates
+// (§10.14.1).
+//
+// Returns `ESP_ERR_INVALID_SIZE` when there were more files than `capacity`,
+// with the array full and `*count == capacity`: over capacity is a state the
+// caller is told about, not one that silently looks like the whole listing.
+//
+// **There are no directories.** SPIFFS is flat, so this is the whole
+// filesystem, not one level of it.
+esp_err_t List(Entry *out, size_t capacity, size_t *count);
 
 }  // namespace storage

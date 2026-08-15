@@ -143,6 +143,7 @@ Two commands answer today (§10.7 has the rest, and why they are not here yet):
 ```
 status                        # firmware / IDF / chip versions, OTA slot, uptime, heap, storage
 power                         # the AXP2101: charge state, VBUS, battery, system rail, die temp
+ls                            # what is in the storage partition, with sizes
 cat <path>                    # print a file from the storage partition, e.g. cat config.json
 help                          # esp_console's own, listing the above
 ```

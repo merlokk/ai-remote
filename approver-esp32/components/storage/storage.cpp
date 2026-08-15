@@ -1,5 +1,8 @@
 #include "storage.h"
 
+#include <dirent.h>
+#include <sys/stat.h>
+
 #include <cstdio>
 #include <cstring>
 
@@ -107,6 +110,56 @@ esp_err_t ReadFile(const char *path, char *out, size_t capacity, size_t *length)
         *length = read;
     }
     return (read == static_cast<size_t>(size)) ? ESP_OK : ESP_FAIL;
+}
+
+esp_err_t List(Entry *out, size_t capacity, size_t *count) {
+    if (out == nullptr || capacity == 0 || count == nullptr) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    *count = 0;
+    if (!mounted) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    DIR *dir = opendir(kBasePath);
+    if (dir == nullptr) {
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    bool overflowed = false;
+    for (const dirent *entry = readdir(dir); entry != nullptr; entry = readdir(dir)) {
+        if (*count >= capacity) {
+            // Keep counting nothing — the caller is told it did not see
+            // everything, which is the honest half of a fixed-size listing.
+            overflowed = true;
+            break;
+        }
+
+        Entry &slot = out[*count];
+        // `d_name` is 256 bytes and our slot is 32, so the bound is explicit:
+        // snprintf would truncate correctly but the compiler is right to call
+        // that a silent shortening, and -Werror agrees.
+        const size_t name_length = strnlen(entry->d_name, sizeof(slot.name) - 1);
+        memcpy(slot.name, entry->d_name, name_length);
+        slot.name[name_length] = '\0';
+
+        // `dirent` carries no size on this filesystem, so ask separately. A
+        // file that vanishes between the two is listed with size 0 rather than
+        // dropped.
+        slot.size = 0;
+        char full[kMaxPathLength];
+        if (BuildPath(slot.name, full, sizeof(full))) {
+            struct stat info = {};
+            if (stat(full, &info) == 0) {
+                slot.size = static_cast<size_t>(info.st_size);
+            }
+        }
+
+        ++(*count);
+    }
+
+    closedir(dir);
+    return overflowed ? ESP_ERR_INVALID_SIZE : ESP_OK;
 }
 
 }  // namespace storage
