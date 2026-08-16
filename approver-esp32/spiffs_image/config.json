@@ -17,7 +17,7 @@
         "sntp": "pool.ntp.org"
     },
     "display": {
-        "brightness": 80,
+        "brightness": 70,
         "dimSeconds": 30,
         "blankSeconds": 120
     },
