@@ -95,6 +95,42 @@ esp_err_t Parse(const char *json, Data *out) {
     const cJSON *wifi = cJSON_GetObjectItemCaseSensitive(root, "wifi");
     if (cJSON_IsObject(wifi)) {
         CopyBool(wifi, "active", &out->wifi.active);
+
+        // **A mode that is neither is left at the default rather than
+        // guessed.** The two spellings are the whole vocabulary, and reading
+        // "AP " or "station" as one of them would be the same class of error
+        // as libc reading a misspelled zone as UTC (§10.8.2).
+        const cJSON *mode = cJSON_GetObjectItemCaseSensitive(wifi, "mode");
+        if (cJSON_IsString(mode) && mode->valuestring != nullptr) {
+            if (strcmp(mode->valuestring, "ap") == 0) {
+                out->wifi.mode = WifiMode::kAp;
+            } else if (strcmp(mode->valuestring, "client") == 0) {
+                out->wifi.mode = WifiMode::kClient;
+            } else {
+                ESP_LOGW(TAG, "wifi.mode '%s' is neither 'client' nor 'ap'; left at '%s'",
+                         mode->valuestring,
+                         out->wifi.mode == WifiMode::kAp ? "ap" : "client");
+            }
+        }
+
+        long value = out->wifi.rounds_before_ap;
+        CopyNumber(wifi, "rounds", 0, 255, &value);
+        out->wifi.rounds_before_ap = static_cast<uint8_t>(value);
+
+        value = out->wifi.ap_window_seconds;
+        CopyNumber(wifi, "apWindowSeconds", 0, 65535, &value);
+        out->wifi.ap_window_seconds = static_cast<uint16_t>(value);
+
+        const cJSON *ap = cJSON_GetObjectItemCaseSensitive(wifi, "ap");
+        if (cJSON_IsObject(ap)) {
+            CopyString(ap, "ssid", out->wifi.ap_ssid, sizeof(out->wifi.ap_ssid));
+            CopyString(ap, "password", out->wifi.ap_password, sizeof(out->wifi.ap_password));
+            // 2.4 GHz, and the ESP32-C6 has no other band (§10.9).
+            value = out->wifi.ap_channel;
+            CopyNumber(ap, "channel", 1, 13, &value);
+            out->wifi.ap_channel = static_cast<uint8_t>(value);
+        }
+
         const cJSON *networks = cJSON_GetObjectItemCaseSensitive(wifi, "networks");
         if (cJSON_IsArray(networks)) {
             out->wifi.network_count = 0;
@@ -183,6 +219,15 @@ esp_err_t Serialise(const Data &in, size_t *length) {
     cJSON *networks = nullptr;
     if (wifi != nullptr) {
         cJSON_AddBoolToObject(wifi, "active", in.wifi.active);
+        cJSON_AddStringToObject(wifi, "mode", in.wifi.mode == WifiMode::kAp ? "ap" : "client");
+        cJSON_AddNumberToObject(wifi, "rounds", in.wifi.rounds_before_ap);
+        cJSON_AddNumberToObject(wifi, "apWindowSeconds", in.wifi.ap_window_seconds);
+        cJSON *ap = cJSON_AddObjectToObject(wifi, "ap");
+        if (ap != nullptr) {
+            cJSON_AddStringToObject(ap, "ssid", in.wifi.ap_ssid);
+            cJSON_AddStringToObject(ap, "password", in.wifi.ap_password);
+            cJSON_AddNumberToObject(ap, "channel", in.wifi.ap_channel);
+        }
         networks = cJSON_AddArrayToObject(wifi, "networks");
     }
     if (networks != nullptr) {
@@ -319,7 +364,13 @@ void FillDefaults(Data *out) {
     }
     *out = Data{};
     out->wifi.active = false;
+    out->wifi.mode = WifiMode::kClient;
     out->wifi.network_count = 0;
+    out->wifi.rounds_before_ap = 2;
+    out->wifi.ap_window_seconds = 120;
+    snprintf(out->wifi.ap_ssid, sizeof(out->wifi.ap_ssid), "approver-esp32");
+    out->wifi.ap_password[0] = '\0';
+    out->wifi.ap_channel = 6;
     snprintf(out->nats.url, sizeof(out->nats.url), "nats://192.168.1.5:4222");
     snprintf(out->time.zone, sizeof(out->time.zone), "UTC");
     snprintf(out->time.posix, sizeof(out->time.posix), "UTC0");

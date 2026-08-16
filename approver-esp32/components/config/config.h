@@ -53,10 +53,40 @@ struct Network {
     char password[kPasswordSize];
 };
 
+// What the operator asked the radio to be (§10.9). Not what it is doing —
+// that is `wifimgr`'s, and the difference between the two is the whole shape
+// of that section. `active` false is "off" whatever this says, so there is one
+// switch that means radio-down rather than two fields that can disagree.
+enum class WifiMode : uint8_t {
+    kClient = 0,  // join one of `networks`, trying each in turn
+    kAp,          // be an access point, permanently
+};
+
 struct Wifi {
     bool active;
+    WifiMode mode;
     Network networks[kMaxNetworks];
     uint8_t network_count;
+
+    // How many full passes over `networks` before the device gives up being a
+    // client and puts its own access point up instead (§10.9). 0 is read as 1.
+    uint8_t rounds_before_ap;
+
+    // How long that fallback access point stays up with nobody on it, before
+    // going back to trying the list. Held open while a station is attached —
+    // that station is the reason it exists.
+    uint16_t ap_window_seconds;
+
+    // The access point this device raises: for `mode: "ap"` and for the
+    // fallback above, which are the same AP for different reasons.
+    //
+    // **An empty password is an open network**, which is what ships, and the
+    // trade is stated in `config.init.json`. A password shorter than the eight
+    // characters WPA2 requires is refused by the driver rather than silently
+    // turned into an open one.
+    char ap_ssid[kSsidSize];
+    char ap_password[kPasswordSize];
+    uint8_t ap_channel;
 };
 
 // Named after what it is rather than after its role: there is exactly one bus

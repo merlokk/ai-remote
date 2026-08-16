@@ -1,6 +1,14 @@
 {
     "wifi": {
         "active": false,
+        "mode": "client",
+        "rounds": 2,
+        "apWindowSeconds": 120,
+        "ap": {
+            "ssid": "approver-esp32",
+            "password": "",
+            "channel": 6
+        },
         "networks": []
     },
     "nats": {

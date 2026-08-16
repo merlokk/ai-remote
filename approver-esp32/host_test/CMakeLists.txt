@@ -75,6 +75,7 @@ add_executable(host_test
     test_buttons.cpp
     test_timezone.cpp
     test_speaker.cpp
+    test_wifi_policy.cpp
 
     # The fake ESP-IDF the drivers are compiled against. `fakes/` shadows the
     # framework's headers on the include path below, so the sources listed
@@ -94,6 +95,10 @@ add_executable(host_test
     ../components/config/config.cpp
     ../components/timezone/timezone.cpp
     ../components/buttons/buttons.cpp
+    # The policy half of the Wi-Fi pair (§10.9). Like the navigator it includes
+    # nothing, so it needs no fake — the driver next to it is all ESP-IDF and
+    # belongs to the device tier.
+    ../components/wifimgr/wifi_policy.cpp
 
     # cJSON, the real one, out of the managed component `idf.py build` fetched.
     "${CJSON_DIR}/cJSON.c"
@@ -114,6 +119,7 @@ target_include_directories(host_test PRIVATE
     ../components/timezone
     ../components/buttons
     ../components/storage
+    ../components/wifimgr
     "${CJSON_DIR}"
     "${UNITY_DIR}"
 )

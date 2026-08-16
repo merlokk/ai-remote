@@ -29,6 +29,8 @@
 #include "speaker.h"
 #include "storage.h"
 #include "timezone.h"
+#include "wifi_manager.h"
+#include "wifi_radio.h"
 
 namespace console {
 
@@ -800,12 +802,22 @@ int CmdConfig(int argc, char **argv) {
         if (board::Codec().Present()) {
             board::Codec().SetVolume(config::Get().audio.volume_percent);
         }
+        // And so is the Wi-Fi manager, which is holding a network list that
+        // may have just been replaced — an attempt against index 2 of the old
+        // list is an attempt against a network that is no longer there.
+        wifimgr::Apply();
     }
 
     const config::Data &c = config::Get();
     printf("source     %s%s\n", config::kPath, config::Loaded() ? "" : " (built-in defaults)");
-    printf("wifi       %s, %u network(s)\n", c.wifi.active ? "on" : "off",
+    printf("wifi       %s, mode %s, %u network(s)\n", c.wifi.active ? "on" : "off",
+           c.wifi.mode == config::WifiMode::kAp ? "ap" : "client",
            static_cast<unsigned>(c.wifi.network_count));
+    printf("           fallback ap '%s' (%s) on ch %u after %u round(s), window %u s\n",
+           c.wifi.ap_ssid, c.wifi.ap_password[0] == '\0' ? "open" : "password set",
+           static_cast<unsigned>(c.wifi.ap_channel),
+           static_cast<unsigned>(c.wifi.rounds_before_ap),
+           static_cast<unsigned>(c.wifi.ap_window_seconds));
     for (uint8_t i = 0; i < c.wifi.network_count; ++i) {
         // **The password is never printed** (§10.8.6, §10.15): it is a secret
         // from the moment it is typed, and a console dump is exactly the place
@@ -910,6 +922,278 @@ int CmdPlay(int argc, char **argv) {
     }
     printf("played at volume %u%%\n", static_cast<unsigned>(codec.Volume()));
     return 0;
+}
+
+// --- Wi-Fi (§10.9) ---------------------------------------------------------
+//
+// The console half of §10.9, and it is deliberately the same shape as
+// `config set`: everything here changes what the device is doing **now** and
+// says "in memory only", and `config save` is what makes it survive a reboot.
+// A console where each keystroke lands in flash is a console that wears the
+// partition out during an experiment (§10.15), and joining networks is exactly
+// the kind of experiment this is for.
+//
+// The one thing it never prints is a password. §10.15's rule — a secret from
+// the moment it is typed — and a console dump is the place it would leak.
+
+// Where a scan lands. Static for the same reason everything else here is:
+// nothing allocates (§10.14.1), and the REPL's stack is not the place for
+// half a kilobyte of results.
+wifi::ScanResult scan_results[wifi::kMaxScanResults];
+
+void PrintWifiStatus() {
+    const wifimgr::Snapshot snapshot = wifimgr::Get();
+    const config::Wifi &settings = config::Get().wifi;
+
+    // **Two answers, side by side, because they are two different facts.**
+    // What was asked for, and what is actually happening on the way there —
+    // §10.9's whole shape is the difference between them, and a readout that
+    // showed one would make a device that is trying look like a device that
+    // is broken.
+    printf("wanted     %s  (config: wifi %s, mode %s)\n", wifimgr::Name(snapshot.desired),
+           settings.active ? "on" : "off",
+           settings.mode == config::WifiMode::kAp ? "ap" : "client");
+
+    // **The network clause belongs to the states that are about a network**,
+    // and to no others. Printed unconditionally it read `temporary ap
+    // 'YOUR_SSID' … round 3 of 2` on a device that had given up on that
+    // network two rounds ago — a stale index and a counter past its own limit,
+    // both true internally and both nonsense on a screen.
+    printf("state      %s", wifimgr::Name(snapshot.state));
+    const bool about_a_network = snapshot.state == wifimgr::State::kConnecting ||
+                                 snapshot.state == wifimgr::State::kWaiting ||
+                                 snapshot.state == wifimgr::State::kOnline;
+    if (about_a_network && snapshot.network != wifimgr::kNoNetwork &&
+        snapshot.network < settings.network_count) {
+        const unsigned rounds = settings.rounds_before_ap == 0 ? 1u : settings.rounds_before_ap;
+        printf(" '%s' (network %u of %u, round %u of %u)", settings.networks[snapshot.network].ssid,
+               static_cast<unsigned>(snapshot.network + 1),
+               static_cast<unsigned>(settings.network_count),
+               static_cast<unsigned>(snapshot.round + 1) > rounds
+                   ? rounds
+                   : static_cast<unsigned>(snapshot.round + 1),
+               rounds);
+    }
+    if (snapshot.state == wifimgr::State::kWaiting) {
+        printf(", next attempt in %u ms", static_cast<unsigned>(snapshot.wait_remaining_ms));
+    }
+    printf("\n");
+
+    if (!snapshot.radio_ready) {
+        printf("radio      not started%s%s\n", snapshot.radio_error == ESP_OK ? "" : " — ",
+               snapshot.radio_error == ESP_OK ? "" : esp_err_to_name(snapshot.radio_error));
+    } else {
+        const wifi::Status &radio = snapshot.radio;
+        printf("radio      %s, %s", wifi::Radio::Name(radio.mode), wifi::Radio::Name(radio.link));
+        if (radio.ssid[0] != '\0') {
+            printf(", '%s'", radio.ssid);
+        }
+        if (radio.link == wifi::Link::kConnected) {
+            printf(", rssi %d dBm", static_cast<int>(radio.rssi));
+        }
+        if (radio.ip != 0) {
+            printf(", ip %u.%u.%u.%u", static_cast<unsigned>(radio.ip & 0xFF),
+                   static_cast<unsigned>((radio.ip >> 8) & 0xFF),
+                   static_cast<unsigned>((radio.ip >> 16) & 0xFF),
+                   static_cast<unsigned>((radio.ip >> 24) & 0xFF));
+        }
+        printf("\n");
+        if (radio.link == wifi::Link::kFailed) {
+            printf("last error %s (reason %u)\n", wifi::Radio::Name(radio.failure),
+                   static_cast<unsigned>(radio.reason));
+        }
+    }
+
+    if (settings.network_count == 0) {
+        printf("networks   none remembered — 'wifi join <ssid> [password]'\n");
+    }
+    for (uint8_t i = 0; i < settings.network_count; ++i) {
+        printf("           %u. %-20s %s%s%s\n", static_cast<unsigned>(i + 1),
+               settings.networks[i].ssid,
+               settings.networks[i].password[0] == '\0' ? "open" : "password set",
+               about_a_network && i == snapshot.network ? "  <- current" : "",
+               snapshot.auth_failed[i] ? "  (password refused)" : "");
+    }
+
+    printf("fallback   ap '%s' %s on ch %u after %u round(s)", settings.ap_ssid,
+           settings.ap_password[0] == '\0' ? "open" : "wpa2",
+           static_cast<unsigned>(settings.ap_channel),
+           static_cast<unsigned>(settings.rounds_before_ap));
+    if (snapshot.state == wifimgr::State::kApWindow) {
+        if (snapshot.ap_window_remaining_ms == wifimgr::kHeldOpen) {
+            printf(" — up, held open (%u station(s) attached)",
+                   static_cast<unsigned>(snapshot.radio.clients));
+        } else {
+            printf(" — up, %u s left", static_cast<unsigned>(snapshot.ap_window_remaining_ms / 1000));
+        }
+    }
+    printf("\n");
+}
+
+int CmdWifiJoin(int argc, char **argv) {
+    if (argc < 3 || argc > 4) {
+        printf("usage: wifi join <ssid> [password]\n");
+        return 1;
+    }
+    const char *ssid = argv[2];
+    const char *password = argc == 4 ? argv[3] : "";
+    config::Wifi &settings = config::Get().wifi;
+
+    if (strlen(ssid) >= config::kSsidSize || strlen(password) >= config::kPasswordSize) {
+        printf("that ssid or password is longer than 802.11 allows\n");
+        return 1;
+    }
+
+    // An existing entry is replaced rather than duplicated: the second copy
+    // would be a second chance for the same wrong password, spending a round
+    // on it each time.
+    uint8_t slot = settings.network_count;
+    for (uint8_t i = 0; i < settings.network_count; ++i) {
+        if (strcmp(settings.networks[i].ssid, ssid) == 0) {
+            slot = i;
+            break;
+        }
+    }
+    if (slot >= config::kMaxNetworks) {
+        printf("all %u slots are taken — 'wifi forget <ssid>' first\n",
+               static_cast<unsigned>(config::kMaxNetworks));
+        return 1;
+    }
+
+    snprintf(settings.networks[slot].ssid, sizeof(settings.networks[slot].ssid), "%s", ssid);
+    snprintf(settings.networks[slot].password, sizeof(settings.networks[slot].password), "%s",
+             password);
+    if (slot == settings.network_count) {
+        ++settings.network_count;
+    }
+    // Joining a network is also asking for the radio to be a client — nobody
+    // types this wanting nothing to happen.
+    settings.active = true;
+    settings.mode = config::WifiMode::kClient;
+    wifimgr::Apply();
+
+    printf("network %u is now '%s' (%s), trying it — in memory only, 'config save' writes it to %s\n",
+           static_cast<unsigned>(slot + 1), ssid, password[0] == '\0' ? "open" : "password set",
+           config::kPath);
+    return 0;
+}
+
+int CmdWifiForget(int argc, char **argv) {
+    if (argc != 3) {
+        printf("usage: wifi forget <ssid>\n");
+        return 1;
+    }
+    config::Wifi &settings = config::Get().wifi;
+    for (uint8_t i = 0; i < settings.network_count; ++i) {
+        if (strcmp(settings.networks[i].ssid, argv[2]) != 0) {
+            continue;
+        }
+        for (uint8_t j = static_cast<uint8_t>(i + 1); j < settings.network_count; ++j) {
+            settings.networks[j - 1] = settings.networks[j];
+        }
+        --settings.network_count;
+        settings.networks[settings.network_count] = {};
+        wifimgr::Apply();
+        printf("'%s' forgotten — in memory only, 'config save' writes it to %s\n", argv[2],
+               config::kPath);
+        return 0;
+    }
+    printf("no remembered network called '%s'\n", argv[2]);
+    return 1;
+}
+
+int CmdWifiScan() {
+    // No "turn the radio on first": the driver brings the station up for the
+    // scan and puts it back. Asking what is on the air is the question an
+    // operator has *before* the radio is anywhere.
+    const wifimgr::Snapshot before = wifimgr::Get();
+    size_t found = 0;
+    const esp_err_t err = wifimgr::Scan(scan_results, wifi::kMaxScanResults, &found);
+    if (err != ESP_OK) {
+        printf("scan failed: %s\n", esp_err_to_name(err));
+        return 1;
+    }
+    // §10.9: **this chip has one radio and it is 2.4 GHz** — a 5 GHz-only SSID
+    // cannot appear here, and saying that on every scan is the difference
+    // between "my network is broken" and "my network is on a band this device
+    // cannot hear".
+    printf("%u network(s) on 2.4 GHz — the ESP32-C6 has no 5 GHz radio, so a\n",
+           static_cast<unsigned>(found));
+    printf("5 GHz-only SSID is not missing here, it is unhearable\n");
+    if (before.state == wifimgr::State::kOff) {
+        printf("(the radio was off: brought up for the scan and switched back)\n");
+    }
+    for (size_t i = 0; i < found; ++i) {
+        printf("  %-32s ch %-3u %4d dBm  %s\n", scan_results[i].ssid,
+               static_cast<unsigned>(scan_results[i].channel), static_cast<int>(scan_results[i].rssi),
+               scan_results[i].secured ? "locked" : "open");
+    }
+    if (found == wifi::kMaxScanResults) {
+        // The same call `ls` makes: a bounded listing that looks complete is
+        // worse than a short one that admits it.
+        printf("  ...and possibly more — this is the %u the buffer holds\n",
+               static_cast<unsigned>(wifi::kMaxScanResults));
+    }
+    return 0;
+}
+
+int CmdWifi(int argc, char **argv) {
+    if (!wifimgr::Ready()) {
+        printf("the wi-fi manager did not start\n");
+        return 1;
+    }
+
+    if (argc == 1) {
+        PrintWifiStatus();
+        return 0;
+    }
+
+    if (strcmp(argv[1], "scan") == 0) {
+        return CmdWifiScan();
+    }
+    if (strcmp(argv[1], "join") == 0) {
+        return CmdWifiJoin(argc, argv);
+    }
+    if (strcmp(argv[1], "forget") == 0) {
+        return CmdWifiForget(argc, argv);
+    }
+    if (strcmp(argv[1], "retry") == 0) {
+        // Start the cycle again from the top, which is what an operator means
+        // by "try now": it clears the sticky refusals and the round counter.
+        wifimgr::Apply();
+        printf("cycle restarted\n");
+        return 0;
+    }
+    if (strcmp(argv[1], "mode") == 0 && argc == 3) {
+        config::Wifi &settings = config::Get().wifi;
+        if (strcmp(argv[2], "off") == 0) {
+            settings.active = false;
+        } else if (strcmp(argv[2], "client") == 0) {
+            settings.active = true;
+            settings.mode = config::WifiMode::kClient;
+        } else if (strcmp(argv[2], "ap") == 0) {
+            settings.active = true;
+            settings.mode = config::WifiMode::kAp;
+        } else {
+            printf("mode takes off, client or ap; got '%s'\n", argv[2]);
+            return 1;
+        }
+        // The manager reads the desired mode off the config on every pass, so
+        // this needs no second call — but saying so beats leaving the reader
+        // to wonder where the effect comes from.
+        printf("wifi mode = %s, in memory only — 'config save' writes it to %s\n", argv[2],
+               config::kPath);
+        return 0;
+    }
+
+    printf("usage: wifi                          what it wants, and what it is doing\n");
+    printf("       wifi mode off|client|ap       what it should want\n");
+    printf("       wifi join <ssid> [password]   remember a network and try it\n");
+    printf("       wifi forget <ssid>            drop one\n");
+    printf("       wifi scan                     what is on the air (2.4 GHz)\n");
+    printf("       wifi retry                    start the cycle again from the top\n");
+    printf("none of these write %s — 'config save' does\n", config::kPath);
+    return 1;
 }
 
 int CmdTerm(int argc, char **argv) {
@@ -1132,6 +1416,15 @@ const esp_console_cmd_t kCommands[] = {
         .help = "play a WAV from the storage partition, or 'play volume <0..100>'",
         .hint = "[file|volume <0..100>]",
         .func = &CmdPlay,
+        .argtable = nullptr,
+        .func_w_context = nullptr,
+        .context = nullptr,
+    },
+    {
+        .command = "wifi",
+        .help = "what the radio wants and what it is doing; join, forget, scan (§10.9)",
+        .hint = "[mode off|client|ap | join <ssid> [password] | forget <ssid> | scan | retry]",
+        .func = &CmdWifi,
         .argtable = nullptr,
         .func_w_context = nullptr,
         .context = nullptr,

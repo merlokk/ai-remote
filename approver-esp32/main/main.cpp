@@ -19,6 +19,7 @@
 #include "rawimage.h"
 #include "storage.h"
 #include "timezone.h"
+#include "wifi_manager.h"
 
 namespace {
 
@@ -147,6 +148,13 @@ extern "C" void app_main(void) {
 
     board::Init();
     console::Init();
+
+    // The radio (§10.9), after the settings it reads and after the console
+    // that can fix them. It starts a task and **not** the radio: what happens
+    // next is whatever `config.json` asks for, and the shipped file asks for
+    // nothing — `esp_wifi_init` costs tens of kilobytes of heap, and a device
+    // configured with Wi-Fi off should not pay them.
+    wifimgr::Init();
 
     // Settings applied to the hardware they belong to. `main` is where the two
     // meet: `config` knows nothing about a codec, and `board` knows nothing

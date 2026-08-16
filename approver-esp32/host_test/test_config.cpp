@@ -86,6 +86,13 @@ void test_config_the_two_shipped_files_have_the_same_shape(void) {
     TEST_ASSERT_EQUAL_INT(live.time.posix[0] == '\0', defaults.time.posix[0] == '\0');
     TEST_ASSERT_EQUAL_INT(live.time.sntp_server[0] == '\0',
                           defaults.time.sntp_server[0] == '\0');
+    // The Wi-Fi block, which is the newest half of the file and therefore the
+    // likeliest to be added to one file and forgotten in the other.
+    TEST_ASSERT_EQUAL_INT(live.wifi.ap_ssid[0] == '\0', defaults.wifi.ap_ssid[0] == '\0');
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(live.wifi.mode), static_cast<int>(defaults.wifi.mode));
+    TEST_ASSERT_EQUAL_UINT8(live.wifi.rounds_before_ap, defaults.wifi.rounds_before_ap);
+    TEST_ASSERT_EQUAL_UINT16(live.wifi.ap_window_seconds, defaults.wifi.ap_window_seconds);
+    TEST_ASSERT_EQUAL_UINT8(live.wifi.ap_channel, defaults.wifi.ap_channel);
 }
 
 void test_config_the_committed_file_carries_a_placeholder_password(void) {
@@ -187,6 +194,72 @@ void test_config_skips_a_network_with_no_ssid(void) {
     TEST_ASSERT_EQUAL_STRING("real", config::Get().wifi.networks[0].ssid);
 }
 
+// --- What the Wi-Fi manager reads out of it (§10.9) ----------------------
+
+void test_config_reads_the_wifi_mode_and_the_fallback_settings(void) {
+    FreshWithDefaults();
+    fake::PutFile("config.json", R"({"wifi":{
+        "active": true, "mode": "ap", "rounds": 3, "apWindowSeconds": 45,
+        "ap": {"ssid":"desk-approver","password":"letmein9","channel":11},
+        "networks": []}})");
+
+    TEST_ASSERT_EQUAL_INT(ESP_OK, config::Init());
+    const config::Wifi &wifi = config::Get().wifi;
+    TEST_ASSERT_TRUE(wifi.active);
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(config::WifiMode::kAp), static_cast<int>(wifi.mode));
+    TEST_ASSERT_EQUAL_UINT8(3, wifi.rounds_before_ap);
+    TEST_ASSERT_EQUAL_UINT16(45, wifi.ap_window_seconds);
+    TEST_ASSERT_EQUAL_STRING("desk-approver", wifi.ap_ssid);
+    TEST_ASSERT_EQUAL_STRING("letmein9", wifi.ap_password);
+    TEST_ASSERT_EQUAL_UINT8(11, wifi.ap_channel);
+}
+
+void test_config_an_unknown_wifi_mode_keeps_the_default(void) {
+    // The same call §10.8.2 makes about a misspelled zone: two spellings are
+    // the whole vocabulary, and reading a third as one of them would be a
+    // device quietly doing something nobody asked for. "station" is the
+    // plausible wrong word, which is what makes it the one to test.
+    FreshWithDefaults();
+    fake::PutFile("config.json", R"({"wifi":{"active":true,"mode":"station"}})");
+
+    TEST_ASSERT_EQUAL_INT(ESP_OK, config::Init());
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(config::WifiMode::kClient),
+                          static_cast<int>(config::Get().wifi.mode));
+}
+
+void test_config_the_access_point_settings_round_trip(void) {
+    FreshWithDefaults();
+    fake::PutFile("config.json", kGoodJson);
+    TEST_ASSERT_EQUAL_INT(ESP_OK, config::Init());
+
+    config::Get().wifi.mode = config::WifiMode::kAp;
+    config::Get().wifi.rounds_before_ap = 4;
+    config::Get().wifi.ap_window_seconds = 90;
+    snprintf(config::Get().wifi.ap_password, sizeof(config::Get().wifi.ap_password), "s3cretpw");
+    TEST_ASSERT_EQUAL_INT(ESP_OK, config::Save());
+
+    config::Get().wifi.mode = config::WifiMode::kClient;  // scribble over it
+    TEST_ASSERT_EQUAL_INT(ESP_OK, config::Reload());
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(config::WifiMode::kAp),
+                          static_cast<int>(config::Get().wifi.mode));
+    TEST_ASSERT_EQUAL_UINT8(4, config::Get().wifi.rounds_before_ap);
+    TEST_ASSERT_EQUAL_UINT16(90, config::Get().wifi.ap_window_seconds);
+    TEST_ASSERT_EQUAL_STRING("s3cretpw", config::Get().wifi.ap_password);
+}
+
+void test_config_a_file_with_no_wifi_section_still_has_an_access_point(void) {
+    // The fallback AP of §10.9 is what rescues a device that cannot reach a
+    // network, so it must not itself depend on the file being complete: a
+    // `config.json` with nothing in it has to leave an SSID to raise.
+    FreshWithDefaults();
+    fake::PutFile("config.json", "{}");
+
+    TEST_ASSERT_EQUAL_INT(ESP_OK, config::Init());
+    TEST_ASSERT_TRUE(config::Get().wifi.ap_ssid[0] != '\0');
+    TEST_ASSERT_TRUE(config::Get().wifi.rounds_before_ap > 0);
+    TEST_ASSERT_TRUE(config::Get().wifi.ap_window_seconds > 0);
+}
+
 // --- The restore path (§10.15) -------------------------------------------
 
 void test_config_a_missing_file_is_restored(void) {
@@ -206,7 +279,7 @@ void test_config_a_file_that_is_not_json_is_restored(void) {
     TEST_ASSERT_EQUAL_INT(ESP_OK, config::Init());
     TEST_ASSERT_TRUE(config::Loaded());
 
-    char back[512] = {};
+    char back[config::kMaxFileSize] = {};
     TEST_ASSERT_TRUE(fake::GetFile("config.json", back, sizeof(back)));
     TEST_ASSERT_NULL(std::strstr(back, "sentence"));
 }
@@ -254,7 +327,7 @@ void test_config_valid_json_that_is_not_an_object_is_restored(void) {
 
         // Restored means the file was replaced, not just that memory looks
         // sane — otherwise the next boot hits the same thing again.
-        char back[512] = {};
+        char back[config::kMaxFileSize] = {};
         TEST_ASSERT_TRUE(fake::GetFile("config.json", back, sizeof(back)));
         TEST_ASSERT_NOT_NULL_MESSAGE(std::strstr(back, "volume"), json);
         TEST_ASSERT_NOT_NULL_MESSAGE(std::strstr(back, "nats"), json);
@@ -493,6 +566,11 @@ void RegisterConfigTests(void) {
     RUN_TEST(test_config_a_partial_file_keeps_the_defaults_for_the_rest);
     RUN_TEST(test_config_ignores_networks_past_the_fixed_capacity);
     RUN_TEST(test_config_skips_a_network_with_no_ssid);
+
+    RUN_TEST(test_config_reads_the_wifi_mode_and_the_fallback_settings);
+    RUN_TEST(test_config_an_unknown_wifi_mode_keeps_the_default);
+    RUN_TEST(test_config_the_access_point_settings_round_trip);
+    RUN_TEST(test_config_a_file_with_no_wifi_section_still_has_an_access_point);
 
     RUN_TEST(test_config_a_string_too_long_for_its_field_is_refused_not_truncated);
     RUN_TEST(test_config_a_network_whose_ssid_does_not_fit_is_dropped);

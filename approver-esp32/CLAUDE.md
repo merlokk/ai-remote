@@ -55,10 +55,12 @@ the repository owner's sign-off say so.
 | Bus reachable from the device at all (§10.3) | **decided**: shared on the home LAN, no TLS, no auth — the router is the trust boundary |
 | Firmware: NATS client, registration, signing | not started |
 | The five screens — clock, limits, request, settings, Wi-Fi (§10.8) | specified, not started |
-| Wi-Fi manager: scan, join, remember, reconnect (§10.9) | specified, not started |
+| The Wi-Fi driver — `components/wifi` (§10.9) | **running on hardware**: two modes (access point, client), one network at a time, a latched link state, a disconnection reason turned into the three answers a person can act on, and a scan that works in both modes. It has **no opinions** — which network and when is the manager's, and that split is what makes the manager testable |
+| The Wi-Fi manager — `components/wifimgr` (§10.9) | **running on hardware, and tested on the host**: desired state (off / client / AP) against current, round-robin over the remembered networks with a growing capped backoff, sticky auth failures, and after N fruitless rounds a fallback access point that stays up for two minutes unless somebody attaches to it. `wifi` on the console. `wifi_policy.cpp` includes nothing but `<cstdint>`, the way the navigator does; the radio is lazily brought up, so a device with `wifi.active` false pays nothing for this existing. **What no board has done yet is join anything** — the cycle, the classification, the fallback AP and the scan are all proven against a network that does not exist, which is one half of the story |
+| The Wi-Fi screen (§10.8.6) | specified, not started — the manager underneath it is what exists |
 | Where the configuration lives (§10.15) | **decided**: all of it in JSON on SPIFFS, nothing of ours in NVS — with the cost stated (SPIFFS cannot be encrypted at rest). `spiffs_image/config.json` + `config.init.json` are flashed; nothing reads them yet |
 | The `KEY`-at-boot config restore (§10.15) | specified, not started |
-| Host-tier tests (§10.11) — `host_test/` | **running**: 209 Unity tests over `ui`, `i2cbus`, `pmic`, `rtc`, `imu`, `audio`, `config`, `buttons`, `timezone` and `speaker`, one command, no board. The drivers are compiled **unmodified** against a fake ESP-IDF (`host_test/fakes/`), which is §10.14.3's owed fake backend arriving in a different shape than that section specified, and which now covers I²S and a filesystem as well as the I²C wire. Built by MSVC rather than by ESP-IDF's `linux` target, which does not work on a Windows host — §10.11 records why |
+| Host-tier tests (§10.11) — `host_test/` | **running**: 239 Unity tests over `ui`, `i2cbus`, `pmic`, `rtc`, `imu`, `audio`, `config`, `buttons`, `timezone`, `speaker` and `wifimgr`, one command, no board. The drivers are compiled **unmodified** against a fake ESP-IDF (`host_test/fakes/`), which is §10.14.3's owed fake backend arriving in a different shape than that section specified, and which now covers I²S and a filesystem as well as the I²C wire. Built by MSVC rather than by ESP-IDF's `linux` target, which does not work on a Windows host — §10.11 records why |
 | Protocol parity vectors (§10.11 tier 2) | not started |
 
 Read §10.3 before anything else: it is the one part of this that changes
@@ -523,8 +525,13 @@ register <token>              # the §6 exchange — the reason this console exi
 keys                          # print this device's public key + the pinned server key
 forget                        # drop the registration and the pinned server key
 bus  nats://192.168.1.5:4222  # also on the settings screen (§10.8.5)
-wifi <ssid> <password>        # the headless fallback for §10.9's screen
 ```
+
+**The Wi-Fi half of that list exists now, spelled with verbs**: `wifi join
+<ssid> [password]` rather than the bare `wifi <ssid> <password>` this section
+first sketched, because `wifi` had to grow a status readout and subcommands
+(below), and a bare pair of words that is sometimes an SSID and sometimes a
+subcommand is a parser with a trap in it. §10.9 has the rest.
 
 That list is the interface the firmware owes; how to reach it — which serial
 command opens the console, and what it fights with for the port — is in
@@ -549,6 +556,13 @@ imu watch [seconds]           # a line a second of the same six numbers
 display                       # the panel, LVGL and the touch controller
 display on|off                # blank the panel without dimming it
 display brightness [0..100]   # the panel only — `config set brightness` is the stored one
+wifi                          # what the radio wants, and what it is doing (§10.9)
+wifi mode off|client|ap       # what it should want — in memory, `config save` keeps it
+wifi join <ssid> [password]   # remember a network, switch to client mode, try it now
+wifi forget <ssid>            # drop one
+wifi scan                     # what is on the air — works with the radio off, which
+                              # it then switches back off. 2.4 GHz: the C6 has no other
+wifi retry                    # start the cycle again from the top
 play [file]                   # play a WAV from the storage partition (alert.wav)
 play volume [0..100]          # read it, or set it — same as `config set volume`
 config [reload|save|restore]  # the settings of §10.15, parsed into fields
@@ -957,13 +971,75 @@ Everything else in this repository runs on a machine somebody already logged
 into. This device has to get onto a network by itself, keep itself there, and
 behave sanely when it cannot — and none of that may involve a laptop.
 
-**A state machine, owned by one task, driven by `esp_event`:**
+**Two components, and the split is the design.** `components/wifi` is the
+radio: join this network, be an access point, what is the link doing, what is
+on the air. `components/wifimgr` is everything that decides *which* and *when*.
+The driver has no opinions and the policy has nothing but opinions — and the
+reason to draw the line there is §10.11: `wifi_policy.h` includes `<cstdint>`
+and nothing else, exactly as `ui/navigator.h` does, so the whole of the
+behaviour below runs under Unity on the host with no board and no fake. The
+half that cannot be tested that way is the half with no decisions in it.
+
+**Desired and current are two different facts, and both are on show.** The
+operator asks for **off**, **client** or **AP**; what is happening on the way
+there is `client "point1" connecting`, `temporary AP "approver-esp32"`,
+`client "point3" connected`. A readout that showed only the first would make a
+device that is trying look like a device that is broken, and one that showed
+only the second would lose the question the device is answering.
+
+**A state machine, owned by one task, driven by polling the driver:**
 
 ```
 NO_CREDENTIALS ──join──► CONNECTING ──got IP──► ONLINE ──disconnect──► RETRYING
       ▲                      │                                             │
       └──── forget ──────────┴────── auth fail / not found ────────────────┘
 ```
+
+and, wrapped around it, the loop a device with no keyboard actually needs:
+
+```
+        ┌──────────────── each remembered network in turn ───────────────┐
+        │   net 1 ──fail──► net 2 ──fail──► … ──fail──► (round over)     │
+        └───────────────────────┬───────────────────────────────────────┘
+              round < rounds_before_ap │ backoff, growing and capped
+                                       ▼
+                         ┌── round == rounds_before_ap ──┐
+                         ▼                               │
+                  temporary access point  ──nobody came in 2 min──┘
+                         │
+                    somebody attached → the clock stops
+```
+
+- **Round-robin, then be findable.** `rounds` full passes over the list (§10.9's
+  "2-3", `config.json`), and then the device stops being a client and *becomes*
+  an access point so that somebody can reach it and tell it about a network that
+  exists. If nobody turns up inside `apWindowSeconds`, it goes back to trying.
+  Forever, and never in a tight loop.
+- **A station attached holds the window open.** They are the entire reason it
+  exists; a device that dropped the operator's phone mid-form to go and retry a
+  network that was not there is a device nobody can configure. When the last one
+  leaves the two minutes start again from the beginning rather than resuming —
+  somebody who joined at 1:59 must not leave the next person four seconds.
+- **The window expiring clears the sticky auth failures**, because that window
+  was the chance somebody had to fix a password. Without that, a device with one
+  wrong password would be unfixable by the very mechanism built to fix it.
+- **An exhausted list does not wait out its rounds.** Every network refusing the
+  password, or no networks at all, sends the access point up at once: a device
+  sulking in silence for a minute when it could be findable is a device nobody
+  can rescue.
+- **An attempt that is never answered times out** (15 s). An AP that associates
+  and then never finishes — a captive portal, a marginal link — would otherwise
+  mean the device never reaches its second network.
+- **A drop while online is not a refusal**, and goes back through the gap rather
+  than straight into a reconnect. A link that worked and then dropped with a
+  handshake error is a link that lost its AP, not a password that is wrong;
+  marking it sticky would strike a working network off the list, and
+  reconnecting instantly would turn an AP that is kicking us into a loop running
+  as fast as the radio can associate.
+- **`mode: "ap"` and the fallback AP are the same access point for different
+  reasons**, and they are two states rather than one: the first is an answer,
+  the second is a symptom, and a screen that spelled them the same way would be
+  lying about whether anything is wrong.
 
 - `NO_CREDENTIALS` is a first-class state, not an error: fresh from the flasher,
   the clock still runs and the Wi-Fi screen is what the device asks for.
@@ -988,9 +1064,18 @@ an office is the entire use case; roaming between dozens is not.
 **What the radio can and cannot do**, because these are support questions, not
 bugs:
 
-- ESP32-C6 is **2.4 GHz only**. A 5 GHz-only SSID never appears in the scan. The
-  screen should say the band it scans rather than let the operator conclude the
-  network is broken.
+- ESP32-C6 is **2.4 GHz only**, and this is hardware rather than a setting: the
+  part has one radio. ESP-IDF marks a dual-band chip with `SOC_WIFI_SUPPORT_5G`
+  — defined for the ESP32-C5, absent for the C6 (`soc/esp32c6/include/soc/
+  soc_caps.h`, read rather than assumed), so there is no band mode to select
+  and no 5 GHz channel bitmap to fill in. A 5 GHz-only SSID is not missing from
+  the scan; it is inaudible.
+
+  Two places say so rather than one, because "why can't it see my network" is
+  the support question this section exists to pre-empt: every `wifi scan`
+  prints it, and `wifi_radio.cpp` carries a `#error` under
+  `SOC_WIFI_SUPPORT_5G` so that a port to a part which *does* have the band
+  fails the build instead of quietly scanning half of it.
 - WPA2 and WPA3-SAE personal, open networks, hidden SSIDs by manual entry.
   **WPA2-Enterprise and captive-portal networks are out of scope** — a device
   that cannot show a login page cannot join a network that demands one, and a
@@ -1011,6 +1096,99 @@ base64 that must be transcribed exactly, it is minted on the host anyway, and a
 typo in it fails in a way that looks like a protocol problem. Wi-Fi is typed once
 and confirmed by the device joining; a token is pasted once and confirmed by the
 handler's signature.
+
+#### What is written, and the four decisions inside it
+
+`components/wifi` (the radio) and `components/wifimgr` (the policy and the task
+that drives it), plus `wifi` on the console (§10.7) and the settings below in
+`config.json`.
+
+**What the board has actually done**, flashed and driven from the console
+against the shipped `YOUR_SSID` — a network that by construction does not
+exist: brought the radio up on demand, tried the network, been told `reason
+201` and reported it as *no such network*, waited out a backoff it printed as
+`next attempt in 3805 ms`, spent its two rounds, put `approver-esp32` on the
+air with a DHCP server on 192.168.4.1 and a 120-second window counting down,
+scanned eight neighbours while doing it, switched to a permanent AP and back to
+off — and, from a cold `state off / radio not started`, answered `wifi scan`
+with eight networks and went back to off without anything else being typed.
+**What it has not done is join anything** — the whole success path, and the
+auth-failure classification with it, waits on a real SSID and password.
+
+Two things only the board could have said, both now fixed:
+
+- **`wifi scan` printed "joining 'YOUR_SSID'" five times for one join.** The
+  manager retries an action the radio refused while a scan holds it — correct,
+  and the log line was on the wrong side of that refusal. It is emitted after
+  the call is taken now, so a retry is silent.
+- **`state temporary ap 'YOUR_SSID' … round 3 of 2`.** Both halves were true
+  internally — the network index is the last one tried and the round is
+  incremented before it is compared — and both are nonsense on a screen. The
+  network clause is now printed only in the states that are about a network,
+  and the round is clamped to its own total.
+
+Four things in the driver are decisions rather than plumbing:
+
+- **The access point is `APSTA`, not `AP`.** The station interface stays up and
+  unconnected so that a scan works while the fallback AP is the only thing
+  running — which is precisely the moment somebody needs to pick a network. In
+  plain `WIFI_MODE_AP` that scan is not possible at all.
+- **A disconnection this firmware asked for is not a failure.** Tearing an
+  association down to start another one produces a `STA_DISCONNECTED` of our
+  own, and counting it would fail the *new* attempt before it began. A
+  suppression counter, incremented before every deliberate disconnect, is the
+  subtlest thing in the file.
+- **`kFailed` is latched** until the next `Start…`, so a poller that looks a
+  moment too late still sees the edge. That is what lets the manager be a poll
+  loop rather than a queue.
+- **The station's authmode threshold stays at `WIFI_AUTH_OPEN`**, which is not a
+  security decision: it is the *minimum* an AP may offer, and raising it to WPA2
+  makes an open café network and a WPA3-only router both vanish. What protects
+  the link is the AP's own security, never our floor.
+
+And one in the manager: **the radio is brought up lazily.** The shipped
+`config.json` has `wifi.active` false, and a device configured with the radio
+off should pay nothing for this component existing. The static cost that is
+always paid is 1.5 KB of scan buffer and a 4 KB task stack — `idf.py
+size-components` puts `libwifi.a` at 5,098 bytes and `libwifimgr.a` at 7,379,
+against the framework's ~415 KB of flash for `net80211` + `pp` + `lwip` that
+arrive the first time any of it is linked.
+
+**What laziness is actually saving is 130 KB of RAM, measured**: `status`
+reports 251,744 bytes of free heap on a fresh boot and 121,544 once the Wi-Fi
+stack has been initialised. On a part with 512 KB and no PSRAM (§10.1) that is
+not a rounding error — it is twice LVGL's whole pool. It is also **not given
+back**: stopping the radio stops the radio, and `esp_wifi_deinit` is not called
+anywhere. So a `wifi scan` on a device that lives with Wi-Fi off costs that
+130 KB until the next reboot. Reclaiming it means splitting `Radio::Init` into
+a once-ever half (NVS, the netifs, the event handlers — creating the default
+netifs twice does not work) and a re-runnable one. Worth doing; not done; the
+number is here so that the decision is a decision.
+
+**`wifi scan` works with the radio off**, which is the shape the operator
+needs: "what is out there" is the question you have *before* the device is
+anywhere. The driver brings the station interface up, scans, and puts it back
+exactly as it found it. **No access point is raised to do it, hidden or
+otherwise** — hidden means the SSID field in the beacon is blank, not that the
+AP is silent, so it would still beacon, still hold a channel and still start a
+DHCP server, all to make possible something a station does on its own. What is
+on the air during a scan is probe requests and nothing else.
+
+**The settings, in `config.json` (§10.15):**
+
+| Field | What it is |
+|---|---|
+| `wifi.active` | the one switch that means radio-down. False is off whatever `mode` says — two fields that can disagree is one bug report nobody can read |
+| `wifi.mode` | `"client"` or `"ap"`. **Anything else is refused and the default kept**, not guessed: the same call §10.8.2 makes about a misspelled zone |
+| `wifi.rounds` | full passes before the fallback AP. `0` behaves as 1 rather than as "never try" — the round is counted before it is compared, so every network gets one attempt whatever this says |
+| `wifi.apWindowSeconds` | how long that AP stays up with nobody on it |
+| `wifi.ap.{ssid,password,channel}` | the access point this device raises. **An empty password is an open network, which is what ships** — the AP serves nothing yet, it is up for two minutes at a time, and a WPA key committed to this repository would be a password everyone has. A password shorter than WPA2's eight characters is refused rather than silently turned into an open AP. When §10.8.6 gives that AP something to serve, this default is the line to revisit |
+| `wifi.networks[]` | up to four ssid/password pairs, as before |
+
+The timings that are **not** in the file — the connect timeout, the gap between
+attempts, the backoff and its cap — are the shape of this section rather than a
+preference. A device whose connect timeout is operator-settable is a device with
+one more way to be configured into never working.
 
 ### 10.10 Rules this firmware inherits (do not soften them)
 
@@ -1070,8 +1248,8 @@ Three tiers, and the first one is where nearly everything belongs:
    ESP-IDF. One command, in [`working-with-code.md`](working-with-code.md).
 
    **What is under it today is the navigator and four of the five chips on the
-   I²C bus, the settings file, the buttons, the zone table and the
-   speaker** — 209 tests:
+   I²C bus, the settings file, the buttons, the zone table, the speaker and the
+   Wi-Fi policy** — 239 tests:
 
    | Subject | What is pinned |
    |---|---|
@@ -1085,6 +1263,8 @@ Three tiers, and the first one is where nearly everything belongs:
    | `components/buttons` | the debounce, which is the only part of this with logic to get wrong: a window that starts when the level is *first seen*, a bounce shorter than it swallowed, a spike that settles back reporting nothing, and the millisecond counter wrapping at ~49 days being a subtraction rather than a special case. Above it: `active_low` per button, because §10.1 found `PWR` wired the other way round; `Init` adopting a button that is **already down**, which is §10.15's whole scenario; `Init` refusing a table with no rows or an unfilled `GPIO_NUM_NC` pin; and `HeldFor` reaching five seconds through a poll loop, giving up the moment it is released, and costing nothing on the boots where nobody is holding anything |
    | `components/timezone` | the table checked against itself — every name looks itself up, every rule passes `LooksLikePosix`, no name does, and an index past the end answers row 0 rather than reading past the array — plus the aliases people actually type (`Europe/Kiev`, `Asia/Calcutta`), a shared rule named after its family rather than after a city, and the one that matters most: **an unknown zone answering `nullptr` rather than a guess**, because §10.8.2's named failure is libc silently reading a misspelling as UTC |
    | `components/audio` (speaker) | mostly the RIFF parser, which is where the value is: a `LIST` chunk between `fmt ` and `data` walked past, an odd-sized chunk padded the way RIFF requires, a 40-byte `WAVE_FORMAT_EXTENSIBLE` header stepped over, compressed-but-in-a-.wav named apart from not-a-WAV, and three claims a file is not allowed to make about itself — a `fmt ` chunk too short to hold a format, a `data` chunk with nothing in it, and a chunk length that runs off the end of the file. Then what reaches the wire — the fake channel **captures the bytes**, so "it streamed the audio and not the header" is known rather than guessed; stereo and 8-bit refused without ever unmuting; a truncated `data` chunk played as far as the file goes; the codec muted again after a failed write; a rate change stopping the channel, retuning both halves, and starting it — and **a rate the codec cannot clock refused before the channel is stopped**, with the next file still playing afterwards, which is the bug that section below is about |
+
+   | `components/wifimgr` | every rule §10.9 states, and it needs **no fake at all** — the policy includes `<cstdint>` and nothing else, so this suite is the navigator's shape rather than the drivers': the round-robin and where a round begins; the backoff asserted as *both* growing and capped, because either alone is satisfied by a constant; the fallback AP after the configured rounds, held open by an attached station and restarted from the beginning when the last one leaves — and **not** held open by the manager's own "nobody is attached" report, which arrives on every pass and would otherwise mean an AP that never expires; the window's expiry clearing the sticky auth failures, since that window was the chance to fix them; an exhausted list going straight to the AP rather than waiting out its rounds; a drop while online being neither an auth failure nor an instant reconnect; the connect timeout; `SetDesired` being idempotent, because the manager re-asserts it five times a second; and the ~49-day millisecond wrap landing inside a delay |
 
    The fake platform is `host_test/fakes/` — an ESP-IDF-shaped set of headers
    with a register-file I²C device behind them. It models the shape all five
@@ -1109,6 +1289,26 @@ Three tiers, and the first one is where nearly everything belongs:
    Four more needed no mutation, because they failed on the real code the
    first time they ran: §10.14.3 has two, §10.8.2 the third, and §10.8.1 the
    fourth.
+
+   **The Wi-Fi policy added nine mutations and, more usefully, two
+   survivors** — and §10.11's rule held: a mutation that survives is a
+   question about the code, not a gap in the tests.
+
+   - **`max(1, rounds_before_ap)` was guarding nothing.** Removing it changed
+     no test *and no behaviour*, because the round is incremented before it is
+     compared: `rounds: 0` was already a full pass over the list. The helper
+     was deleted and the invariant written down where the comparison happens,
+     which is worth more than a function that looked like it was defending
+     something.
+   - **"Try last-successful first" had no test at all.** It survived because
+     the drop-while-online path sets the network directly and never goes
+     through `RestartClient` — so the only caller of the rule was `wifi mode
+     off` followed by `wifi mode client`, which nothing exercised. That is now
+     a test.
+
+   A third mutation would not compile, for the reason this section already
+   records: `/W4 /WX` makes the code a mutation orphans into an error, so
+   short-circuiting a branch has to leave nothing unreachable behind it.
 
    **Four bugs came out of the pass that asked "what else can a caller do?"**,
    and the shape they share is worth more than any of them individually:
@@ -1838,9 +2038,18 @@ decision above, should it ever be taken.
 replaced the placeholder schema the two files were carrying — an AP-mode Wi-Fi
 block and a `WEB` section, both inherited from the house firmware of §10.14.4
 and belonging to a device this one is not. What is in them now is what this
-firmware has or is specified to have: `wifi.networks[]` (§10.9, four of them),
+firmware has or is specified to have: the Wi-Fi block (§10.9 —
+`active`, `mode`, `rounds`, `apWindowSeconds`, `ap.{ssid,password,channel}` and
+`networks[]`, four of them; that section's table says what each is for),
 `nats.url` (§10.3), `time.zone` / `time.posix` / `time.sntp` (§10.8.2), the
 display timeouts (§10.8.5) and `audio.volume`.
+
+**An access-point block is back, and it is not the one that was deleted.** The
+house firmware's was a device whose *normal* mode was to serve a web UI over
+its own AP; this one is §10.9's fallback — up for two minutes at a time when
+nothing else worked, so that a device on a desk with a wrong password is still
+reachable. Same shape in the file, opposite reason for existing, and worth
+knowing before somebody reads the two paragraphs as contradicting each other.
 
 The server's address is `nats.url` rather than `bus.url` for the reason the
 name suggests: there is one bus here and it is NATS, so an address reads as an
@@ -1853,9 +2062,12 @@ them says "in memory only" when it succeeds; `config save` is what reaches the
 filesystem. A console where each keystroke lands in flash is a console that
 wears the partition out during an experiment, and `config reload` is then the
 cheap undo for anything not saved. The Wi-Fi networks are the exception and are
-not settable this way: they are a list of ssid/password pairs and belong to the
-screen of §10.8.6. `volume` is also the one field applied as it is set, so the
-next `play` is audibly the number just typed.
+not settable this way: they are a list of ssid/password pairs, and a list needs
+add and remove rather than assignment — `wifi join <ssid> [password]` and
+`wifi forget <ssid>` are those two verbs (§10.9), and they follow the same rule
+to the letter: memory only, and `config save` writes. §10.8.6's screen is the
+same pair of verbs with a keyboard in front of them. `volume` is also the one
+field applied as it is set, so the next `play` is audibly the number just typed.
 
 `play volume <n>` is the same setter reached by a shorter name — it calls the
 same function, so there is one behaviour rather than two commands differing in
@@ -1897,7 +2109,15 @@ and the settings on it now come up **before** the hardware they configure.
 Defaults parse; every field missing; a truncated file and a non-JSON file both
 ending in a restore; a restore leaving `registration.json` untouched; `forget`
 removing it; and `config.json` and `config.init.json` having the same shape —
-the last one is the test that catches the two drifting apart.
+the last one is the test that catches the two drifting apart, and the Wi-Fi
+block of §10.9 was added to it as the newest half of the file and therefore the
+likeliest to be put in one file and forgotten in the other.
+
+Four came with that block: the settings read back as written; an unknown
+`wifi.mode` keeping the default rather than being guessed at; the access point
+surviving a `Save`/`Reload` round trip; and **a `config.json` of `{}` still
+leaving an SSID to raise** — the fallback AP is what rescues a device that
+cannot reach a network, so it must not itself depend on the file being complete.
 
 Three more that came out of asking what an *edited* file can contain, since
 this one is meant to be edited by hand:
