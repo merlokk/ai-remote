@@ -20,10 +20,12 @@
 # works these tests move to it unchanged. Unity is plain C89 and compiles
 # anywhere, which is why that is possible at all.
 #
-# What can be tested here is exactly what has no dependency on a board: today
-# that is `components/ui`, whose CMakeLists has an empty REQUIRES for this
-# reason. The I²C lease's fake backend (§10.14.3) and the protocol parity
-# vectors (§10.11 tier 2) are the next two tenants.
+# What can be tested here is exactly what has no dependency on a board — which
+# started as `components/ui` alone and turned out to be almost the whole
+# library layer, because `fakes/` shadows ESP-IDF's headers rather than sitting
+# behind an interface (§10.14.3): the navigator, the leased bus, and every
+# driver on it. The protocol parity vectors of §10.11 tier 2 are the tenant
+# still to come.
 
 cmake_minimum_required(VERSION 3.22)
 project(approver_esp32_host_test C CXX)

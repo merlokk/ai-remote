@@ -38,7 +38,7 @@ the repository owner's sign-off say so.
 | The project skeleton — `CMakeLists.txt`, `main/main.cpp`, `sdkconfig.defaults`, `partitions.csv` (§10.12) | **generated and building** on ESP-IDF v6.0.2; two 2.5 MB OTA slots, ~10.9 MB `storage`, `nvs_keys` reserved |
 | The pin map — `components/boards/board.h` (§10.1) | **written**, from Waveshare's own pinout sheet in `docs/`; logged at boot. Nothing drives a pin yet |
 | SPIFFS mounted + the console — `components/storage`, `components/cli` (§10.7, §10.15) | **running on hardware**: flashed over COM4, `status`, `power` and `cat` answer on the USB Serial/JTAG port |
-| The leased I²C bus — `components/i2cbus` (§10.14.3) | **written and running**: lease, timeout-not-block, per-address device table, bus recovery. The fake backend the host tests need is still owed (§10.11) |
+| The leased I²C bus — `components/i2cbus` (§10.14.3) | **written, running and under test**: lease, timeout-not-block, per-address device table, bus recovery — the last of which now takes the lease it used to skip. The fake §10.14.3 owed arrived as shadowed headers rather than as a backend interface, and that section says why |
 | The buttons — `components/buttons` (§10.1, §10.15) | **running on hardware**: debounced BOOT / KEY / PWR, polled, with a blocking `HeldFor` for §10.15's KEY-at-boot. It is what found that GPIO18 reads `PWR` **inverted**. No consumer yet — the config restore is still unwritten |
 | ES8311 codec + speaker — `components/audio` (§10.8.1, §10.13) | **playing on hardware**: the codec configured from its datasheet, an I²S transmit channel, uncompressed WAV streamed off SPIFFS. `poweron.wav` at boot, `alert.wav` on `play`. No microphone, no decoder |
 | Settings — `components/config` (§10.15) | **read, written and surviving a reboot**: `config.json` parsed into a fixed struct at boot, `reload` / `save` / `restore` on the console, and the codec's volume is the first setting that round-trips |
@@ -58,7 +58,7 @@ the repository owner's sign-off say so.
 | Wi-Fi manager: scan, join, remember, reconnect (§10.9) | specified, not started |
 | Where the configuration lives (§10.15) | **decided**: all of it in JSON on SPIFFS, nothing of ours in NVS — with the cost stated (SPIFFS cannot be encrypted at rest). `spiffs_image/config.json` + `config.init.json` are flashed; nothing reads them yet |
 | The `KEY`-at-boot config restore (§10.15) | specified, not started |
-| Host-tier tests (§10.11) — `host_test/` | **running**: 188 Unity tests over `ui`, `i2cbus`, `pmic`, `rtc`, `imu`, `audio`, `config`, `buttons`, `timezone` and `speaker`, one command, no board. The drivers are compiled **unmodified** against a fake ESP-IDF (`host_test/fakes/`), which is §10.14.3's owed fake backend arriving in a different shape than that section specified, and which now covers I²S and a filesystem as well as the I²C wire. Built by MSVC rather than by ESP-IDF's `linux` target, which does not work on a Windows host — §10.11 records why |
+| Host-tier tests (§10.11) — `host_test/` | **running**: 209 Unity tests over `ui`, `i2cbus`, `pmic`, `rtc`, `imu`, `audio`, `config`, `buttons`, `timezone` and `speaker`, one command, no board. The drivers are compiled **unmodified** against a fake ESP-IDF (`host_test/fakes/`), which is §10.14.3's owed fake backend arriving in a different shape than that section specified, and which now covers I²S and a filesystem as well as the I²C wire. Built by MSVC rather than by ESP-IDF's `linux` target, which does not work on a Windows host — §10.11 records why |
 | Protocol parity vectors (§10.11 tier 2) | not started |
 
 Read §10.3 before anything else: it is the one part of this that changes
@@ -1070,22 +1070,21 @@ Three tiers, and the first one is where nearly everything belongs:
    ESP-IDF. One command, in [`working-with-code.md`](working-with-code.md).
 
    **What is under it today is the navigator and four of the five chips on the
-   I²C bus, the settings file, the buttons, the zone table and the speaker** — 188 tests:
+   I²C bus, the settings file, the buttons, the zone table and the
+   speaker** — 209 tests:
 
    | Subject | What is pinned |
    |---|---|
-   | `components/ui` | every transition of §10.8's table; swipes that must *not* navigate on the settings and Wi-Fi screens; a request preempting all four screens without moving any of them; navigation vanishing entirely while the card is up; the screen underneath surviving both an answer and an expiry; the pending queue refusing a fifth arrival. Its `CMakeLists.txt` has an empty `REQUIRES`, which is not an omission — a navigator that included LVGL would be a navigator that needs a board |
-   | `components/i2cbus` | §10.14.3's three: contention, an acquire that **times out rather than blocks** (asserted as the tick count it asked for, which is why the fake mutex never sleeps), and a recovery that clocks SCL nine times and drops the device handles with the old bus. Plus the device table's per-device clock, its reopen-on-speed-change, and its refusal when full |
-   | `components/pmic` | the 13-bit battery field against the 14-bit ones — the width that gives a *plausible* wrong voltage when wrong; the TS-pin silencing and the ADC read-modify-write; VBUS needing both status bits; `PowerOff` refusing over USB **and writing nothing**; and `Read` being one snapshot rather than a dozen moments |
-   | `components/rtc` | BCD both ways; the seven counters in one burst; the OS flag making a *successful* read untrustworthy, and being masked out of the seconds it shares a register with; the clock stopped and restarted around a write — including after a write that failed |
-   | `components/imu` | 0x6B, the inverse of the habit; CTRL1's auto-increment, without which fourteen bytes are TEMP_L fourteen times; the range actually changing the scale; signed counts; tilt |
-   | `components/audio` | the volume mapping where 0 is silence rather than full scale; clamping; the codec coming up muted; rates refused rather than approximated — and the two lease rules of §10.14.3 that this suite **found broken here and in the IMU**: a bounded number of leases across a configuration sequence, and zero milliseconds slept while holding the bus |
-   | `components/config` | every test §10.15 asks for, and the one it spends the most words on: **the write that is not allowed to half-happen**. All three post-crash states are exercised — a leftover temp dropped, a temp with no `config.json` finished into place, and a clean save leaving nothing behind — against a filesystem where `rename()` refuses to replace, exactly as SPIFFS does. Plus: the **committed** `spiffs_image/` files parsed rather than a fixture, so an edit that breaks them fails here instead of on a flash; the password placeholder still being `CHANGEME`; a missing, truncated, non-JSON or oversized file all ending in a restore; `Reload` deliberately **not** restoring; `registration.json` untouched by one; unknown fields lost on the next write; and a named zone filling in its POSIX rule |
-
-   | `components/buttons` | the debounce, which is the only part of this with logic to get wrong: a window that starts when the level is *first seen*, a bounce shorter than it swallowed, a spike that settles back reporting nothing, and the millisecond counter wrapping at ~49 days being a subtraction rather than a special case. Above it: `active_low` per button, because §10.1 found `PWR` wired the other way round; `Init` adopting a button that is **already down**, which is §10.15's whole scenario; and `HeldFor` reaching five seconds through a poll loop, giving up the moment it is released, and costing nothing on the boots where nobody is holding anything |
-   | `components/timezone` | the table checked against itself — every name looks itself up, every rule passes `LooksLikePosix`, no name does — plus the aliases people actually type (`Europe/Kiev`, `Asia/Calcutta`), a shared rule named after its family rather than after a city, and the one that matters most: **an unknown zone answering `nullptr` rather than a guess**, because §10.8.2's named failure is libc silently reading a misspelling as UTC |
-
-   | `components/audio` (speaker) | mostly the RIFF parser, which is where the value is: a `LIST` chunk between `fmt ` and `data` walked past, an odd-sized chunk padded the way RIFF requires, a 40-byte `WAVE_FORMAT_EXTENSIBLE` header stepped over, and compressed-but-in-a-.wav named apart from not-a-WAV. Then what reaches the wire — the fake channel **captures the bytes**, so "it streamed the audio and not the header" is known rather than guessed; stereo and 8-bit refused without ever unmuting; a truncated `data` chunk played as far as the file goes; the codec muted again after a failed write; and a rate change stopping the channel, retuning both halves, and starting it |
+   | `components/ui` | every transition of §10.8's table; swipes that must *not* navigate on the settings and Wi-Fi screens; the settings screen being reachable from the clock **and from nowhere else**, and the Wi-Fi screen only from settings; a request preempting all four screens without moving any of them; navigation vanishing entirely while the card is up; the screen underneath surviving both an answer and an expiry; the pending queue refusing a fifth arrival. Its `CMakeLists.txt` has an empty `REQUIRES`, which is not an omission — a navigator that included LVGL would be a navigator that needs a board |
+   | `components/i2cbus` | §10.14.3's three: contention, an acquire that **times out rather than blocks** (asserted as the tick count it asked for, which is why the fake mutex never sleeps), and a recovery that clocks SCL nine times and drops the device handles with the old bus. Plus the device table's per-device clock, its reopen-on-speed-change, and its refusal when full. And **the non-recursive mutex, from both sides**: `AddDevice` called while a lease is held is refused rather than granted — the trap `es8311.h` records — and `Recover`, which used to skip the lease entirely, now waits for it and tears nothing down if it cannot have it |
+   | `components/pmic` | the 13-bit battery field against the 14-bit ones — the width that gives a *plausible* wrong voltage when wrong; the TS-pin silencing and the ADC read-modify-write; VBUS needing both status bits; `PowerOff` refusing over USB **and writing nothing**; `Read` being one snapshot rather than a dozen moments; and the two halves of the vendor's rail guard — a rail already at 3.3 V is not rewritten (DCDC1 supplies the C6, so a pointless write is a risk with no upside) and one at the wrong voltage is, with the bits above the field kept |
+   | `components/rtc` | BCD both ways; the seven counters in one burst; the OS flag making a *successful* read untrustworthy, and being masked out of the seconds it shares a register with; the clock stopped and restarted around a write — including after a write that failed; and the century this chip does not have, so 2100 and 1999 are refused before the bus is touched while 2099 goes through |
+   | `components/imu` | 0x6B, the inverse of the habit — and a *stranger* answering there not stopping the search at 0x6A, which is a different problem from silence and only one of them is a reason to give up; CTRL1's auto-increment, without which fourteen bytes are TEMP_L fourteen times; the range actually changing the scale; signed counts; tilt |
+   | `components/audio` | the volume mapping where 0 is silence rather than full scale; clamping; the codec coming up muted; rates refused rather than approximated, and askable *without* the chip (`RateSupported`, which is what the speaker needs before it stops the channel); a codec that never identified refusing to be set rather than writing to I²C address 0x00 — and the two lease rules of §10.14.3 that this suite **found broken here and in the IMU**: a bounded number of leases across a configuration sequence, and zero milliseconds slept while holding the bus |
+   | `components/config` | every test §10.15 asks for, and the one it spends the most words on: **the write that is not allowed to half-happen**. All three post-crash states are exercised — a leftover temp dropped, a temp with no `config.json` finished into place, and a clean save leaving nothing behind — against a filesystem where `rename()` refuses to replace, exactly as SPIFFS does. Plus: the **committed** `spiffs_image/` files parsed rather than a fixture, so an edit that breaks them fails here instead of on a flash; the password placeholder still being `CHANGEME`; a missing, truncated, non-JSON or oversized file all ending in a restore; `Reload` deliberately **not** restoring; `registration.json` untouched by one; unknown fields lost on the next write; a named zone filling in its POSIX rule; a string too long for its field refused rather than truncated (and the network it belonged to dropped with it); a negative number clamped rather than wrapped into a `uint8_t`; and **valid JSON that is not an object** — `[]`, `42`, `"hello"` — restored rather than read as an object with no fields in it |
+   | `components/buttons` | the debounce, which is the only part of this with logic to get wrong: a window that starts when the level is *first seen*, a bounce shorter than it swallowed, a spike that settles back reporting nothing, and the millisecond counter wrapping at ~49 days being a subtraction rather than a special case. Above it: `active_low` per button, because §10.1 found `PWR` wired the other way round; `Init` adopting a button that is **already down**, which is §10.15's whole scenario; `Init` refusing a table with no rows or an unfilled `GPIO_NUM_NC` pin; and `HeldFor` reaching five seconds through a poll loop, giving up the moment it is released, and costing nothing on the boots where nobody is holding anything |
+   | `components/timezone` | the table checked against itself — every name looks itself up, every rule passes `LooksLikePosix`, no name does, and an index past the end answers row 0 rather than reading past the array — plus the aliases people actually type (`Europe/Kiev`, `Asia/Calcutta`), a shared rule named after its family rather than after a city, and the one that matters most: **an unknown zone answering `nullptr` rather than a guess**, because §10.8.2's named failure is libc silently reading a misspelling as UTC |
+   | `components/audio` (speaker) | mostly the RIFF parser, which is where the value is: a `LIST` chunk between `fmt ` and `data` walked past, an odd-sized chunk padded the way RIFF requires, a 40-byte `WAVE_FORMAT_EXTENSIBLE` header stepped over, compressed-but-in-a-.wav named apart from not-a-WAV, and three claims a file is not allowed to make about itself — a `fmt ` chunk too short to hold a format, a `data` chunk with nothing in it, and a chunk length that runs off the end of the file. Then what reaches the wire — the fake channel **captures the bytes**, so "it streamed the audio and not the header" is known rather than guessed; stereo and 8-bit refused without ever unmuting; a truncated `data` chunk played as far as the file goes; the codec muted again after a failed write; a rate change stopping the channel, retuning both halves, and starting it — and **a rate the codec cannot clock refused before the channel is stopped**, with the next file still playing afterwards, which is the bug that section below is about |
 
    The fake platform is `host_test/fakes/` — an ESP-IDF-shaped set of headers
    with a register-file I²C device behind them. It models the shape all five
@@ -1095,14 +1094,59 @@ Three tiers, and the first one is where nearly everything belongs:
    headers rather than the interface that section originally specified.
 
    **Every one of these was mutation-checked rather than trusted**: break the
-   rule, watch the test that covers it fail, put it back. Sixteen so far — the
-   card-outranks-navigation rule, the lease timeout, `Recover`'s handle drop,
-   the battery field width, `PowerOff`'s refusal, the RTC's OS flag, and
-   `config`'s three: the boot-time recovery, the restore-on-bad-file, and the
-   atomic write; plus `Init` adopting a held button, `active_low` being per
-   button, and the zone lookup refusing to guess. Three more needed no
-   mutation, because they failed on the real code the first time they ran:
-   §10.14.3 has two, §10.8.2 the third, and §10.8.1 the fourth.
+   rule, watch the test that covers it fail, put it back. **Twenty so far**,
+   and the number is the length of this list rather than a running tally
+   somebody has to keep honest — the card-outranks-navigation rule, the lease
+   timeout, `Recover`'s handle drop, the battery field width, `PowerOff`'s
+   refusal, the RTC's OS flag, and `config`'s three: the boot-time recovery,
+   the restore-on-bad-file, and the atomic write; plus `Init` adopting a held
+   button, `active_low` being per button, and the zone lookup refusing to
+   guess. The last eight are the ones the pass below added: the speaker's
+   rate check and its rollback, the short `fmt ` chunk, the empty `data`
+   chunk, `config`'s object check, `Recover`'s lease, `AddDevice`'s lease,
+   and the codec's `present_` guard.
+
+   Four more needed no mutation, because they failed on the real code the
+   first time they ran: §10.14.3 has two, §10.8.2 the third, and §10.8.1 the
+   fourth.
+
+   **Four bugs came out of the pass that asked "what else can a caller do?"**,
+   and the shape they share is worth more than any of them individually:
+   each is a **decision taken after something had already been changed**,
+   where the fix is to decide first and touch nothing until then. §10.7 states
+   that rule for `poweroff` and §10.8.2 for a bad date; these are the places
+   it had not been applied.
+
+   - **A WAV at a rate the codec cannot clock left the speaker dead until a
+     reboot.** `Reconfigure` stopped the I²S channel, retuned it, and only
+     then asked the codec — which refuses anything outside its five rates. The
+     channel stayed stopped, and the *next* file matched `sample_rate_` and
+     skipped the reconfigure entirely, so every playback after it failed. A
+     22 050 Hz alert sound is a plausible thing to drop into
+     `spiffs_image/`. It asks first now, and rolls the clock back if the
+     retune fails partway.
+   - **`Bus::Recover` skipped the lease.** It removes every device handle and
+     deletes the driver — the most destructive thing in that class — while
+     another task could be mid-transfer with a handle it had already been
+     given. One core with preemption makes that a use-after-free rather than a
+     race that usually works. It takes the lease now (§10.14.3), waits longer
+     than an ordinary acquire because the holder it is waiting on is the stuck
+     one, and tears nothing down if it cannot have it.
+   - **A `config.json` containing valid JSON that is not an object read as an
+     empty config.** `[]`, `42` and `"hello"` all parse; every field lookup
+     then answers null, so the device came up on the defaults, said nothing,
+     and left the file to do the same next boot. §10.15's restore is for
+     exactly this.
+   - **The codec's setters checked for a bus and not for a chip.** After a
+     failed `Init`, `address_` is still 0, so `SetVolume` went out to I²C
+     address 0x00 — the general-call address — and took a slot in the bus's
+     fixed device table for a chip that is not there.
+
+   And two the WAV parser was handing back rather than refusing: a `fmt `
+   chunk shorter than sixteen bytes, which left `bits` reading 0 out of a
+   zeroed buffer and presented it as a format the file had stated; and a
+   `data` chunk of zero length, which "played" by unmuting, waiting out the
+   drain and muting again — a click for nothing.
 
    **One mutation survived, and that was the useful one.** Hard-coding the WAV
    parser's `data_offset` to the canonical 44 changed nothing — because
@@ -1494,10 +1538,20 @@ every driver takes a lease first. In C++ that lease is a scope guard, so
   for the clock, use the last value; for touch, drop the frame's read.
 - **Hold it briefly.** Nothing sleeps, retries a network, or draws while holding
   the bus. A lease held across an LVGL flush is a bug even when it works.
-- **Recovery belongs to the owner.** A slave holding SDA low is a known I²C
-  failure with a known fix (clock out until it lets go, then re-init); it is
-  handled once, in the bus, with a bounded number of attempts and one log line —
-  not five times in five drivers.
+- **Recovery belongs to the owner — and takes the lease like everything else.**
+  A slave holding SDA low is a known I²C failure with a known fix (clock out
+  until it lets go, then re-init); it is handled once, in the bus, with a
+  bounded number of attempts and one log line — not five times in five
+  drivers. It is also the most destructive thing in the class: it removes
+  every device handle and deletes the driver, so running it beside another
+  task's transfer hands that task a handle that has been freed. It skipped the
+  acquire at first, and on one core with preemption that is a use-after-free
+  rather than a race that usually works. Now it waits — longer than an
+  ordinary acquire, because the holder it is waiting on is by definition the
+  stuck one — and if the bus does not come free it tears nothing down and says
+  so. Which makes it the second thing on this bus that **must not be called
+  from inside a lease**: the mutex is not recursive, and `AddDevice` is the
+  first.
 - **The speed is per device, and this reverses what this section used to say.**
   The old rule was one clock for the wire, the minimum the slowest chip
   tolerates — which is the right rule for the legacy driver, where the clock is
@@ -1565,7 +1619,7 @@ board includes exactly `i2c_bus.h`, `esp_err.h`, `esp_log.h` and FreeRTOS, so
 the same shims made the PMIC, the RTC, the IMU and the codec testable at no
 extra cost. §10.11 lists what is covered.
 
-**And it found two things, both now fixed.** Neither was visible on hardware,
+**And it found three things, all now fixed.** None was visible on hardware,
 which is the point of the tier existing at all — the board worked either way.
 
 - **`Es8311` took the lease per call.** Its private helpers each did their own
@@ -1582,12 +1636,19 @@ which is the point of the tier existing at all — the board worked either way.
   read and a skipped clock tick nobody would ever trace back. Both drivers now
   cut the sequence exactly at the wait, so a lease is either side of it and
   never across it.
+- **`Bus::Recover` did not take the lease at all** — the rule above, broken by
+  the one function with the most to lose from it. Found by asking the question
+  the other two tests had already taught: what does this look like when
+  somebody else is holding the bus? It waits now, and refuses rather than
+  tearing down.
 
 The fake counts milliseconds slept with the mutex held, which is what makes the
 second one an assertion rather than a code-review habit. The first is asserted
 as a lease *count* — not "exactly one", because a driver that must let go
 around a wait legitimately takes more than one, and a bound is the honest form
-of the rule.
+of the rule. The third is asserted the way §10.14.3's timeout rule already
+is — as the tick count the acquire asked for — because a fake mutex that never
+blocks is the only place "it waited, and bounded" is a visible fact.
 
 #### 10.14.4 The house precedent — what is borrowed, and what is not
 
@@ -1819,4 +1880,19 @@ Defaults parse; every field missing; a truncated file and a non-JSON file both
 ending in a restore; a restore leaving `registration.json` untouched; `forget`
 removing it; and `config.json` and `config.init.json` having the same shape —
 the last one is the test that catches the two drifting apart.
+
+Three more that came out of asking what an *edited* file can contain, since
+this one is meant to be edited by hand:
+
+- **valid JSON that is not an object** — `[]`, `42`, `"hello"` — is restored
+  rather than read as an object with no fields in it. That was a real hole:
+  every lookup answered null, the device came up on the defaults saying
+  nothing, and the file stayed to do it again next boot;
+- a string longer than its field is **refused, not truncated** (`CopyString`
+  says why: a half-length SSID fails to connect and gives no hint which half
+  is being used), and a network whose SSID was refused is dropped rather than
+  kept with an empty one;
+- a negative number is **clamped, not wrapped** — without the clamp `-5`
+  reaches `uint8_t` as 251 and `-1` reaches `uint16_t` as 65535, which is a
+  brightness and a blank timeout that both look deliberate.
 

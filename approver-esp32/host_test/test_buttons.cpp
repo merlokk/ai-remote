@@ -203,6 +203,25 @@ void test_buttons_refuses_more_than_it_has_slots_for(void) {
     TEST_ASSERT_NOT_EQUAL(ESP_OK, keys.Init(many, buttons::kMaxButtons + 2));
 }
 
+void test_buttons_refuses_a_table_it_cannot_use(void) {
+    // No table, no buttons, and a button with no pin. The last one is the
+    // realistic mistake: `board.h` is a hand-written map (§10.1), and a row
+    // that has not been filled in yet reads as `GPIO_NUM_NC` — which
+    // `gpio_config` would happily turn into a mask of `1 << -1`.
+    buttons::Buttons keys;
+    TEST_ASSERT_EQUAL_INT(ESP_ERR_INVALID_ARG, keys.Init(nullptr, 3));
+    TEST_ASSERT_EQUAL_INT(ESP_ERR_INVALID_ARG, keys.Init(kBoard, 0));
+    TEST_ASSERT_FALSE(keys.Ready());
+
+    const buttons::Config unwired[] = {
+        {.pin = kBootPin, .name = "boot", .active_low = true, .pull_up = true},
+        {.pin = GPIO_NUM_NC, .name = "key", .active_low = true, .pull_up = true},
+    };
+    TEST_ASSERT_EQUAL_INT(ESP_ERR_INVALID_ARG, keys.Init(unwired, 2));
+    TEST_ASSERT_FALSE(keys.Ready());
+    TEST_ASSERT_EQUAL_UINT(0, keys.Count());
+}
+
 void test_buttons_active_low_and_active_high_are_both_honoured(void) {
     // **§10.1's inverted `PWR`.** `BOOT` and `KEY` short their pin to ground;
     // GPIO18 rests at 0 and goes high while the button is held, which is the
@@ -350,6 +369,7 @@ void RegisterButtonsTests(void) {
 
     RUN_TEST(test_buttons_init_takes_the_board_table);
     RUN_TEST(test_buttons_refuses_more_than_it_has_slots_for);
+    RUN_TEST(test_buttons_refuses_a_table_it_cannot_use);
     RUN_TEST(test_buttons_active_low_and_active_high_are_both_honoured);
     RUN_TEST(test_buttons_poll_reports_a_debounced_edge);
     RUN_TEST(test_buttons_one_press_does_not_move_the_others);

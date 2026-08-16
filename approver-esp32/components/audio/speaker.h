@@ -76,6 +76,11 @@ class Speaker {
    private:
     esp_err_t Reconfigure(uint32_t sample_rate);
 
+    // Just the channel's clock. Split out because the rollback in
+    // `Reconfigure` writes the *old* rate back through the same three lines,
+    // and two copies of a clock configuration is how they drift apart.
+    esp_err_t Retune(uint32_t sample_rate);
+
     Es8311 *codec_ = nullptr;
     i2s_chan_handle_t channel_ = nullptr;
     SpeakerPins pins_ = {};

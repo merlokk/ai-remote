@@ -283,14 +283,15 @@ approver-esp32\host_test\run.cmd i2c pmic   # several
 ```
 
 A suite name is matched as a substring, and the names are `navigator`, `i2c`,
-`pmic`, `rtc`, `imu`, `es8311`, `config`, `buttons`, `timezone` and `speaker`. Run everything before committing;
-filter while debugging, because scrolling past a hundred lines of `PASS` to
-find the one that matters is how a suite stops being run.
+`pmic`, `rtc`, `imu`, `es8311`, `config`, `buttons`, `timezone` and `speaker`.
+Run everything before committing; filter while debugging, because scrolling
+past a hundred lines of `PASS` to find the one that matters is how a suite
+stops being run.
 
 The tail of a good run:
 
 ```
-188 Tests 0 Failures 0 Ignored
+209 Tests 0 Failures 0 Ignored
 OK
 ```
 
@@ -308,10 +309,17 @@ preview below, CMake and Ninja from ESP-IDF. Two paths it needs:
 **Mutation-check anything worth trusting.** The habit this suite is built on:
 break the rule the test claims to protect, run it, watch the right test fail,
 put it back. It takes a minute and it is the difference between a test and a
-line that always passes. Sixteen invariants have been through it so far; §10.11
+line that always passes. Twenty invariants have been through it so far; §10.11
 lists them — including one that *survived*, which turned out to be the most
 useful run of all: a mutation nothing catches is a question about the code, not
 a gap in the tests.
+
+The cheap way to do a batch of them: copy the driver aside, `git checkout --`
+it back to the last commit, run the suite, and check that **exactly** the
+tests you expected fail. Reverting the whole file is a coarse mutation, but it
+is the honest one when a change added several rules at once, and "seven
+failures, and they are these seven" is a stronger statement than seven
+separate runs.
 
 One trap in doing it: **`/W4 /WX` turns a now-unused variable into a build
 error**, so a mutation has to keep consuming whatever it stops using —

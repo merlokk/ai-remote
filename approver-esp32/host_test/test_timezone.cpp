@@ -38,6 +38,16 @@ void test_tz_the_table_is_not_empty_and_every_row_is_complete(void) {
     }
 }
 
+void test_tz_an_index_past_the_end_answers_the_first_row(void) {
+    // `config zones [filter]` walks this table with an index an operator can
+    // influence, and `At` returns a reference — so the alternative to clamping
+    // is reading past the array and printing whatever is next in flash. The
+    // first row is the answer because it is the one row that is always there.
+    TEST_ASSERT_EQUAL_STRING(tz::At(0).name, tz::At(tz::Count()).name);
+    TEST_ASSERT_EQUAL_STRING(tz::At(0).name, tz::At(tz::Count() + 1000).name);
+    TEST_ASSERT_EQUAL_STRING("UTC", tz::At(0).name);
+}
+
 void test_tz_every_name_in_the_table_looks_itself_up(void) {
     // The table and the lookup cannot disagree — but a row added with a
     // trailing space, or a duplicate name shadowing another, would make them.
@@ -201,6 +211,7 @@ void test_tz_a_fixed_offset_reads_back_with_the_sign_flipped(void) {
 
 void RegisterTimezoneTests(void) {
     RUN_TEST(test_tz_the_table_is_not_empty_and_every_row_is_complete);
+    RUN_TEST(test_tz_an_index_past_the_end_answers_the_first_row);
     RUN_TEST(test_tz_every_name_in_the_table_looks_itself_up);
     RUN_TEST(test_tz_every_rule_in_the_table_is_a_posix_rule);
     RUN_TEST(test_tz_no_name_in_the_table_looks_like_a_rule);

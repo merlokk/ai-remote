@@ -76,6 +76,16 @@ esp_err_t Parse(const char *json, Data *out) {
     if (root == nullptr) {
         return ESP_ERR_INVALID_ARG;
     }
+    // **Valid JSON is not the same as a config.** `[]`, `42` and `"hello"` all
+    // parse; every `GetObjectItem` below then answers null and the file reads
+    // as "an object with no fields in it", so a device would come up on the
+    // defaults *and leave the rubbish on the filesystem to do it again next
+    // boot*. §10.15 says an unusable file is restored — this is the shape of
+    // unusable that still parses.
+    if (!cJSON_IsObject(root)) {
+        cJSON_Delete(root);
+        return ESP_ERR_INVALID_ARG;
+    }
 
     // Defaults first, then whatever the file says on top: every field may be
     // missing, and a half-written file leaves the rest at sane values rather

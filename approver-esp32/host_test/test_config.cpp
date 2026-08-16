@@ -236,6 +236,81 @@ void test_config_an_oversized_file_is_restored(void) {
     TEST_ASSERT_TRUE(config::Loaded());
 }
 
+void test_config_valid_json_that_is_not_an_object_is_restored(void) {
+    // **Parseable is not usable.** `[]`, `42` and `"hello"` are all valid JSON,
+    // and every field lookup against them answers null — so the file used to
+    // read as "an object with nothing in it": the device came up on the
+    // defaults, said nothing, and left the rubbish on the filesystem to do the
+    // same next boot. §10.15's restore is for exactly this, and this is the
+    // shape of unusable that still parses.
+    const char *const not_configs[] = {"[]", "42", "\"hello\"", "[{\"audio\":{\"volume\":9}}]"};
+
+    for (const char *json : not_configs) {
+        FreshWithDefaults();
+        fake::PutFile("config.json", json);
+
+        TEST_ASSERT_EQUAL_INT_MESSAGE(ESP_OK, config::Init(), json);
+        TEST_ASSERT_TRUE(config::Loaded());
+
+        // Restored means the file was replaced, not just that memory looks
+        // sane — otherwise the next boot hits the same thing again.
+        char back[512] = {};
+        TEST_ASSERT_TRUE(fake::GetFile("config.json", back, sizeof(back)));
+        TEST_ASSERT_NOT_NULL_MESSAGE(std::strstr(back, "volume"), json);
+        TEST_ASSERT_NOT_NULL_MESSAGE(std::strstr(back, "nats"), json);
+    }
+}
+
+void test_config_a_string_too_long_for_its_field_is_refused_not_truncated(void) {
+    // `CopyString` says why: a silently shortened SSID or URL fails to connect
+    // and gives no hint which half of it the device is using. So the field
+    // keeps the value it had — which for a boot-time parse is the default.
+    FreshWithDefaults();
+    char json[512] = {};
+    char long_url[config::kUrlSize + 40] = {};
+    std::memset(long_url, 'u', sizeof(long_url) - 1);
+    snprintf(json, sizeof(json), R"({"nats":{"url":"nats://%s:4222"}})", long_url);
+    fake::PutFile("config.json", json);
+
+    TEST_ASSERT_EQUAL_INT(ESP_OK, config::Init());
+
+    config::Data defaults = {};
+    config::FillDefaults(&defaults);
+    TEST_ASSERT_EQUAL_STRING(defaults.nats.url, config::Get().nats.url);
+}
+
+void test_config_a_network_whose_ssid_does_not_fit_is_dropped(void) {
+    // The same refusal, one layer down, and here it has a second effect worth
+    // pinning: a slot whose `ssid` was refused stays empty, and an empty ssid
+    // is what makes the network not count. Half a network is not a network.
+    FreshWithDefaults();
+    fake::PutFile("config.json",
+                  R"({"wifi":{"networks":[
+                      {"ssid":"012345678901234567890123456789012345","password":"x"},
+                      {"ssid":"desk","password":"y"}]}})");
+
+    TEST_ASSERT_EQUAL_INT(ESP_OK, config::Init());
+    TEST_ASSERT_EQUAL_UINT8(1, config::Get().wifi.network_count);
+    TEST_ASSERT_EQUAL_STRING("desk", config::Get().wifi.networks[0].ssid);
+}
+
+void test_config_a_negative_number_is_clamped_and_not_wrapped(void) {
+    // `CopyNumber` clamps into a `long` before the cast. Without the clamp,
+    // −5 reaches `uint8_t` as 251 and −1 reaches `uint16_t` as 65535 — a
+    // brightness and a blank timeout that are both wrong in a way that looks
+    // deliberate.
+    FreshWithDefaults();
+    fake::PutFile("config.json",
+                  R"({"display":{"brightness":-5,"dimSeconds":-1,"blankSeconds":99999},
+                      "audio":{"volume":-20}})");
+
+    TEST_ASSERT_EQUAL_INT(ESP_OK, config::Init());
+    TEST_ASSERT_EQUAL_UINT8(0, config::Get().display.brightness);
+    TEST_ASSERT_EQUAL_UINT16(0, config::Get().display.dim_seconds);
+    TEST_ASSERT_EQUAL_UINT16(65535, config::Get().display.blank_seconds);
+    TEST_ASSERT_EQUAL_UINT8(0, config::Get().audio.volume_percent);
+}
+
 void test_config_a_restore_does_not_touch_the_registration(void) {
     // **The reason §10.15 keeps them in two files.** A device that comes back
     // on default settings is a minute's work; one that comes back unregistered
@@ -419,8 +494,13 @@ void RegisterConfigTests(void) {
     RUN_TEST(test_config_ignores_networks_past_the_fixed_capacity);
     RUN_TEST(test_config_skips_a_network_with_no_ssid);
 
+    RUN_TEST(test_config_a_string_too_long_for_its_field_is_refused_not_truncated);
+    RUN_TEST(test_config_a_network_whose_ssid_does_not_fit_is_dropped);
+    RUN_TEST(test_config_a_negative_number_is_clamped_and_not_wrapped);
+
     RUN_TEST(test_config_a_missing_file_is_restored);
     RUN_TEST(test_config_a_file_that_is_not_json_is_restored);
+    RUN_TEST(test_config_valid_json_that_is_not_an_object_is_restored);
     RUN_TEST(test_config_a_truncated_file_is_restored);
     RUN_TEST(test_config_an_oversized_file_is_restored);
     RUN_TEST(test_config_a_restore_does_not_touch_the_registration);

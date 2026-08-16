@@ -70,6 +70,10 @@ struct WavOptions {
     bool omit_data = false;
     // Claim more data than the payload holds — a truncated file.
     uint32_t claimed_data_bytes = 0;  // 0 means "the truth"
+    // A chunk before `data` whose declared length runs off the end of the
+    // file. RIFF's own version of §10.5's "a length that does not match the
+    // bytes that follow".
+    uint32_t lying_chunk_bytes = 0;
 };
 
 void PushFmt(std::vector<uint8_t> &wav, const WavOptions &options) {
@@ -113,6 +117,13 @@ std::vector<uint8_t> MakeWav(const std::vector<uint8_t> &samples, WavOptions opt
         for (size_t i = 0; i + 1 < sizeof(kInfo); ++i) {
             wav.push_back(static_cast<uint8_t>(kInfo[i]));
         }
+    }
+
+    if (options.lying_chunk_bytes != 0) {
+        // Eight bytes of header claiming far more payload than follows.
+        PushTag(wav, "junk");
+        PushU32(wav, options.lying_chunk_bytes);
+        wav.push_back(0x00);
     }
 
     if (options.odd_chunk) {
@@ -341,6 +352,77 @@ void test_speaker_refuses_data_before_fmt(void) {
     TEST_ASSERT_EQUAL_INT(ESP_ERR_NOT_SUPPORTED, rig.speaker.Describe("backwards.wav", &format));
 }
 
+void test_speaker_refuses_a_fmt_chunk_too_short_to_hold_a_format(void) {
+    // **Fourteen bytes is everything but `wBitsPerSample`**, and it is what a
+    // file cut off mid-header looks like. The parser reads into a zeroed
+    // sixteen-byte buffer, so a short chunk used to come back as a *valid*
+    // format whose `bits` happened to be 0 — a number nobody wrote, presented
+    // by `play` as if the file had said it.
+    Rig rig;
+    BringUp(rig);
+
+    std::vector<uint8_t> wav;
+    PushTag(wav, "RIFF");
+    PushU32(wav, 0);
+    PushTag(wav, "WAVE");
+    PushTag(wav, "fmt ");
+    PushU32(wav, 14);
+    PushU16(wav, 1);      // PCM
+    PushU16(wav, 1);      // mono
+    PushU32(wav, 16000);  // rate
+    PushU32(wav, 32000);  // byte rate
+    PushU16(wav, 2);      // block align — and then nothing
+    PushTag(wav, "data");
+    PushU32(wav, 32);
+    for (int i = 0; i < 32; ++i) {
+        wav.push_back(0xE0);
+    }
+    PutWav("shortfmt.wav", wav);
+
+    audio::WavFormat format = {};
+    TEST_ASSERT_EQUAL_INT(ESP_ERR_INVALID_SIZE, rig.speaker.Describe("shortfmt.wav", &format));
+    TEST_ASSERT_EQUAL_INT(ESP_ERR_INVALID_SIZE, rig.speaker.PlayWav("shortfmt.wav"));
+    TEST_ASSERT_TRUE(rig.codec.Muted());
+    TEST_ASSERT_EQUAL_UINT(0, fake::P().i2s.written_total);
+}
+
+void test_speaker_refuses_a_data_chunk_with_nothing_in_it(void) {
+    // A header and no audio — the same answer as a file with no `data` chunk
+    // at all, because the operator's problem is the same one. It matters that
+    // this is refused rather than "played": a zero-length success unmutes the
+    // codec, waits out the drain and mutes it again, which is a click for
+    // nothing.
+    Rig rig;
+    BringUp(rig);
+    WavOptions options;
+    options.claimed_data_bytes = 0;
+    PutWav("silent.wav", MakeWav({}, options));
+
+    audio::WavFormat format = {};
+    TEST_ASSERT_EQUAL_INT(ESP_ERR_NOT_FOUND, rig.speaker.Describe("silent.wav", &format));
+    TEST_ASSERT_EQUAL_INT(ESP_ERR_NOT_FOUND, rig.speaker.PlayWav("silent.wav"));
+    TEST_ASSERT_TRUE(rig.codec.Muted());
+}
+
+void test_speaker_refuses_a_chunk_that_claims_more_than_the_file_holds(void) {
+    // §10.10's rule about untrusted input, met by the one parser this firmware
+    // has today: a declared length is a claim, not a fact. Seeking past the end
+    // of the file *succeeds* on every stdio there is, so the failure has to be
+    // caught at the next read rather than at the seek.
+    Rig rig;
+    BringUp(rig);
+    WavOptions options;
+    options.lying_chunk_bytes = 4000000;
+    PutWav("liar.wav", MakeWav(Samples(64), options));
+
+    audio::WavFormat format = {};
+    // The format was found and the audio was not — the file is differently
+    // broken from "not a WAV", and it says so.
+    TEST_ASSERT_EQUAL_INT(ESP_ERR_NOT_FOUND, rig.speaker.Describe("liar.wav", &format));
+    TEST_ASSERT_EQUAL_INT(ESP_ERR_NOT_FOUND, rig.speaker.PlayWav("liar.wav"));
+    TEST_ASSERT_EQUAL_UINT(0, fake::P().i2s.written_total);
+}
+
 void test_speaker_refuses_a_truncated_header(void) {
     Rig rig;
     BringUp(rig);
@@ -457,6 +539,80 @@ void test_speaker_does_not_retune_for_the_rate_it_is_already_at(void) {
     TEST_ASSERT_EQUAL_UINT(0, fake::P().i2s.disable_count);
 }
 
+void test_speaker_refuses_a_rate_the_codec_cannot_clock(void) {
+    // **The bug this pins used to be silent and permanent.** The codec has
+    // five rates (`es8311.h`) and refuses the rest; the channel has to be
+    // *stopped* before it can be retuned. So asking the codec last meant
+    // finding out with the channel already stopped — and it stayed stopped,
+    // because the next file at 16 kHz matches `sample_rate_` and skips the
+    // reconfigure entirely. One 22 050 Hz WAV killed the speaker until a
+    // reboot. Refuse first, touch nothing: the same call the RTC makes about
+    // an impossible date and the PMIC about a power-off over USB.
+    Rig rig;
+    BringUp(rig, 16000);
+    WavOptions options;
+    options.sample_rate = 22050;
+    PutWav("odd.wav", MakeWav(Samples(64), options));
+
+    TEST_ASSERT_EQUAL_INT(ESP_ERR_NOT_SUPPORTED, rig.speaker.PlayWav("odd.wav"));
+
+    TEST_ASSERT_TRUE(fake::P().i2s.enabled);
+    TEST_ASSERT_EQUAL_UINT(0, fake::P().i2s.disable_count);
+    TEST_ASSERT_EQUAL_UINT(0, fake::P().i2s.reconfig_count);
+    TEST_ASSERT_EQUAL_UINT32(16000, fake::P().i2s.sample_rate);
+    TEST_ASSERT_EQUAL_UINT32(16000, rig.codec.SampleRate());
+    TEST_ASSERT_TRUE(rig.codec.Muted());
+    TEST_ASSERT_EQUAL_UINT(0, fake::P().i2s.written_total);
+}
+
+void test_speaker_still_plays_after_a_file_it_refused(void) {
+    // The half that says the refusal above cost nothing. Without it this test
+    // is the one that fails, and it fails on the *second* file — which is
+    // exactly the shape of bug report nobody can reproduce from a description.
+    Rig rig;
+    BringUp(rig, 16000);
+    WavOptions odd;
+    odd.sample_rate = 22050;
+    PutWav("odd.wav", MakeWav(Samples(64), odd));
+    const std::vector<uint8_t> samples = Samples(256);
+    PutWav("chirp.wav", MakeWav(samples));
+
+    TEST_ASSERT_NOT_EQUAL(ESP_OK, rig.speaker.PlayWav("odd.wav"));
+
+    TEST_ASSERT_EQUAL_INT(ESP_OK, rig.speaker.PlayWav("chirp.wav"));
+    TEST_ASSERT_EQUAL_UINT(samples.size(), fake::P().i2s.written_total);
+    TEST_ASSERT_EQUAL_MEMORY(samples.data(), fake::P().i2s.captured, samples.size());
+}
+
+void test_speaker_puts_the_channel_back_when_the_retune_fails(void) {
+    // The rate is one the codec *can* clock, and the codec still refuses —
+    // because the bus is held by somebody else and `SetSampleRate` gives up
+    // rather than blocking (§10.14.3). That is a transient, and the channel
+    // must not be left stopped over it: the rollback restores the old clock
+    // and starts it again.
+    Rig rig;
+    BringUp(rig, 16000);
+    WavOptions fast;
+    fast.sample_rate = 48000;
+    PutWav("fast.wav", MakeWav(Samples(64), fast));
+    PutWav("chirp.wav", MakeWav(Samples(128)));
+
+    fake::TakeMutexFromAnotherTask();
+    TEST_ASSERT_EQUAL_INT(ESP_ERR_TIMEOUT, rig.speaker.PlayWav("fast.wav"));
+    fake::GiveMutexFromAnotherTask();
+
+    // Running again, at the rate it was actually running at.
+    TEST_ASSERT_TRUE(fake::P().i2s.enabled);
+    TEST_ASSERT_EQUAL_UINT32(16000, fake::P().i2s.sample_rate);
+    TEST_ASSERT_EQUAL_UINT32(16000, rig.speaker.SampleRate());
+    TEST_ASSERT_TRUE(rig.codec.Muted());
+    TEST_ASSERT_EQUAL_UINT(0, fake::P().i2s.written_total);
+
+    // And the next file goes out.
+    TEST_ASSERT_EQUAL_INT(ESP_OK, rig.speaker.PlayWav("chirp.wav"));
+    TEST_ASSERT_EQUAL_UINT(128, fake::P().i2s.written_total);
+}
+
 void test_speaker_refuses_stereo_and_says_nothing_audible(void) {
     // §10.13 gives this one job and one shape. The important half of this test
     // is the second assertion: a file that will not play must not unmute the
@@ -548,6 +704,9 @@ void RegisterSpeakerTests(void) {
     RUN_TEST(test_speaker_names_a_compressed_wav_separately);
     RUN_TEST(test_speaker_refuses_a_file_with_no_data_chunk);
     RUN_TEST(test_speaker_refuses_data_before_fmt);
+    RUN_TEST(test_speaker_refuses_a_fmt_chunk_too_short_to_hold_a_format);
+    RUN_TEST(test_speaker_refuses_a_data_chunk_with_nothing_in_it);
+    RUN_TEST(test_speaker_refuses_a_chunk_that_claims_more_than_the_file_holds);
     RUN_TEST(test_speaker_refuses_a_truncated_header);
     RUN_TEST(test_speaker_reports_a_missing_file);
 
@@ -557,6 +716,9 @@ void RegisterSpeakerTests(void) {
     RUN_TEST(test_speaker_streams_in_more_than_one_buffer_fill);
     RUN_TEST(test_speaker_retunes_the_channel_and_the_codec_together);
     RUN_TEST(test_speaker_does_not_retune_for_the_rate_it_is_already_at);
+    RUN_TEST(test_speaker_refuses_a_rate_the_codec_cannot_clock);
+    RUN_TEST(test_speaker_still_plays_after_a_file_it_refused);
+    RUN_TEST(test_speaker_puts_the_channel_back_when_the_retune_fails);
     RUN_TEST(test_speaker_refuses_stereo_and_says_nothing_audible);
     RUN_TEST(test_speaker_refuses_eight_bit_samples);
     RUN_TEST(test_speaker_plays_what_a_truncated_file_actually_holds);

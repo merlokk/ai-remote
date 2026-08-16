@@ -61,6 +61,14 @@ class Es8311 {
     bool Present() const { return present_; }
     uint8_t Address() const { return address_; }
 
+    // Whether this driver can clock a rate at all, **askable without touching
+    // the chip**. `Speaker::Reconfigure` needs exactly that: it stops the I²S
+    // channel before it can retune it, so finding out from the codec's error
+    // return would mean finding out with the channel already stopped — which
+    // is how one unplayable file used to leave the speaker silent until the
+    // next reboot.
+    static bool RateSupported(uint32_t rate);
+
     // One of the rates whose dividers are the 256×fs row: 8000, 16000, 32000,
     // 44100, 48000. Anything else is refused rather than approximated —
     // playing a file at the wrong rate is a chirp that sounds broken and a
@@ -77,6 +85,14 @@ class Es8311 {
     bool Muted() const { return muted_; }
 
    private:
+    // A codec that identified itself on a bus that is up. **The public setters
+    // gate on this rather than on the bus alone**: after a failed `Init`,
+    // `address_` is still 0, so a `SetVolume` that only checked for a bus
+    // would go out to I²C address 0x00 and open a device slot for a chip that
+    // does not exist. Every other driver on this board checks `present_`; this
+    // one did not, and nothing said so.
+    bool Ready() const { return present_ && bus_ != nullptr; }
+
     // **Every one of these takes the lease rather than acquiring it**, and that
     // is the whole shape of this class (§10.14.3). The public methods above own
     // one `Acquire()` each and hand it down; a helper that took the bus itself

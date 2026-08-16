@@ -47,6 +47,12 @@ inline constexpr uint32_t kClockHz = 400000;
 inline constexpr uint32_t kDefaultAcquireMs = 50;
 inline constexpr int kTransferTimeoutMs = 100;
 
+// What `Recover` waits for the bus. Longer than an ordinary acquire because a
+// recovery is rare and the holder it is waiting on is, by definition, the task
+// that is stuck — and still bounded, because a recovery that blocks forever is
+// the watchdog panic this whole design exists to avoid.
+inline constexpr uint32_t kRecoverAcquireMs = 250;
+
 // Device handles are cached per address in a fixed table — no heap of ours
 // (§10.14.1), and this board has five chips on the bus.
 inline constexpr size_t kMaxDevices = 8;
@@ -116,6 +122,12 @@ class Bus {
     // A slave holding SDA low is a known failure with a known fix: clock it out
     // until it lets go, then re-init. Handled once, here, rather than five
     // times in five drivers. Bounded, and one log line.
+    //
+    // **It takes the lease itself, so do not call it holding one** — the same
+    // rule as `AddDevice` above, and for a sharper reason: this one removes
+    // every device handle and deletes the driver, so running it beside another
+    // task's transfer would hand that task a handle that has been freed. A bus
+    // it cannot get is `ESP_ERR_TIMEOUT` and nothing torn down.
     esp_err_t Recover();
 
    private:

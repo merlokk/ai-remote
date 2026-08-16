@@ -59,11 +59,11 @@ constexpr uint8_t kResolution16 = 3 << 2;
 // Reg 0x31, the DAC's two mute bits.
 constexpr uint8_t kDacMuteBits = 0x60;
 
-bool RateSupported(uint32_t rate) {
+}  // namespace
+
+bool Es8311::RateSupported(uint32_t rate) {
     return rate == 8000 || rate == 16000 || rate == 32000 || rate == 44100 || rate == 48000;
 }
-
-}  // namespace
 
 esp_err_t Es8311::WriteRegister(i2cbus::Lease &lease, uint8_t reg, uint8_t value) {
     return lease.WriteRegister(address_, reg, value);
@@ -175,7 +175,7 @@ esp_err_t Es8311::SetSampleRate(uint32_t rate) {
     if (!RateSupported(rate)) {
         return ESP_ERR_INVALID_ARG;
     }
-    if (bus_ == nullptr) {
+    if (!Ready()) {
         return ESP_ERR_INVALID_STATE;
     }
 
@@ -190,7 +190,7 @@ esp_err_t Es8311::SetVolume(uint8_t percent) {
     if (percent > 100) {
         percent = 100;
     }
-    if (bus_ == nullptr) {
+    if (!Ready()) {
         return ESP_ERR_INVALID_STATE;
     }
 
@@ -202,7 +202,7 @@ esp_err_t Es8311::SetVolume(uint8_t percent) {
 }
 
 esp_err_t Es8311::Mute(bool muted) {
-    if (bus_ == nullptr) {
+    if (!Ready()) {
         return ESP_ERR_INVALID_STATE;
     }
 

@@ -139,6 +139,74 @@ void test_pmic_init_turns_on_the_adc_channels_and_off_the_ts_one(void) {
     TEST_ASSERT_EQUAL_HEX8(0b0001'1101, written & 0b0001'1101);
 }
 
+void test_pmic_leaves_a_rail_alone_when_it_is_already_at_its_voltage(void) {
+    // **The vendor's `if (getXxxVoltage() != 3300)` guard, and it is not
+    // cosmetic**: DCDC1 supplies the C6 itself, so a write that changes
+    // nothing is a write that cannot disturb the rail the firmware is running
+    // on. 3300 mV encodes as (3300-1500)/100 = 18 for DC1 and (3300-500)/100 =
+    // 28 for an ALDO.
+    i2cbus::Bus bus;
+    BringUp(bus);
+    fake::Device *chip = PutOnWire();
+    chip->regs[0x82] = 18;  // DC1 already at 3300 mV
+    chip->regs[0x92] = 28;  // ALDO1..4 likewise
+    chip->regs[0x93] = 28;
+    chip->regs[0x94] = 28;
+    chip->regs[0x95] = 28;
+
+    pmic::Axp2101 axp;
+    TEST_ASSERT_EQUAL_INT(ESP_OK, axp.Init(bus));
+
+    // Read, yes; written, no.
+    TEST_ASSERT_NULL(fake::FindWrite(kAddr, 0x82));
+    TEST_ASSERT_NULL(fake::FindWrite(kAddr, 0x92));
+    TEST_ASSERT_NULL(fake::FindWrite(kAddr, 0x95));
+}
+
+void test_pmic_init_writes_a_rail_that_is_at_the_wrong_voltage(void) {
+    // The other side of the guard — otherwise "never writes" would pass by
+    // never configuring anything, which is the defect §10.1 records finding in
+    // this driver against the vendor's `pmicpower`.
+    i2cbus::Bus bus;
+    BringUp(bus);
+    fake::Device *chip = PutOnWire();
+    chip->regs[0x94] = static_cast<uint8_t>(0xE0 | 10);  // ALDO3 at 1500 mV, plus bits to keep
+
+    pmic::Axp2101 axp;
+    TEST_ASSERT_EQUAL_INT(ESP_OK, axp.Init(bus));
+
+    // 3300 mV, and the three bits above the voltage field untouched — they are
+    // not this driver's to clear.
+    TEST_ASSERT_EQUAL_HEX8(28, chip->regs[0x94] & 0x1F);
+    TEST_ASSERT_EQUAL_HEX8(static_cast<uint8_t>(0xE0), chip->regs[0x94] & 0xE0);
+}
+
+void test_pmic_init_programs_this_batterys_charge_currents(void) {
+    // §10.1: "the charge currents left at power-on defaults rather than this
+    // battery's 50/500/50 mA" was one of four things reading the vendor's
+    // component found missing from a driver that already worked. Each value
+    // shares a register with something else, so each is a masked
+    // read-modify-write and a blind write would be a way to change a
+    // neighbouring field by accident.
+    i2cbus::Bus bus;
+    BringUp(bus);
+    fake::Device *chip = PutOnWire();
+    chip->regs[0x61] = 0xFC;  // the bits each mask promises to keep…
+    chip->regs[0x62] = 0xE0;
+    chip->regs[0x63] = 0xF0;
+
+    pmic::Axp2101 axp;
+    pmic::Config config;
+    TEST_ASSERT_EQUAL_INT(ESP_OK, axp.Init(bus, config));
+
+    TEST_ASSERT_EQUAL_HEX8(static_cast<uint8_t>(0xFC | static_cast<uint8_t>(config.precharge)),
+                           chip->regs[0x61]);
+    TEST_ASSERT_EQUAL_HEX8(static_cast<uint8_t>(0xE0 | static_cast<uint8_t>(config.charge)),
+                           chip->regs[0x62]);
+    TEST_ASSERT_EQUAL_HEX8(static_cast<uint8_t>(0xF0 | static_cast<uint8_t>(config.termination)),
+                           chip->regs[0x63]);
+}
+
 void test_pmic_init_is_one_uninterrupted_sequence(void) {
     // The read-modify-writes above are only safe because nothing else can get
     // the bus between the read and the write. `AddDevice` takes its own lease

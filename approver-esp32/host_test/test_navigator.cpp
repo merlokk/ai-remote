@@ -109,6 +109,39 @@ void test_swipes_do_not_navigate_away_from_settings_or_wifi(void) {
     }
 }
 
+void test_settings_is_reached_from_the_clock_and_from_nowhere_else(void) {
+    // §10.8.5 puts the gear on the clock, and `navigator.cpp` says why the
+    // limits screen has no second way in: "one way in is one place to look
+    // when it is not where it was expected". The rule is only a rule if the
+    // other screen refuses.
+    Navigator nav;
+    GoTo(nav, ScreenId::kLimits);
+
+    TEST_ASSERT_FALSE(nav.Navigate(Nav::kGear));
+    TEST_ASSERT_FALSE(nav.Navigate(Nav::kSwipeUp));
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(ScreenId::kLimits), static_cast<int>(nav.Screen()));
+}
+
+void test_wifi_is_only_opened_from_settings(void) {
+    // The Wi-Fi screen is *inside* settings (§10.8.6), so the action that
+    // opens it has to be inert everywhere else — otherwise a stray event from
+    // the wrong screen lands the operator on a keyboard they did not ask for.
+    Navigator clock;
+    TEST_ASSERT_FALSE(clock.Navigate(Nav::kOpenWifi));
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(ScreenId::kClock), static_cast<int>(clock.Screen()));
+
+    Navigator limits;
+    GoTo(limits, ScreenId::kLimits);
+    TEST_ASSERT_FALSE(limits.Navigate(Nav::kOpenWifi));
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(ScreenId::kLimits), static_cast<int>(limits.Screen()));
+
+    // And from the Wi-Fi screen itself it is not a way to reload it.
+    Navigator wifi;
+    GoTo(wifi, ScreenId::kWifi);
+    TEST_ASSERT_FALSE(wifi.Navigate(Nav::kOpenWifi));
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(ScreenId::kWifi), static_cast<int>(wifi.Screen()));
+}
+
 void test_back_on_the_clock_does_nothing(void) {
     Navigator nav;
     TEST_ASSERT_FALSE(nav.Navigate(Nav::kBack));
@@ -248,6 +281,8 @@ void RegisterNavigatorTests(void) {
     RUN_TEST(test_clock_reaches_settings_by_swipe_up_and_by_the_gear);
     RUN_TEST(test_wifi_is_reached_from_settings_and_backs_out_one_step);
     RUN_TEST(test_swipes_do_not_navigate_away_from_settings_or_wifi);
+    RUN_TEST(test_settings_is_reached_from_the_clock_and_from_nowhere_else);
+    RUN_TEST(test_wifi_is_only_opened_from_settings);
     RUN_TEST(test_back_on_the_clock_does_nothing);
 
     RUN_TEST(test_a_request_appears_over_every_screen_without_moving_it);

@@ -81,6 +81,49 @@ void test_codec_refuses_a_chip_with_the_wrong_id(void) {
     TEST_ASSERT_FALSE(codec.Present());
 }
 
+void test_codec_that_never_identified_refuses_to_be_set(void) {
+    // **`address_` is 0 until `Init` finds the chip**, so a setter that only
+    // checked for a bus would send `SetVolume` to I²C address 0x00 — the
+    // general-call address — and open a device slot in the bus's fixed table
+    // for a chip that is not there. Every other driver on this board gates on
+    // `present_`; this one did not, and nothing said so.
+    i2cbus::Bus bus;
+    BringUp(bus);  // nothing on the wire
+
+    audio::Es8311 codec;
+    TEST_ASSERT_NOT_EQUAL(ESP_OK, codec.Init(bus, 16000));
+
+    // Both addresses `Init` tried are open — a device handle is configuration
+    // rather than a transaction, and the fake models the real driver in
+    // opening one for an address nothing answers at. What must not happen is a
+    // *third*, for address 0x00.
+    const size_t before = fake::P().transfer_count;
+    const size_t handles = fake::P().open_handles;
+    TEST_ASSERT_EQUAL_INT(ESP_ERR_INVALID_STATE, codec.SetVolume(50));
+    TEST_ASSERT_EQUAL_INT(ESP_ERR_INVALID_STATE, codec.Mute(false));
+    TEST_ASSERT_EQUAL_INT(ESP_ERR_INVALID_STATE, codec.SetSampleRate(48000));
+    TEST_ASSERT_EQUAL_UINT(before, fake::P().transfer_count);
+    TEST_ASSERT_EQUAL_UINT(handles, fake::P().open_handles);
+
+    // And a codec that was never handed a bus at all.
+    audio::Es8311 fresh;
+    TEST_ASSERT_EQUAL_INT(ESP_ERR_INVALID_STATE, fresh.SetVolume(50));
+    TEST_ASSERT_EQUAL_INT(ESP_ERR_INVALID_STATE, fresh.Mute(true));
+}
+
+void test_codec_rate_support_is_askable_without_the_chip(void) {
+    // `Speaker::Reconfigure` has to know before it stops the I²S channel, not
+    // after — the header says why, and the speaker suite has the failure this
+    // prevents. Static, so it is answerable with no bus and no codec.
+    TEST_ASSERT_TRUE(audio::Es8311::RateSupported(8000));
+    TEST_ASSERT_TRUE(audio::Es8311::RateSupported(16000));
+    TEST_ASSERT_TRUE(audio::Es8311::RateSupported(44100));
+    TEST_ASSERT_TRUE(audio::Es8311::RateSupported(48000));
+    TEST_ASSERT_FALSE(audio::Es8311::RateSupported(22050));
+    TEST_ASSERT_FALSE(audio::Es8311::RateSupported(0));
+    TEST_ASSERT_EQUAL_UINT(0, fake::P().transfer_count);
+}
+
 // --- Boot state ----------------------------------------------------------
 
 void test_codec_comes_up_muted(void) {
@@ -278,6 +321,8 @@ void RegisterEs8311Tests(void) {
     RUN_TEST(test_codec_is_also_found_with_ce_high);
     RUN_TEST(test_codec_absent_is_reported);
     RUN_TEST(test_codec_refuses_a_chip_with_the_wrong_id);
+    RUN_TEST(test_codec_that_never_identified_refuses_to_be_set);
+    RUN_TEST(test_codec_rate_support_is_askable_without_the_chip);
 
     RUN_TEST(test_codec_comes_up_muted);
     RUN_TEST(test_codec_init_does_not_take_a_lease_per_register);

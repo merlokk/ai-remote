@@ -290,6 +290,35 @@ void test_rtc_refuses_a_date_that_is_not_a_date(void) {
     TEST_ASSERT_EQUAL_UINT(before, fake::P().transfer_count);
 }
 
+void test_rtc_refuses_a_year_the_chip_cannot_hold(void) {
+    // **This chip has no century** — one BCD byte, 2000..2099, and the driver
+    // says so. A year outside that encodes as `ToBcd(year - 2000)` on a number
+    // that underflows or overflows, and what lands in the register is a
+    // believable-looking BCD byte: 2100 would read back as 2000, and 1999 as
+    // whatever the nibbles happen to spell. Refused before the bus is touched,
+    // like every other bad date.
+    i2cbus::Bus bus;
+    BringUp(bus);
+    PutOnWire();
+
+    rtc::Pcf85063 clock;
+    clock.Init(bus);
+
+    const size_t before = fake::P().transfer_count;
+    const rtc::DateTime too_late = {2100, 1, 1, 4, 0, 0, 0};
+    const rtc::DateTime too_early = {1999, 12, 31, 5, 23, 59, 59};
+    TEST_ASSERT_EQUAL_INT(ESP_ERR_INVALID_ARG, clock.Write(too_late));
+    TEST_ASSERT_EQUAL_INT(ESP_ERR_INVALID_ARG, clock.Write(too_early));
+    TEST_ASSERT_EQUAL_UINT(before, fake::P().transfer_count);
+
+    // And the last year it *can* hold goes through, so the boundary is where
+    // the driver says it is rather than one year in from it.
+    const rtc::DateTime last = {2099, 12, 31, 4, 23, 59, 59};
+    TEST_ASSERT_EQUAL_INT(ESP_OK, clock.Write(last));
+    TEST_ASSERT_EQUAL_HEX8(static_cast<uint8_t>(0x99),
+                           fake::DeviceAt(kAddr)->regs[kRegSeconds + 6]);
+}
+
 void test_rtc_round_trips(void) {
     i2cbus::Bus bus;
     BringUp(bus);
@@ -329,5 +358,6 @@ void RegisterRtcTests(void) {
     RUN_TEST(test_rtc_the_counters_go_out_in_one_write);
     RUN_TEST(test_rtc_a_write_that_fails_still_restarts_the_clock);
     RUN_TEST(test_rtc_refuses_a_date_that_is_not_a_date);
+    RUN_TEST(test_rtc_refuses_a_year_the_chip_cannot_hold);
     RUN_TEST(test_rtc_round_trips);
 }

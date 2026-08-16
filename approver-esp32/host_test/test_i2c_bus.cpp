@@ -278,6 +278,27 @@ void test_changing_a_speed_reopens_the_device(void) {
     TEST_ASSERT_EQUAL_UINT32(400000, fake::LastTransfer()->clock_hz);
 }
 
+void test_add_device_while_a_lease_is_held_is_refused(void) {
+    // **The non-recursive mutex, made visible.** `i2c_bus.h` says `AddDevice`
+    // takes the bus itself and must not be called holding a lease, and
+    // `es8311.h` records the same trap from the other side — `Init` may not
+    // call its own `SetVolume`, because that is a second `Acquire` and the
+    // mutex is a plain FreeRTOS one. On hardware the punishment is a deadlock
+    // and a watchdog reset naming the wrong task; here it is a refusal, which
+    // is the only way to write it down.
+    i2cbus::Bus bus;
+    BringUp(bus);
+    fake::AddDevice(kPmic);
+
+    auto lease = bus.Acquire();
+    TEST_ASSERT_TRUE(lease.Held());
+    TEST_ASSERT_EQUAL_INT(ESP_ERR_TIMEOUT, bus.AddDevice(kPmic, 100000));
+    // Nothing was opened behind the refusal, and the lease is still ours.
+    TEST_ASSERT_EQUAL_UINT(0, fake::P().open_handles);
+    TEST_ASSERT_TRUE(lease.Held());
+    TEST_ASSERT_EQUAL_INT(ESP_OK, lease.WriteRegister(kPmic, 0x10, 0x01));
+}
+
 void test_asking_for_the_same_speed_twice_changes_nothing(void) {
     i2cbus::Bus bus;
     BringUp(bus);
@@ -358,6 +379,53 @@ void test_recovering_a_bus_that_never_came_up_is_refused(void) {
     TEST_ASSERT_EQUAL_UINT(0, fake::P().rising_edges[kScl]);
 }
 
+void test_recover_is_refused_while_somebody_else_holds_the_bus(void) {
+    // **The most destructive thing in this class, and it used to skip the
+    // lease.** `Recover` removes every device handle and deletes the driver,
+    // so running it beside another task's transfer hands that task a handle
+    // that no longer exists — a use-after-free on one core with preemption,
+    // not a race that "usually works". A bus it cannot get is a timeout and
+    // nothing torn down.
+    i2cbus::Bus bus;
+    BringUp(bus);
+    fake::AddDevice(kPmic);
+    {
+        auto lease = bus.Acquire();
+        lease.WriteRegister(kPmic, 0x10, 0x01);
+    }
+    TEST_ASSERT_EQUAL_UINT(1, fake::P().open_handles);
+
+    fake::TakeMutexFromAnotherTask();
+    TEST_ASSERT_EQUAL_INT(ESP_ERR_TIMEOUT, bus.Recover());
+
+    // Bounded, like every other acquire (§10.14.3) — and longer than the
+    // ordinary one, because the task it is waiting on is the stuck one.
+    TEST_ASSERT_EQUAL_UINT32(i2cbus::kRecoverAcquireMs, fake::P().last_take_ticks);
+    TEST_ASSERT_NOT_EQUAL(portMAX_DELAY, fake::P().last_take_ticks);
+
+    // Nothing happened: the bus is up, the handle is still open, SCL was never
+    // driven.
+    TEST_ASSERT_TRUE(bus.Ready());
+    TEST_ASSERT_EQUAL_UINT(0, fake::P().bus_delete_count);
+    TEST_ASSERT_EQUAL_UINT(1, fake::P().open_handles);
+    TEST_ASSERT_EQUAL_UINT(0, fake::P().rising_edges[kScl]);
+}
+
+void test_a_recovery_gives_the_bus_back_when_it_is_done(void) {
+    // It takes the lease, so it owes it back — and the counters are the only
+    // place a guard that returned early without releasing would show up.
+    i2cbus::Bus bus;
+    BringUp(bus);
+
+    TEST_ASSERT_EQUAL_INT(ESP_OK, bus.Recover());
+    TEST_ASSERT_FALSE(fake::P().mutex_taken);
+    TEST_ASSERT_EQUAL_UINT(fake::P().take_calls, fake::P().give_calls);
+
+    // And the next borrower gets it.
+    auto lease = bus.Acquire();
+    TEST_ASSERT_TRUE(lease.Held());
+}
+
 void RegisterI2cBusTests(void) {
     RUN_TEST(test_init_opens_the_bus_once);
     RUN_TEST(test_a_bus_that_never_came_up_hands_out_dead_leases);
@@ -376,10 +444,13 @@ void RegisterI2cBusTests(void) {
     RUN_TEST(test_a_device_is_opened_once_and_reused);
     RUN_TEST(test_speed_is_per_device);
     RUN_TEST(test_changing_a_speed_reopens_the_device);
+    RUN_TEST(test_add_device_while_a_lease_is_held_is_refused);
     RUN_TEST(test_asking_for_the_same_speed_twice_changes_nothing);
     RUN_TEST(test_the_device_table_is_bounded_and_refuses_rather_than_grows);
 
     RUN_TEST(test_recover_clocks_the_bus_free_and_brings_it_back);
     RUN_TEST(test_the_bus_works_again_after_a_recovery);
     RUN_TEST(test_recovering_a_bus_that_never_came_up_is_refused);
+    RUN_TEST(test_recover_is_refused_while_somebody_else_holds_the_bus);
+    RUN_TEST(test_a_recovery_gives_the_bus_back_when_it_is_done);
 }

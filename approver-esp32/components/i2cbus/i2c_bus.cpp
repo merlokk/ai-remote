@@ -176,6 +176,23 @@ esp_err_t Bus::Recover() {
         return ESP_ERR_INVALID_STATE;
     }
 
+    // **Under the lease, like everything else that touches the wire.** This is
+    // the most destructive thing in the class — it removes every device handle
+    // and deletes the driver — so doing it while another task is mid-transfer
+    // hands that task a handle that no longer exists. On one core with
+    // preemption that is a use-after-free, not a race that "usually works".
+    //
+    // Longer than the default acquire: a recovery is rare and worth waiting
+    // for, and the task it is waiting on is by definition the one that is
+    // stuck. It is still a timeout rather than a block (§10.14.3) — and the
+    // consequence is that `Recover` may **not** be called from inside a lease,
+    // because the mutex is not recursive. The header says so.
+    auto lease = Acquire(kRecoverAcquireMs);
+    if (!lease) {
+        ESP_LOGE(TAG, "recovery skipped: the bus is held by somebody else");
+        return ESP_ERR_TIMEOUT;
+    }
+
     ESP_LOGW(TAG, "recovering the bus: clocking SDA free");
 
     ForgetDevices();

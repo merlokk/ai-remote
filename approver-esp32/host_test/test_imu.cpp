@@ -80,6 +80,26 @@ void test_imu_also_finds_it_at_the_other_address(void) {
     TEST_ASSERT_EQUAL_HEX8(kSa0High, motion.Address());
 }
 
+void test_imu_a_stranger_at_the_first_address_does_not_stop_the_search(void) {
+    // 0x6B and 0x6A are both crowded neighbourhoods — several IMUs from other
+    // vendors sit there. "Nothing at 0x6B" and "a stranger at 0x6B" are
+    // different problems (`qmi8658.cpp` says so), and only one of them is a
+    // reason to stop looking.
+    i2cbus::Bus bus;
+    BringUp(bus);
+    fake::Device *stranger = fake::AddDevice(kSa0Low);
+    stranger->regs[kRegWhoAmI] = 0x6A;  // answers, and is not this chip
+    PutOnWire(kSa0High);
+
+    imu::Qmi8658 motion;
+    TEST_ASSERT_EQUAL_INT(ESP_OK, motion.Init(bus));
+    TEST_ASSERT_EQUAL_HEX8(kSa0High, motion.Address());
+    // And it configured the chip it found, not the one it walked past.
+    TEST_ASSERT_EQUAL_HEX8(kCtrl1AutoIncrement,
+                           fake::DeviceAt(kSa0High)->regs[kRegCtrl1] & kCtrl1AutoIncrement);
+    TEST_ASSERT_EQUAL_HEX8(0, fake::DeviceAt(kSa0Low)->regs[kRegCtrl1]);
+}
+
 void test_imu_absent_is_reported_and_not_read(void) {
     i2cbus::Bus bus;
     BringUp(bus);  // neither address answers
@@ -351,6 +371,7 @@ void test_imu_configures_in_one_sequence_after_the_reset(void) {
 void RegisterImuTests(void) {
     RUN_TEST(test_imu_answers_at_0x6b_on_this_board);
     RUN_TEST(test_imu_also_finds_it_at_the_other_address);
+    RUN_TEST(test_imu_a_stranger_at_the_first_address_does_not_stop_the_search);
     RUN_TEST(test_imu_absent_is_reported_and_not_read);
 
     RUN_TEST(test_imu_turns_on_address_auto_increment);

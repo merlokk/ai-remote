@@ -26,8 +26,10 @@
 namespace fake {
 
 // Creates an empty directory for this test and points `storage` at it. Called
-// by `setUp` for the config suite; safe to call repeatedly, and each call
-// wipes what the last one left.
+// by each test that needs a filesystem rather than by `setUp` — `fake::Reset()`
+// clears the wire and the I²S channel, and wiping a directory on every one of
+// two hundred tests would be filesystem work for the suites that never open a
+// file. Safe to call repeatedly, and each call wipes what the last one left.
 void MountStorage();
 
 // Makes `storage::Mounted()` false, so the "the filesystem never came up" path

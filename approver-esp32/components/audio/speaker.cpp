@@ -67,7 +67,16 @@ esp_err_t ParseWavHeader(FILE *file, WavFormat *out, long *data_offset) {
 
         if (memcmp(header, "fmt ", 4) == 0) {
             uint8_t fmt[16] = {};
-            const size_t want = size < sizeof(fmt) ? size : sizeof(fmt);
+            // **Sixteen bytes is the minimum, not the usual case.** A shorter
+            // `fmt ` leaves the tail of this buffer zero, and a zeroed tail is
+            // a believable-looking format: `bits` reads 0 and `sample_rate`
+            // reads whatever fitted. Refused as a malformed file, because the
+            // alternative is a `Describe` that answers with numbers nobody
+            // wrote.
+            if (size < sizeof(fmt)) {
+                return ESP_ERR_INVALID_SIZE;
+            }
+            const size_t want = sizeof(fmt);
             if (fread(fmt, 1, want, file) != want) {
                 return ESP_ERR_INVALID_SIZE;
             }
@@ -87,6 +96,15 @@ esp_err_t ParseWavHeader(FILE *file, WavFormat *out, long *data_offset) {
         } else if (memcmp(header, "data", 4) == 0) {
             if (!have_format) {
                 return ESP_ERR_NOT_SUPPORTED;
+            }
+            if (size == 0) {
+                // A header with no audio behind it — the same answer as a file
+                // with no `data` chunk at all, and for the same reason: there
+                // is nothing to play. It matters that this is an error rather
+                // than a zero-length success, because a success unmutes the
+                // codec for the length of the drain and mutes it again, which
+                // is a click for nothing.
+                return ESP_ERR_NOT_FOUND;
             }
             format.data_bytes = size;
             *data_offset = ftell(file);
@@ -157,9 +175,29 @@ esp_err_t Speaker::Init(Es8311 &codec, const SpeakerPins &pins, uint32_t sample_
     return ESP_OK;
 }
 
+esp_err_t Speaker::Retune(uint32_t sample_rate) {
+    i2s_std_clk_config_t clk = I2S_STD_CLK_DEFAULT_CONFIG(sample_rate);
+    clk.mclk_multiple = I2S_MCLK_MULTIPLE_256;
+    return i2s_channel_reconfig_std_clock(channel_, &clk);
+}
+
 esp_err_t Speaker::Reconfigure(uint32_t sample_rate) {
     if (sample_rate == sample_rate_) {
         return ESP_OK;
+    }
+
+    // **Ask before touching anything.** The codec has five rates it can clock
+    // and refuses the rest by name (`es8311.h`); finding that out from its
+    // return value would mean finding it out *after* the channel has been
+    // stopped for the retune, and the channel would then stay stopped — the
+    // next file at a rate this speaker is already at skips the reconfigure
+    // entirely, so one 22 050 Hz WAV left the speaker silent until a reboot,
+    // with every `PlayWav` after it returning success or a confusing state
+    // error. Same call the RTC makes about an impossible date and the PMIC
+    // about a power-off over USB: refuse first, write nothing.
+    if (!Es8311::RateSupported(sample_rate)) {
+        ESP_LOGE(TAG, "%" PRIu32 " Hz is not a rate this codec can clock", sample_rate);
+        return ESP_ERR_NOT_SUPPORTED;
     }
 
     // The channel has to stop before its clock can be retuned, and the codec
@@ -170,15 +208,19 @@ esp_err_t Speaker::Reconfigure(uint32_t sample_rate) {
         return err;
     }
 
-    i2s_std_clk_config_t clk = I2S_STD_CLK_DEFAULT_CONFIG(sample_rate);
-    clk.mclk_multiple = I2S_MCLK_MULTIPLE_256;
-    err = i2s_channel_reconfig_std_clock(channel_, &clk);
-    if (err != ESP_OK) {
-        return err;
+    err = Retune(sample_rate);
+    if (err == ESP_OK) {
+        err = codec_->SetSampleRate(sample_rate);
     }
-
-    err = codec_->SetSampleRate(sample_rate);
     if (err != ESP_OK) {
+        // Put it back the way it was and start it again. Anything that fails
+        // here is a bus that was busy or a chip that did not answer — a
+        // transient — and leaving a stopped channel behind would turn it into
+        // a permanent one.
+        ESP_LOGE(TAG, "retune to %" PRIu32 " Hz failed (%s); back to %" PRIu32 " Hz", sample_rate,
+                 esp_err_to_name(err), sample_rate_);
+        Retune(sample_rate_);
+        i2s_channel_enable(channel_);
         return err;
     }
 
