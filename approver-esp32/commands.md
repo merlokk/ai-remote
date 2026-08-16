@@ -42,6 +42,16 @@ millivolts and percentage, the system rail, die temperature, the power-button
 thresholds this board is actually configured with, why the chip last powered on,
 and the state of the DCDC1 / ALDO2 / ALDO3 rails.
 
+### `reboot`
+Restarts the device. **Anything set and not saved is lost** — `config set`
+writes to memory and `config save` is what reaches the filesystem, so this is
+where unsaved edits go; the command says so before it goes.
+
+No confirmation word, unlike `poweroff now`, and the difference is what each
+one costs: a power-off needs somebody to walk over and press a button, a reboot
+undoes itself in a few seconds. The console comes back on the same port after
+the boot; `status` shows the uptime starting again.
+
 ### `poweroff now`
 Cuts power. **Refused while USB is connected**, and nothing is written when it
 refuses: VBUS is a power-on source in its own right, so a shutdown with the

@@ -647,6 +647,24 @@ as a crash. Saying "unplug it first" is the true answer; performing a power-off
 that does not happen is not. The console adds a confirmation word (`poweroff
 now`) for the same reason §10.8.5 makes its destructive entries two-step.
 
+**`reboot` is next to it and takes no confirmation word, which is the same
+argument reaching the opposite answer.** Two-stepping a destructive action is
+worth it when the console cannot undo what it did — `poweroff` succeeds by
+ending with a finger on a button — and a reboot undoes itself in a few seconds,
+so a second word there would be friction on the most ordinary debugging action
+there is. What it costs is *said* instead: `config set` writes to memory and
+`config save` reaches the filesystem (§10.15), so a reboot is exactly where
+unsaved edits go, and the command prints that before it goes.
+
+Two details that are the hardware rather than the code. The line has to be
+flushed **and given a moment** before `esp_restart`, because the console is the
+C6's own USB Serial/JTAG and the port goes down with the chip — restarting on
+the next statement takes the message with it, and what the operator sees is a
+console that died rather than one that answered. And nothing is quiesced first
+on purpose: a `config.json` write interrupted mid-reboot is the power cut
+§10.15 already recovers from at boot, so there is nothing here worth waiting
+for that is not already handled.
+
 **The refusal is tested on hardware; the shutdown itself is not, and cannot be
 from here** — it needs the cable out, and with the cable out there is no console
 to watch it from. That half waits for a battery-powered session.

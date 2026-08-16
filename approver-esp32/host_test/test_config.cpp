@@ -152,8 +152,14 @@ void test_config_the_committed_file_carries_a_placeholder_password(void) {
     TEST_ASSERT_TRUE_MESSAGE(wifi.network_count > 0,
                              "spiffs_image/config.json has no network to check the placeholder of");
     for (uint8_t i = 0; i < wifi.network_count; ++i) {
+        // The password exactly, because that is the thing that must never be
+        // real. The SSID by **prefix**, because the file legitimately grows
+        // numbered placeholder slots — `YOUR_SSID2` is still nobody's network,
+        // and failing on it is a false alarm that teaches people to ignore
+        // this test. A real name (`Barsik`) still fails, which is the case it
+        // exists for.
         TEST_ASSERT_EQUAL_STRING("CHANGEME", wifi.networks[i].password);
-        TEST_ASSERT_EQUAL_STRING("YOUR_SSID", wifi.networks[i].ssid);
+        TEST_ASSERT_EQUAL_STRING_LEN("YOUR_SSID", wifi.networks[i].ssid, 9);
     }
 }
 

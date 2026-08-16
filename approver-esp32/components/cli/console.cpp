@@ -357,6 +357,39 @@ int CmdDate(int argc, char **argv) {
     return 0;
 }
 
+int CmdReboot(int argc, char **) {
+    if (argc != 1) {
+        printf("usage: reboot        restart now; anything set and not saved is lost\n");
+        return 1;
+    }
+
+    // **No confirmation word, and that is the difference from `poweroff`.**
+    // That one asks for `now` because succeeding means the operator has to
+    // walk over and press a button — from the console it is one-way. This one
+    // undoes itself in a few seconds, and making the most ordinary debugging
+    // action two words would be friction with nothing behind it.
+    //
+    // What it does cost is *said* rather than guarded against: `config set`
+    // writes to memory and `config save` is what reaches the filesystem, so a
+    // reboot is exactly where unsaved edits go.
+    printf("rebooting — anything set and not saved is gone\n");
+
+    // **The line has to leave before the peripheral does.** The console is the
+    // C6's own USB Serial/JTAG, so the port goes down with the chip: restarting
+    // on the next statement takes the message with it, and what the operator
+    // sees is a console that died rather than one that answered. Flush, then
+    // leave the host a moment to read it.
+    fflush(stdout);
+    vTaskDelay(pdMS_TO_TICKS(200));
+
+    // Nothing is quiesced first, deliberately. A `config.json` write
+    // interrupted here is the power cut §10.15 already recovers from at boot —
+    // temp file, then rename, and `config::Init` closes the window — so there
+    // is nothing this could usefully wait for that is not already handled.
+    esp_restart();
+    return 0;  // not reached: the chip is gone by here
+}
+
 int CmdPowerOff(int argc, char **argv) {
     // A confirmation word, because this is the one console command whose
     // success means the operator has to walk over and press a button. The
@@ -1858,6 +1891,15 @@ const esp_console_cmd_t kCommands[] = {
         .help = "the panel, LVGL and the touch controller; on/off and brightness",
         .hint = "[on|off|brightness [0..100]]",
         .func = &CmdDisplay,
+        .argtable = nullptr,
+        .func_w_context = nullptr,
+        .context = nullptr,
+    },
+    {
+        .command = "reboot",
+        .help = "restart the device; anything set and not saved is lost",
+        .hint = nullptr,
+        .func = &CmdReboot,
         .argtable = nullptr,
         .func_w_context = nullptr,
         .context = nullptr,
