@@ -157,6 +157,27 @@ struct Time {
     char sntp_server[kHostSize];
 };
 
+// How many addresses the internet check may try (§10.9). Must match
+// `wifimgr::kMaxProbeTargets`, which is asserted where the two meet.
+inline constexpr size_t kMaxProbeTargets = 4;
+
+// **Being associated is not being online**, and this is what tells the two
+// apart: once a minute, while there is a link, ping one of these and see. A
+// router with no uplink, a captive portal and a guest network that only allows
+// port 80 all look like a healthy connection from the station's side.
+//
+// A **list**, not one address, for the reason 8.8.8.8 alone is not enough:
+// plenty of otherwise usable networks drop ICMP to one operator or another,
+// and one blocked host must not read as an outage.
+struct InternetCheck {
+    bool check;
+    uint16_t interval_seconds;
+    uint16_t timeout_ms;
+    uint8_t failures_before_offline;
+    char targets[kMaxProbeTargets][kIpTextSize];
+    uint8_t target_count;
+};
+
 struct Display {
     uint8_t brightness;      // percent
     uint16_t dim_seconds;    // idle before dimming; 0 disables
@@ -169,6 +190,7 @@ struct Audio {
 
 struct Data {
     Wifi wifi;
+    InternetCheck internet;
     Nats nats;
     Time time;
     Display display;

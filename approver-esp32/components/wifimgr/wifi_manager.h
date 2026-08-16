@@ -29,6 +29,7 @@
 #include <cstdint>
 
 #include "esp_err.h"
+#include "reachability.h"
 #include "wifi_policy.h"
 #include "wifi_radio.h"
 
@@ -63,6 +64,17 @@ struct Snapshot {
 
     bool radio_ready = false;
     esp_err_t radio_error = ESP_OK;
+
+    // **Whether anything is reachable through the link**, which is a separate
+    // question from whether there is one (§10.9). `kUnknown` while there is no
+    // client link, while the check is switched off, and until the first round
+    // has answered — a device that reported "offline" because it had not asked
+    // yet would be lying.
+    Internet internet = Internet::kUnknown;
+    uint8_t internet_failed_rounds = 0;
+    uint32_t internet_last_ok_ms = kNeverSucceeded;  // age, not a timestamp
+    uint32_t internet_next_probe_ms = 0;
+    uint8_t internet_target = kNoTarget;
 };
 
 // Starts the manager task. Does **not** touch the radio: what happens next is
@@ -81,6 +93,14 @@ void Apply();
 void SetDesired(Desired desired);
 
 Snapshot Get();
+
+// Ask about the internet now instead of at the next interval — the console's
+// `wifi ping`. Does nothing when there is no client link to ask through.
+//
+// **This is the seam SNTP will hang off** (§10.8.2): a clock that syncs is one
+// more thing that wants to know there is an internet before it tries, and it
+// should read `Snapshot::internet` rather than grow a second probe of its own.
+void CheckInternetNow();
 
 // Straight through to the driver, and blocking for a second or two. Never
 // called from the manager task, and §10.8.6's rule stands: only when somebody

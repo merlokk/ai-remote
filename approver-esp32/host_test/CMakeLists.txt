@@ -76,6 +76,7 @@ add_executable(host_test
     test_timezone.cpp
     test_speaker.cpp
     test_wifi_policy.cpp
+    test_reachability.cpp
 
     # The fake ESP-IDF the drivers are compiled against. `fakes/` shadows the
     # framework's headers on the include path below, so the sources listed
@@ -99,6 +100,7 @@ add_executable(host_test
     # nothing, so it needs no fake — the driver next to it is all ESP-IDF and
     # belongs to the device tier.
     ../components/wifimgr/wifi_policy.cpp
+    ../components/wifimgr/reachability.cpp
 
     # cJSON, the real one, out of the managed component `idf.py build` fetched.
     "${CJSON_DIR}/cJSON.c"

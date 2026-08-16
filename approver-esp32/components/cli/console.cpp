@@ -1010,6 +1010,37 @@ void PrintWifiStatus() {
         }
     }
 
+    // **Connected and online are two different lines**, because they are two
+    // different facts (§10.9): a router with no uplink, a captive portal and a
+    // guest network that only allows port 80 all look like a healthy link from
+    // here. `unknown` is honest and is what shows before the first round has
+    // answered.
+    printf("internet   %s", wifimgr::Name(snapshot.internet));
+    if (snapshot.internet_last_ok_ms != wifimgr::kNeverSucceeded) {
+        printf(", last reply %u s ago", static_cast<unsigned>(snapshot.internet_last_ok_ms / 1000));
+    } else if (config::Get().internet.check) {
+        printf(", nothing has answered yet");
+    }
+    if (snapshot.internet_failed_rounds > 0) {
+        printf(", %u round(s) failed", static_cast<unsigned>(snapshot.internet_failed_rounds));
+    }
+    if (!config::Get().internet.check) {
+        printf(" (checking is off)");
+    } else if (config::Get().internet.target_count == 0) {
+        printf(" (nothing to ping)");
+    } else if (snapshot.internet_next_probe_ms != wifimgr::kNeverSucceeded) {
+        printf(", next in %u s", static_cast<unsigned>(snapshot.internet_next_probe_ms / 1000));
+    }
+    printf("\n");
+    if (config::Get().internet.target_count > 0) {
+        printf("           ping");
+        for (uint8_t i = 0; i < config::Get().internet.target_count; ++i) {
+            printf(" %s%s", config::Get().internet.targets[i],
+                   i == snapshot.internet_target ? "*" : "");
+        }
+        printf(" every %u s\n", static_cast<unsigned>(config::Get().internet.interval_seconds));
+    }
+
     if (settings.network_count == 0) {
         printf("networks   none remembered — 'wifi join <ssid> [password]'\n");
     }
@@ -1167,6 +1198,65 @@ int CmdWifiStatic(int argc, char **argv) {
     return 0;
 }
 
+// `wifi check on|off`, or `wifi check <address> [address…]` to replace the
+// list. Every other setting has a console setter; without this one the ping
+// targets would be the only thing on the device that can only be changed by
+// reflashing.
+int CmdWifiCheck(int argc, char **argv) {
+    config::InternetCheck &net = config::Get().internet;
+
+    if (argc == 2) {
+        printf("check      %s, every %u s, %u ms timeout, offline after %u failed round(s)\n",
+               net.check ? "on" : "off", static_cast<unsigned>(net.interval_seconds),
+               static_cast<unsigned>(net.timeout_ms),
+               static_cast<unsigned>(net.failures_before_offline));
+        for (uint8_t i = 0; i < net.target_count; ++i) {
+            printf("           %s\n", net.targets[i]);
+        }
+        if (net.target_count == 0) {
+            printf("           (no targets — nothing to ping)\n");
+        }
+        return 0;
+    }
+
+    if (argc == 3 && (strcmp(argv[2], "on") == 0 || strcmp(argv[2], "off") == 0)) {
+        net.check = strcmp(argv[2], "on") == 0;
+        wifimgr::Apply();
+        printf("internet check %s — in memory only, 'config save' writes it to %s\n", argv[2],
+               config::kPath);
+        return 0;
+    }
+
+    const int count = argc - 2;
+    if (count > static_cast<int>(config::kMaxProbeTargets)) {
+        printf("at most %u addresses\n", static_cast<unsigned>(config::kMaxProbeTargets));
+        return 1;
+    }
+
+    // Parsed before anything is stored — the same rule `wifi static` follows,
+    // and here it matters twice over: a hostname would be a check that can
+    // never pass, which reads as an outage that never ends.
+    for (int i = 0; i < count; ++i) {
+        uint32_t parsed = 0;
+        if (!config::ParseIpv4(argv[2 + i], &parsed)) {
+            printf("'%s' is not an IPv4 address — these are pinged, so a name cannot work\n",
+                   argv[2 + i]);
+            return 1;
+        }
+    }
+
+    for (int i = 0; i < count; ++i) {
+        snprintf(net.targets[i], config::kIpTextSize, "%s", argv[2 + i]);
+    }
+    net.target_count = static_cast<uint8_t>(count);
+    net.check = true;
+    wifimgr::Apply();
+
+    printf("checking %d address(es), starting now — in memory only, 'config save' writes it to %s\n",
+           count, config::kPath);
+    return 0;
+}
+
 int CmdWifiForget(int argc, char **argv) {
     if (argc != 3) {
         printf("usage: wifi forget <ssid>\n");
@@ -1249,6 +1339,32 @@ int CmdWifi(int argc, char **argv) {
     if (strcmp(argv[1], "static") == 0) {
         return CmdWifiStatic(argc, argv);
     }
+    if (strcmp(argv[1], "check") == 0) {
+        return CmdWifiCheck(argc, argv);
+    }
+    if (strcmp(argv[1], "ping") == 0) {
+        // Ask now rather than at the next interval, and wait long enough for
+        // the round to have run — a command that returns before the answer
+        // does is a command people run twice.
+        wifimgr::CheckInternetNow();
+        const config::InternetCheck &net = config::Get().internet;
+        const uint32_t budget_ms =
+            static_cast<uint32_t>(net.timeout_ms + 500) * (net.target_count + 1);
+        const uint32_t deadline = budget_ms > 15000 ? 15000 : budget_ms;
+        for (uint32_t waited = 0; waited < deadline; waited += 100) {
+            vTaskDelay(pdMS_TO_TICKS(100));
+            const wifimgr::Snapshot snapshot = wifimgr::Get();
+            if (!snapshot.radio_ready) {
+                break;
+            }
+            if (snapshot.internet_next_probe_ms > 0 &&
+                snapshot.internet_next_probe_ms != wifimgr::kNeverSucceeded) {
+                break;  // the round finished and the next one is scheduled
+            }
+        }
+        PrintWifiStatus();
+        return 0;
+    }
     if (strcmp(argv[1], "retry") == 0) {
         // Start the cycle again from the top, which is what an operator means
         // by "try now": it clears the sticky refusals and the round counter.
@@ -1285,6 +1401,8 @@ int CmdWifi(int argc, char **argv) {
     printf("       wifi static <n> <address> <netmask> <gateway> [dns1] [dns2]\n");
     printf("       wifi static <n> off           that network goes back to DHCP\n");
     printf("       wifi scan                     what is on the air (2.4 GHz)\n");
+    printf("       wifi ping                     check the internet now, don't wait a minute\n");
+    printf("       wifi check [on|off|<address>…]  the internet check and what it pings\n");
     printf("       wifi retry                    start the cycle again from the top\n");
     printf("none of these write %s — 'config save' does\n", config::kPath);
     return 1;

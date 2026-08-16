@@ -11,6 +11,13 @@
         },
         "networks": []
     },
+    "internet": {
+        "check": true,
+        "intervalSeconds": 60,
+        "timeoutMs": 2000,
+        "failures": 2,
+        "targets": ["8.8.8.8", "1.1.1.1", "9.9.9.9"]
+    },
     "nats": {
         "url": "nats://192.168.1.5:4222"
     },

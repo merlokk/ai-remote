@@ -56,11 +56,12 @@ the repository owner's sign-off say so.
 | Firmware: NATS client, registration, signing | not started |
 | The five screens — clock, limits, request, settings, Wi-Fi (§10.8) | specified, not started |
 | The Wi-Fi driver — `components/wifi` (§10.9) | **running on hardware**: two modes (access point, client), one network at a time, a latched link state, a disconnection reason turned into the three answers a person can act on, and a scan that works in both modes. It has **no opinions** — which network and when is the manager's, and that split is what makes the manager testable |
+| The internet check — `components/wifimgr/reachability.*` (§10.9) | **running on hardware**: once a minute, while there is a client link, an ICMP echo to one of a few addresses from `config.json` (8.8.8.8, 1.1.1.1, 9.9.9.9 by default). Three states — `unknown` is the honest one — two failed rounds to say offline and one reply to come back. `wifi ping` and `wifi check` on the console. **It never decides anything**: a link with no internet is reported, never a reason to change networks |
 | The Wi-Fi manager — `components/wifimgr` (§10.9) | **running on hardware, and tested on the host**: desired state (off / client / AP) against current, round-robin over the remembered networks with a growing capped backoff, sticky auth failures, and after N fruitless rounds a fallback access point that stays up for two minutes unless somebody attaches to it. `wifi` on the console. `wifi_policy.cpp` includes nothing but `<cstdint>`, the way the navigator does; the radio is lazily brought up, so a device with `wifi.active` false pays nothing for this existing. **What no board has done yet is join anything** — the cycle, the classification, the fallback AP and the scan are all proven against a network that does not exist, which is one half of the story |
 | The Wi-Fi screen (§10.8.6) | specified, not started — the manager underneath it is what exists |
 | Where the configuration lives (§10.15) | **decided**: all of it in JSON on SPIFFS, nothing of ours in NVS — with the cost stated (SPIFFS cannot be encrypted at rest). `spiffs_image/config.json` + `config.init.json` are flashed; nothing reads them yet |
 | The `KEY`-at-boot config restore (§10.15) | specified, not started |
-| Host-tier tests (§10.11) — `host_test/` | **running**: 248 Unity tests over `ui`, `i2cbus`, `pmic`, `rtc`, `imu`, `audio`, `config`, `buttons`, `timezone`, `speaker` and `wifimgr`, one command, no board. The drivers are compiled **unmodified** against a fake ESP-IDF (`host_test/fakes/`), which is §10.14.3's owed fake backend arriving in a different shape than that section specified, and which now covers I²S and a filesystem as well as the I²C wire. Built by MSVC rather than by ESP-IDF's `linux` target, which does not work on a Windows host — §10.11 records why |
+| Host-tier tests (§10.11) — `host_test/` | **running**: 271 Unity tests over `ui`, `i2cbus`, `pmic`, `rtc`, `imu`, `audio`, `config`, `buttons`, `timezone`, `speaker` and `wifimgr`, one command, no board. The drivers are compiled **unmodified** against a fake ESP-IDF (`host_test/fakes/`), which is §10.14.3's owed fake backend arriving in a different shape than that section specified, and which now covers I²S and a filesystem as well as the I²C wire. Built by MSVC rather than by ESP-IDF's `linux` target, which does not work on a Windows host — §10.11 records why |
 | Protocol parity vectors (§10.11 tier 2) | not started |
 
 Read §10.3 before anything else: it is the one part of this that changes
@@ -564,6 +565,8 @@ wifi static <n> <address> <netmask> <gateway> [dns1] [dns2]   # a fixed address
 wifi static <n> off           # …and back to DHCP for that network
 wifi scan                     # what is on the air — works with the radio off, which
                               # it then switches back off. 2.4 GHz: the C6 has no other
+wifi ping                     # is there an internet through this link, right now
+wifi check [on|off|<ip>…]     # the once-a-minute check and what it pings
 wifi retry                    # start the cycle again from the top
 play [file]                   # play a WAV from the storage partition (alert.wav)
 play volume [0..100]          # read it, or set it — same as `config set volume`
@@ -1117,11 +1120,17 @@ with eight networks and went back to off without anything else being typed. A
 fixed address is set, refused when it is not one (`010.0.0.42`, `10.0.0.300`),
 saved, reloaded and visible in `cat config.json`.
 
-**What it has not done is join anything** — the whole success path waits on a
-real SSID and password, and three things wait with it: the auth-failure
-classification, `esp_netif_set_ip_info` actually taking, and the DHCP client
-being put back for a network that follows a static one. Those are device-tier
-(§10.11) and cannot be reached from a bench with no access point on it.
+**And then it joined one.** Given a real SSID and password it walked the list —
+`YOUR_SSID` refused as `reason 201`, the second network associated — and came
+up on DHCP; a fixed address set on that network took at `STA_CONNECTED` in
+**69 ms** against DHCP's two seconds, and turning it off put the DHCP client
+back with a real lease rather than a leftover address. The internet check
+answered `online` on the first round, went `unknown` then `offline` over two
+rounds against an address in TEST-NET-1 that answers nothing, and came back to
+`online` on the first reply after the real targets were restored.
+
+What is still device-tier and unreached: the auth-failure classification, which
+needs a network whose password is deliberately wrong.
 
 Two things only the board could have said, both now fixed:
 
@@ -1216,6 +1225,65 @@ The timings that are **not** in the file — the connect timeout, the gap betwee
 attempts, the backoff and its cap — are the shape of this section rather than a
 preference. A device whose connect timeout is operator-settable is a device with
 one more way to be configured into never working.
+
+#### Is there an internet through it?
+
+**Associated is not online, and the device needs both facts.** A router with no
+uplink, a captive portal, a guest network that only allows port 80 — from the
+station's side every one of them looks like a healthy connection. So: while
+there is a client link, ping one of a few addresses once a minute and see.
+
+```json
+"internet": { "check": true, "intervalSeconds": 60, "timeoutMs": 2000,
+              "failures": 2, "targets": ["8.8.8.8", "1.1.1.1", "9.9.9.9"] }
+```
+
+**A list rather than an address**, because plenty of usable networks drop ICMP
+to one operator or another and one blocked host must not read as an outage.
+Three anycast resolvers is the shipped default; `wifi check <address>…`
+replaces them and `wifi check off` stops asking. A target that is not an IPv4
+address is **refused, including a hostname** — there is no resolver in an ICMP
+echo, so `google.com` there would be a check that can never pass, which reads
+as an outage that never ends.
+
+The rules, all of them in `reachability.h` and all host-tested:
+
+- **Three states, and the third is the honest one.** `unknown` is what "no
+  link", "checking is off" and "the first round has not answered yet" all mean.
+  A device reporting offline because it had not looked would be lying with a
+  straight face, and `LinkDown` therefore goes back to `unknown` rather than to
+  `offline` — no link is a fact the Wi-Fi state already shows, and putting two
+  red marks on a screen for one problem is how a screen stops being read.
+- **A round is the whole list.** A target that does not answer is followed by
+  the next one *immediately*, not next minute: three addresses would otherwise
+  take three minutes to conclude anything. Only when every one of them ignores
+  us is the round a failure.
+- **Going offline is slow, coming back is instant.** Two consecutive failed
+  rounds before the word "offline" — one lost round is a lost packet, a roaming
+  beacon, a busy router — and exactly one reply to be online again. The
+  asymmetry is the design: an outage that has ended is over, and making the
+  operator wait two more minutes to be told so is making them reboot the device
+  instead.
+- **The address that answered goes first next time**, the same idea the network
+  policy applies to last-successful, and for the same reason: without it every
+  round opens with a host this particular network drops.
+- **It does not feed back into which network to join.** A link that carries no
+  traffic is a fact to report, never a reason to drop it and try the next one —
+  that would turn one dead uplink into a device cycling through its networks
+  forever, and the operator would see a device that cannot connect rather than
+  a router that needs restarting.
+
+The ICMP itself is `esp_ping` in the manager and is four lines: one echo per
+probe, a session created and deleted around each one (the library cannot
+retarget a live session, and once a minute is nowhere near often enough for the
+task churn to matter), plus **our own deadline on top of its timeout** — §10.5's
+rule about bounding every read, applied to somebody else's task, because a
+session that never calls back would otherwise freeze the check for good.
+
+**This is the seam SNTP hangs off** (§10.8.2). A clock that syncs wants to know
+there is an internet before it tries, and it should read `Snapshot::internet`
+rather than grow a second probe of its own. That is the next piece, not this
+one.
 
 #### A fixed address, per network
 
@@ -1338,7 +1406,7 @@ Three tiers, and the first one is where nearly everything belongs:
 
    **What is under it today is the navigator and four of the five chips on the
    I²C bus, the settings file, the buttons, the zone table, the speaker and the
-   Wi-Fi policy** — 248 tests:
+   Wi-Fi policy and the internet check** — 271 tests:
 
    | Subject | What is pinned |
    |---|---|
@@ -1353,6 +1421,7 @@ Three tiers, and the first one is where nearly everything belongs:
    | `components/timezone` | the table checked against itself — every name looks itself up, every rule passes `LooksLikePosix`, no name does, and an index past the end answers row 0 rather than reading past the array — plus the aliases people actually type (`Europe/Kiev`, `Asia/Calcutta`), a shared rule named after its family rather than after a city, and the one that matters most: **an unknown zone answering `nullptr` rather than a guess**, because §10.8.2's named failure is libc silently reading a misspelling as UTC |
    | `components/audio` (speaker) | mostly the RIFF parser, which is where the value is: a `LIST` chunk between `fmt ` and `data` walked past, an odd-sized chunk padded the way RIFF requires, a 40-byte `WAVE_FORMAT_EXTENSIBLE` header stepped over, compressed-but-in-a-.wav named apart from not-a-WAV, and three claims a file is not allowed to make about itself — a `fmt ` chunk too short to hold a format, a `data` chunk with nothing in it, and a chunk length that runs off the end of the file. Then what reaches the wire — the fake channel **captures the bytes**, so "it streamed the audio and not the header" is known rather than guessed; stereo and 8-bit refused without ever unmuting; a truncated `data` chunk played as far as the file goes; the codec muted again after a failed write; a rate change stopping the channel, retuning both halves, and starting it — and **a rate the codec cannot clock refused before the channel is stopped**, with the next file still playing afterwards, which is the bug that section below is about |
 
+   | `components/wifimgr` (the internet check) | §10.9's second state machine, and the same shape as the first — `<cstdint>` and nothing else, so no fake: `unknown` for "no link", "switched off" and "not asked yet" alike; a round moving to the next target at once rather than next minute; two failed rounds to say offline and **one reply to come back**, asserted in both directions because a symmetric rule would be a different design; a dropped link going to `unknown` rather than `offline`; a late answer arriving after the link went being ignored; the target that answered going first next round; and the minute counted across the ~49-day wrap |
    | `components/wifimgr` | every rule §10.9 states, and it needs **no fake at all** — the policy includes `<cstdint>` and nothing else, so this suite is the navigator's shape rather than the drivers': the round-robin and where a round begins; the backoff asserted as *both* growing and capped, because either alone is satisfied by a constant; the fallback AP after the configured rounds, held open by an attached station and restarted from the beginning when the last one leaves — and **not** held open by the manager's own "nobody is attached" report, which arrives on every pass and would otherwise mean an AP that never expires; the window's expiry clearing the sticky auth failures, since that window was the chance to fix them; an exhausted list going straight to the AP rather than waiting out its rounds; a drop while online being neither an auth failure nor an instant reconnect; the connect timeout; `SetDesired` being idempotent, because the manager re-asserts it five times a second; and the ~49-day millisecond wrap landing inside a delay |
 
    The fake platform is `host_test/fakes/` — an ESP-IDF-shaped set of headers

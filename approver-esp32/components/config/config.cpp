@@ -208,6 +208,61 @@ esp_err_t Parse(const char *json, Data *out) {
         }
     }
 
+    const cJSON *internet = cJSON_GetObjectItemCaseSensitive(root, "internet");
+    if (cJSON_IsObject(internet)) {
+        CopyBool(internet, "check", &out->internet.check);
+
+        long value = out->internet.interval_seconds;
+        // A floor of five seconds rather than zero: this is somebody else's
+        // server being asked, and a probe loop with no interval is a flood
+        // with a friendly name.
+        CopyNumber(internet, "intervalSeconds", 5, 65535, &value);
+        out->internet.interval_seconds = static_cast<uint16_t>(value);
+
+        value = out->internet.timeout_ms;
+        CopyNumber(internet, "timeoutMs", 100, 65535, &value);
+        out->internet.timeout_ms = static_cast<uint16_t>(value);
+
+        value = out->internet.failures_before_offline;
+        CopyNumber(internet, "failures", 1, 255, &value);
+        out->internet.failures_before_offline = static_cast<uint8_t>(value);
+
+        const cJSON *targets = cJSON_GetObjectItemCaseSensitive(internet, "targets");
+        if (cJSON_IsArray(targets)) {
+            // The file's list replaces the built-in one entirely, the way
+            // `networks` does — an empty array means "none", not "the
+            // defaults", because the operator wrote it down.
+            out->internet.target_count = 0;
+            const cJSON *entry = nullptr;
+            cJSON_ArrayForEach(entry, targets) {
+                if (out->internet.target_count >= kMaxProbeTargets) {
+                    ESP_LOGW(TAG, "more than %u internet targets; the rest are ignored",
+                             static_cast<unsigned>(kMaxProbeTargets));
+                    break;
+                }
+                if (!cJSON_IsString(entry) || entry->valuestring == nullptr) {
+                    continue;
+                }
+                uint32_t parsed = 0;
+                if (!ParseIpv4(entry->valuestring, &parsed)) {
+                    // **A name is refused as firmly as a typo**, and that is
+                    // deliberate: this is an ICMP echo to an address, there is
+                    // no resolver in the path, and "internet.targets" holding
+                    // `google.com` would be a check that can never pass.
+                    ESP_LOGW(TAG, "internet target '%s' is not an IPv4 address; dropped",
+                             entry->valuestring);
+                    continue;
+                }
+                snprintf(out->internet.targets[out->internet.target_count],
+                         kIpTextSize, "%s", entry->valuestring);
+                ++out->internet.target_count;
+            }
+            if (out->internet.check && out->internet.target_count == 0) {
+                ESP_LOGW(TAG, "internet.check is on with nothing to ping; it will stay unknown");
+            }
+        }
+    }
+
     const cJSON *nats = cJSON_GetObjectItemCaseSensitive(root, "nats");
     if (cJSON_IsObject(nats)) {
         CopyString(nats, "url", out->nats.url, sizeof(out->nats.url));
@@ -310,6 +365,24 @@ esp_err_t Serialise(const Data &in, size_t *length) {
                 }
             }
             cJSON_AddItemToArray(networks, entry);
+        }
+    }
+
+    cJSON *internet = cJSON_AddObjectToObject(root, "internet");
+    if (internet != nullptr) {
+        cJSON_AddBoolToObject(internet, "check", in.internet.check);
+        cJSON_AddNumberToObject(internet, "intervalSeconds", in.internet.interval_seconds);
+        cJSON_AddNumberToObject(internet, "timeoutMs", in.internet.timeout_ms);
+        cJSON_AddNumberToObject(internet, "failures", in.internet.failures_before_offline);
+        cJSON *targets = cJSON_AddArrayToObject(internet, "targets");
+        if (targets != nullptr) {
+            for (uint8_t i = 0; i < in.internet.target_count && i < kMaxProbeTargets; ++i) {
+                cJSON *item = cJSON_CreateString(in.internet.targets[i]);
+                if (item == nullptr) {
+                    break;
+                }
+                cJSON_AddItemToArray(targets, item);
+            }
         }
     }
 
@@ -489,6 +562,19 @@ void FillDefaults(Data *out) {
     snprintf(out->wifi.ap_ssid, sizeof(out->wifi.ap_ssid), "approver-esp32");
     out->wifi.ap_password[0] = '\0';
     out->wifi.ap_channel = 6;
+    // §10.9's minute, and three operators rather than one — Google, Cloudflare
+    // and Quad9. Three because a single blocked host must not read as an
+    // outage, and *those* three because they are the anycast resolvers most
+    // likely to answer ICMP from anywhere this device is plugged in.
+    out->internet.check = true;
+    out->internet.interval_seconds = 60;
+    out->internet.timeout_ms = 2000;
+    out->internet.failures_before_offline = 2;
+    snprintf(out->internet.targets[0], kIpTextSize, "8.8.8.8");
+    snprintf(out->internet.targets[1], kIpTextSize, "1.1.1.1");
+    snprintf(out->internet.targets[2], kIpTextSize, "9.9.9.9");
+    out->internet.target_count = 3;
+
     snprintf(out->nats.url, sizeof(out->nats.url), "nats://192.168.1.5:4222");
     snprintf(out->time.zone, sizeof(out->time.zone), "UTC");
     snprintf(out->time.posix, sizeof(out->time.posix), "UTC0");

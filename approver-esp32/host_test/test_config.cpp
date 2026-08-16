@@ -14,8 +14,10 @@
 // file, exactly as SPIFFS does**. The measured EIO quirk §10.15 records is
 // therefore reproduced by the host rather than modelled.
 
+#include <cstdio>
 #include <cstring>
 
+#include "cJSON.h"
 #include "config.h"
 #include "fake_platform.h"
 #include "fake_storage.h"
@@ -45,6 +47,43 @@ void FreshWithDefaults() {
                              "spiffs_image/config.init.json not found — check SPIFFS_IMAGE_DIR");
 }
 
+// Every key in `a` is in `b` and the other way round, one level at a time.
+// Objects recurse; arrays are compared through their **first** element only,
+// because the two files legitimately hold different numbers of networks and
+// what matters is that an entry has the same fields in both. A missing array
+// on one side is not drift either — `config.init.json` ships with no networks
+// at all, and that is the point of it.
+void AssertSameKeys(const cJSON *a, const cJSON *b, const char *path) {
+    char child_path[128] = {};
+
+    for (const cJSON *item = a->child; item != nullptr; item = item->next) {
+        if (item->string == nullptr) {
+            continue;
+        }
+        snprintf(child_path, sizeof(child_path), "%s.%s", path, item->string);
+        const cJSON *other = cJSON_GetObjectItemCaseSensitive(b, item->string);
+        TEST_ASSERT_NOT_NULL_MESSAGE(other, child_path);
+        if (cJSON_IsObject(item) && cJSON_IsObject(other)) {
+            AssertSameKeys(item, other, child_path);
+        } else if (cJSON_IsArray(item) && cJSON_IsArray(other)) {
+            const cJSON *first_a = item->child;
+            const cJSON *first_b = other->child;
+            if (first_a != nullptr && first_b != nullptr && cJSON_IsObject(first_a) &&
+                cJSON_IsObject(first_b)) {
+                AssertSameKeys(first_a, first_b, child_path);
+            }
+        }
+    }
+
+    for (const cJSON *item = b->child; item != nullptr; item = item->next) {
+        if (item->string == nullptr) {
+            continue;
+        }
+        snprintf(child_path, sizeof(child_path), "%s.%s", path, item->string);
+        TEST_ASSERT_NOT_NULL_MESSAGE(cJSON_GetObjectItemCaseSensitive(a, item->string), child_path);
+    }
+}
+
 }  // namespace
 
 // --- The files this firmware actually ships ------------------------------
@@ -66,33 +105,36 @@ void test_config_the_shipped_defaults_parse(void) {
 
 void test_config_the_two_shipped_files_have_the_same_shape(void) {
     // §10.15 asks for exactly this, and names why: the two drift apart, and a
-    // restore then changes settings nobody meant to change. Parse each and
-    // compare every field the struct has.
+    // restore then changes settings nobody meant to change.
+    //
+    // **Compared as JSON, not as parsed structs**, and that is the whole
+    // design of this test. After `FillDefaults` a key that was missing and a
+    // key that was present hold the same number, so a struct comparison passes
+    // for the very drift this exists to catch. Worse, it fails for something
+    // that is *not* drift: the shipped `config.json` legitimately carries an
+    // operator's settings, so an AP channel of 1 against a default of 6 is a
+    // configured device, not a mistake. Both of those were learned here — the
+    // struct version started failing the day somebody edited the file.
+    //
+    // So: every key one file has, the other has too. Values are ignored.
     FreshWithDefaults();
     TEST_ASSERT_TRUE(fake::PutRepoFile("config.json"));
-    TEST_ASSERT_EQUAL_INT(ESP_OK, config::Init());
-    const config::Data live = config::Get();
 
-    // `Restore` reads `config.init.json` over the top.
-    TEST_ASSERT_EQUAL_INT(ESP_OK, config::Restore());
-    const config::Data defaults = config::Get();
+    // Read before anything runs: `config::Restore` would put `config.init.json`
+    // over `config.json` and leave two identical files to compare, which is a
+    // test that cannot fail.
+    static char live_json[config::kMaxFileSize];
+    static char defaults_json[config::kMaxFileSize];
+    TEST_ASSERT_TRUE(fake::GetFile("config.json", live_json, sizeof(live_json)));
+    TEST_ASSERT_TRUE(fake::GetFile("config.init.json", defaults_json, sizeof(defaults_json)));
 
-    // Not a memcmp: the *values* are allowed to differ (a shipped `config.json`
-    // may carry an operator's settings). What must match is that both files
-    // populate the same fields — asserted as "nothing that is set in one is
-    // empty in the other".
-    TEST_ASSERT_EQUAL_INT(live.nats.url[0] == '\0', defaults.nats.url[0] == '\0');
-    TEST_ASSERT_EQUAL_INT(live.time.zone[0] == '\0', defaults.time.zone[0] == '\0');
-    TEST_ASSERT_EQUAL_INT(live.time.posix[0] == '\0', defaults.time.posix[0] == '\0');
-    TEST_ASSERT_EQUAL_INT(live.time.sntp_server[0] == '\0',
-                          defaults.time.sntp_server[0] == '\0');
-    // The Wi-Fi block, which is the newest half of the file and therefore the
-    // likeliest to be added to one file and forgotten in the other.
-    TEST_ASSERT_EQUAL_INT(live.wifi.ap_ssid[0] == '\0', defaults.wifi.ap_ssid[0] == '\0');
-    TEST_ASSERT_EQUAL_INT(static_cast<int>(live.wifi.mode), static_cast<int>(defaults.wifi.mode));
-    TEST_ASSERT_EQUAL_UINT8(live.wifi.rounds_before_ap, defaults.wifi.rounds_before_ap);
-    TEST_ASSERT_EQUAL_UINT16(live.wifi.ap_window_seconds, defaults.wifi.ap_window_seconds);
-    TEST_ASSERT_EQUAL_UINT8(live.wifi.ap_channel, defaults.wifi.ap_channel);
+    cJSON *live = cJSON_Parse(live_json);
+    cJSON *defaults = cJSON_Parse(defaults_json);
+    TEST_ASSERT_NOT_NULL_MESSAGE(live, "spiffs_image/config.json does not parse");
+    TEST_ASSERT_NOT_NULL_MESSAGE(defaults, "spiffs_image/config.init.json does not parse");
+    AssertSameKeys(live, defaults, "config");
+    cJSON_Delete(live);
+    cJSON_Delete(defaults);
 }
 
 void test_config_the_committed_file_carries_a_placeholder_password(void) {
@@ -413,6 +455,88 @@ void test_config_a_network_on_dhcp_writes_no_ip_block(void) {
     char back[config::kMaxFileSize] = {};
     TEST_ASSERT_TRUE(fake::GetFile("config.json", back, sizeof(back)));
     TEST_ASSERT_NULL(std::strstr(back, "\"ip\""));
+}
+
+// --- The internet check (§10.9) ------------------------------------------
+
+void test_config_reads_the_internet_check(void) {
+    FreshWithDefaults();
+    fake::PutFile("config.json", R"({"internet":{"check":false,"intervalSeconds":30,
+        "timeoutMs":500,"failures":4,"targets":["8.8.4.4","192.168.1.1"]}})");
+
+    TEST_ASSERT_EQUAL_INT(ESP_OK, config::Init());
+    const config::InternetCheck &net = config::Get().internet;
+    TEST_ASSERT_FALSE(net.check);
+    TEST_ASSERT_EQUAL_UINT16(30, net.interval_seconds);
+    TEST_ASSERT_EQUAL_UINT16(500, net.timeout_ms);
+    TEST_ASSERT_EQUAL_UINT8(4, net.failures_before_offline);
+    TEST_ASSERT_EQUAL_UINT8(2, net.target_count);
+    TEST_ASSERT_EQUAL_STRING("8.8.4.4", net.targets[0]);
+    TEST_ASSERT_EQUAL_STRING("192.168.1.1", net.targets[1]);
+}
+
+void test_config_defaults_ping_three_operators_once_a_minute(void) {
+    // The shape §10.9 asks for, and 8.8.8.8 by name because the request was
+    // for it. Three rather than one: a network that drops ICMP to a single
+    // operator is common and is not an outage.
+    config::Data defaults = {};
+    config::FillDefaults(&defaults);
+    TEST_ASSERT_TRUE(defaults.internet.check);
+    TEST_ASSERT_EQUAL_UINT16(60, defaults.internet.interval_seconds);
+    TEST_ASSERT_EQUAL_UINT8(3, defaults.internet.target_count);
+    TEST_ASSERT_EQUAL_STRING("8.8.8.8", defaults.internet.targets[0]);
+}
+
+void test_config_drops_a_target_that_is_not_an_address(void) {
+    // **A hostname is refused as firmly as a typo.** There is no resolver in
+    // an ICMP echo, so `google.com` here would be a check that can never pass
+    // — and a check that can never pass reads as an outage that never ends.
+    FreshWithDefaults();
+    fake::PutFile("config.json",
+                  R"({"internet":{"targets":["google.com","8.8.8.8","10.0.0.400",42]}})");
+
+    TEST_ASSERT_EQUAL_INT(ESP_OK, config::Init());
+    TEST_ASSERT_EQUAL_UINT8(1, config::Get().internet.target_count);
+    TEST_ASSERT_EQUAL_STRING("8.8.8.8", config::Get().internet.targets[0]);
+}
+
+void test_config_an_empty_target_list_means_none_not_the_defaults(void) {
+    // The operator wrote it down. Falling back to the built-in list would be
+    // the device pinging Google after being told not to.
+    FreshWithDefaults();
+    fake::PutFile("config.json", R"({"internet":{"check":true,"targets":[]}})");
+
+    TEST_ASSERT_EQUAL_INT(ESP_OK, config::Init());
+    TEST_ASSERT_EQUAL_UINT8(0, config::Get().internet.target_count);
+}
+
+void test_config_an_interval_of_zero_is_floored_not_taken(void) {
+    // This is somebody else's server being asked. A probe loop with no
+    // interval is a flood with a friendly name.
+    FreshWithDefaults();
+    fake::PutFile("config.json", R"({"internet":{"intervalSeconds":0}})");
+
+    TEST_ASSERT_EQUAL_INT(ESP_OK, config::Init());
+    TEST_ASSERT_TRUE(config::Get().internet.interval_seconds >= 5);
+}
+
+void test_config_the_internet_check_round_trips(void) {
+    FreshWithDefaults();
+    fake::PutFile("config.json", kGoodJson);
+    TEST_ASSERT_EQUAL_INT(ESP_OK, config::Init());
+
+    config::Get().internet.check = false;
+    config::Get().internet.interval_seconds = 120;
+    config::Get().internet.target_count = 1;
+    snprintf(config::Get().internet.targets[0], config::kIpTextSize, "9.9.9.9");
+    TEST_ASSERT_EQUAL_INT(ESP_OK, config::Save());
+
+    config::Get().internet.check = true;
+    TEST_ASSERT_EQUAL_INT(ESP_OK, config::Reload());
+    TEST_ASSERT_FALSE(config::Get().internet.check);
+    TEST_ASSERT_EQUAL_UINT16(120, config::Get().internet.interval_seconds);
+    TEST_ASSERT_EQUAL_UINT8(1, config::Get().internet.target_count);
+    TEST_ASSERT_EQUAL_STRING("9.9.9.9", config::Get().internet.targets[0]);
 }
 
 // --- The restore path (§10.15) -------------------------------------------
@@ -736,6 +860,13 @@ void RegisterConfigTests(void) {
     RUN_TEST(test_config_a_bad_dns_entry_does_not_disable_the_address);
     RUN_TEST(test_config_a_static_address_round_trips);
     RUN_TEST(test_config_a_network_on_dhcp_writes_no_ip_block);
+
+    RUN_TEST(test_config_reads_the_internet_check);
+    RUN_TEST(test_config_defaults_ping_three_operators_once_a_minute);
+    RUN_TEST(test_config_drops_a_target_that_is_not_an_address);
+    RUN_TEST(test_config_an_empty_target_list_means_none_not_the_defaults);
+    RUN_TEST(test_config_an_interval_of_zero_is_floored_not_taken);
+    RUN_TEST(test_config_the_internet_check_round_trips);
 
     RUN_TEST(test_config_a_string_too_long_for_its_field_is_refused_not_truncated);
     RUN_TEST(test_config_a_network_whose_ssid_does_not_fit_is_dropped);

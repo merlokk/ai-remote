@@ -31,6 +31,7 @@ void RegisterButtonsTests(void);
 void RegisterTimezoneTests(void);
 void RegisterSpeakerTests(void);
 void RegisterWifiPolicyTests(void);
+void RegisterReachabilityTests(void);
 
 void setUp(void) { fake::Reset(); }
 
@@ -72,6 +73,7 @@ int main(int argc, char **argv) {
     if (Wanted("timezone")) RegisterTimezoneTests();
     if (Wanted("speaker")) RegisterSpeakerTests();
     if (Wanted("wifi")) RegisterWifiPolicyTests();
+    if (Wanted("wifi") || Wanted("reach")) RegisterReachabilityTests();
 
     return UNITY_END();
 }

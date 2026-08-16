@@ -8,6 +8,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "ping/ping_sock.h"
 
 namespace wifimgr {
 
@@ -36,6 +37,81 @@ SemaphoreHandle_t lock = nullptr;
 
 wifi::Radio radio;
 Policy policy;
+Reachability reach;
+
+static_assert(kMaxProbeTargets == config::kMaxProbeTargets,
+              "the probe list and config.json's must be the same length");
+
+// --- the ICMP echo itself ---------------------------------------------------
+//
+// `esp_ping` runs each session on a task of its own and answers through
+// callbacks, so this is a small mailbox between that task and ours. The
+// decisions — when to ask, which address, what a failed round means — are all
+// in `reachability.h` and none of them are here.
+
+struct PingMailbox {
+    volatile bool done;
+    volatile bool replied;
+};
+PingMailbox ping_mail = {};
+esp_ping_handle_t ping_handle = nullptr;
+uint32_t ping_started_ms = 0;
+uint32_t ping_deadline_ms = 0;
+
+void OnPingReply(esp_ping_handle_t, void *) { ping_mail.replied = true; }
+void OnPingEnd(esp_ping_handle_t, void *) { ping_mail.done = true; }
+
+void ClosePing() {
+    if (ping_handle == nullptr) {
+        return;
+    }
+    esp_ping_stop(ping_handle);
+    esp_ping_delete_session(ping_handle);
+    ping_handle = nullptr;
+}
+
+// One echo, one answer. **A session per probe**, created and deleted around
+// each one: `esp_ping` has no way to retarget a live session, and once a
+// minute is nowhere near often enough for the task churn to matter.
+bool StartPing(uint32_t address, uint32_t timeout_ms, uint32_t now_ms) {
+    if (ping_handle != nullptr) {
+        return false;
+    }
+    esp_ping_config_t config = ESP_PING_DEFAULT_CONFIG();
+    // One packet, not the default five: this is a yes/no question about
+    // whether anything is out there, not a link-quality measurement.
+    config.count = 1;
+    config.timeout_ms = timeout_ms;
+    config.data_size = 32;
+    config.task_stack_size = 3072;
+    // lwIP's `ip_addr_t`, so `IPADDR_TYPE_V4` — not `esp_netif`'s
+    // `ESP_IPADDR_TYPE_V4`, which is the same idea one layer up and does not
+    // name this type's constants.
+    config.target_addr.type = IPADDR_TYPE_V4;
+    config.target_addr.u_addr.ip4.addr = address;
+
+    esp_ping_callbacks_t callbacks = {};
+    callbacks.on_ping_success = &OnPingReply;
+    callbacks.on_ping_end = &OnPingEnd;
+
+    ping_mail.done = false;
+    ping_mail.replied = false;
+    if (esp_ping_new_session(&config, &callbacks, &ping_handle) != ESP_OK) {
+        ping_handle = nullptr;
+        return false;
+    }
+    if (esp_ping_start(ping_handle) != ESP_OK) {
+        ClosePing();
+        return false;
+    }
+    ping_started_ms = now_ms;
+    // **Our own deadline on top of the library's.** §10.5's rule about
+    // bounding every read, applied to somebody else's task: a session that
+    // never calls back would otherwise leave the check waiting forever and the
+    // state stuck at whatever it last was.
+    ping_deadline_ms = timeout_ms + 3000;
+    return true;
+}
 
 // What the last pass saw, so an edge is reported once. The radio latches
 // `kFailed` until the next `Start…` precisely so this can be a comparison
@@ -100,6 +176,16 @@ wifi::StaticIp AddressFor(const config::Network &network) {
     config::ParseIpv4(network.ip.dns2, &ip.dns2);
     ip.enabled = true;
     return ip;
+}
+
+ProbeSettings ProbesFromConfig() {
+    const config::InternetCheck &net = config::Get().internet;
+    ProbeSettings settings;
+    settings.enabled = net.check;
+    settings.target_count = net.target_count;
+    settings.interval_ms = static_cast<uint32_t>(net.interval_seconds) * 1000u;
+    settings.failures_before_offline = net.failures_before_offline;
+    return settings;
 }
 
 Settings SettingsFromConfig() {
@@ -209,12 +295,63 @@ bool ApplyAction(Action action, uint32_t now_ms) {
     return true;
 }
 
+// The internet check (§10.9), driven from the same 200 ms pass as everything
+// else. Three steps, and each is a couple of lines because the thinking is
+// next door in `reachability.h`.
+void PumpReachability(uint32_t now, bool link_is_up) {
+    if (link_is_up) {
+        reach.LinkUp(now);
+    } else {
+        reach.LinkDown(now);
+        // A session outstanding when the link went is a session whose answer
+        // is about nothing.
+        if (ping_handle != nullptr) {
+            ClosePing();
+        }
+        return;
+    }
+
+    if (ping_handle != nullptr) {
+        if (ping_mail.done) {
+            const bool replied = ping_mail.replied;
+            ClosePing();
+            reach.OnResult(replied, now);
+        } else if (now - ping_started_ms >= ping_deadline_ms) {
+            // The library did not call back. Count it as a failure rather than
+            // waiting: an unanswered question is the same as a no here, and
+            // hanging on it would freeze the check for good.
+            ESP_LOGW(TAG, "ping session did not finish; treating it as no answer");
+            ClosePing();
+            reach.OnResult(false, now);
+        }
+        return;
+    }
+
+    if (reach.Tick(now) != Probe::kSend) {
+        return;
+    }
+
+    const config::InternetCheck &net = config::Get().internet;
+    const uint8_t index = reach.Target();
+    uint32_t address = 0;
+    if (index >= net.target_count || !config::ParseIpv4(net.targets[index], &address)) {
+        // The list changed under the round, or a target that `config` should
+        // have refused got through. Either way this probe cannot be sent.
+        reach.OnResult(false, now);
+        return;
+    }
+    if (!StartPing(address, net.timeout_ms, now)) {
+        reach.OnResult(false, now);
+    }
+}
+
 void Pump() {
     const uint32_t now = NowMs();
 
     // What the radio has to say, turned into events. Each edge is reported
     // once: `reported_*` is cleared by every `Start…` above, which is the only
     // thing that can begin a new attempt.
+    bool link_is_up = false;
     if (radio_ready) {
         const wifi::Status status = radio.Get();
         policy.OnApClients(status.clients, now);
@@ -226,7 +363,14 @@ void Pump() {
             reported_failed = true;
             policy.OnFailed(Translate(status.failure), now);
         }
+
+        // **Connected as a client and holding an address**, which is the only
+        // state in which asking about the internet means anything: an access
+        // point has no uplink of its own to test.
+        link_is_up = status.mode == wifi::Mode::kClient &&
+                     status.link == wifi::Link::kConnected && status.ip != 0;
     }
+    PumpReachability(now, link_is_up);
 
     // The desired mode is read from the file on every pass — `SetDesired` is
     // idempotent, so this costs nothing and means an edit takes effect without
@@ -272,6 +416,7 @@ esp_err_t Init() {
     }
 
     policy.Configure(SettingsFromConfig(), NowMs());
+    reach.Configure(ProbesFromConfig(), NowMs());
 
     task_handle = xTaskCreateStatic(&Task, "wifimgr", kStackBytes, nullptr, 4, task_stack,
                                     &task_storage);
@@ -296,6 +441,16 @@ void Apply() {
     pending = Action::kNone;
     policy.Configure(SettingsFromConfig(), NowMs());
     policy.SetDesired(DesiredFromConfig(), NowMs());
+    reach.Configure(ProbesFromConfig(), NowMs());
+    xSemaphoreGive(lock);
+}
+
+void CheckInternetNow() {
+    if (!started) {
+        return;
+    }
+    xSemaphoreTake(lock, portMAX_DELAY);
+    reach.ProbeNow(NowMs());
     xSemaphoreGive(lock);
 }
 
@@ -330,6 +485,11 @@ Snapshot Get() {
     snapshot.wait_remaining_ms = policy.WaitRemainingMs(now);
     snapshot.radio_ready = radio_ready;
     snapshot.radio_error = radio_error;
+    snapshot.internet = reach.State();
+    snapshot.internet_failed_rounds = reach.FailedRounds();
+    snapshot.internet_last_ok_ms = reach.SinceLastSuccessMs(now);
+    snapshot.internet_next_probe_ms = reach.NextProbeInMs(now);
+    snapshot.internet_target = reach.Target();
     xSemaphoreGive(lock);
 
     // Outside the lock: `Radio::Get` takes its own, and holding two locks in
