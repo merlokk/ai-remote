@@ -111,11 +111,31 @@ class Radio {
     Radio(const Radio &) = delete;
     Radio &operator=(const Radio &) = delete;
 
-    // Trivial constructor, explicit Init (§10.14.1). Brings up NVS, the
-    // netifs, the event loop and `esp_wifi` — but **starts nothing**: a radio
-    // that came up transmitting would be a policy decision taken by a driver.
+    // Trivial constructor, explicit Init (§10.14.1).
+    //
+    // **Bring-up is in two halves, and the reason is 41 KB of RAM.** This one
+    // is the half that happens once and is never undone — NVS, `esp_netif`,
+    // the default event loop and our own handlers on it. It costs about 10 KB,
+    // it is paid the first time anything wants the radio, and it starts
+    // nothing.
+    //
+    // The other half — the netifs and `esp_wifi_init` itself — is taken by the
+    // first `StartClient` / `StartAp` / `Scan` and **given back by `Stop`**.
+    // Measured on this board with `status`, at a steady state well after boot:
+    // 170,524 bytes free having never touched the radio, 160,000-ish once it
+    // has been used and switched off, and 119,256 with a client running. So
+    // the releasable part is ~41 KB and the permanent part ~10 KB.
+    //
+    // 41 KB is worth this much machinery on a part with 512 KB, no PSRAM
+    // (§10.1) and LVGL already holding a 64 KB pool — and 26 on/off cycles
+    // measured on the board return it every time, drifting a few hundred bytes
+    // in *both* directions, which is the allocator rather than a leak.
     esp_err_t Init();
     bool Ready() const { return ready_; }
+
+    // Whether the second half is currently up — i.e. whether the heap above is
+    // currently spent. `Stop()` is what puts it back down.
+    bool StackUp() const { return stack_ready_; }
 
     // Join `ssid`. Replaces whatever the station was doing. An empty password
     // means an open network.
@@ -127,7 +147,11 @@ class Radio {
     // dropped, because a wide-open AP nobody asked for is worse than an error.
     esp_err_t StartAp(const char *ssid, const char *password, uint8_t channel = 6);
 
-    // Radio down. Idempotent.
+    // Radio down, **and the Wi-Fi stack with it**: `esp_wifi_stop`,
+    // `esp_wifi_deinit`, and the default netifs destroyed. Off means off, and
+    // the heap comes back. Idempotent, and cheap to undo — bringing the stack
+    // up again is tens of milliseconds, which is nothing next to the seconds
+    // an association takes anyway.
     esp_err_t Stop();
 
     // A snapshot, taken under the status lock — every field belongs to the
@@ -139,12 +163,12 @@ class Radio {
     // and it costs a connected station a beat because the radio has to leave
     // its channel (§10.8.6 says not to do it on a timer).
     //
-    // **Works with the radio off**: it brings the station interface up on its
-    // own and puts it back down afterwards, leaving the mode exactly as it
-    // found it. Nothing is broadcast — an access point, hidden or not, is more
-    // radio than a scan needs, and `wifi_radio.cpp` says why. What it cannot
-    // undo is `esp_wifi_init`, so the first scan spends the stack's heap for
-    // good.
+    // **Works with the radio off**, and leaves it exactly as it found it: it
+    // brings the station interface up — and the whole stack, if that was down
+    // too — scans, and puts back down whatever it had to raise. Nothing is
+    // broadcast: an access point, hidden or not, is more radio than a scan
+    // needs, and `wifi_radio.cpp` says why. A scan on a device that lives with
+    // Wi-Fi off therefore costs its heap only for the two seconds it runs.
     //
     // **2.4 GHz, because that is every band this chip has** — not a filter
     // this code applies. `wifi_radio.cpp` carries the compile-time assertion
@@ -167,7 +191,21 @@ class Radio {
     void OnEvent(const char *base, int32_t id, void *data);
 
     void SetLink(Link link, Failure failure, uint8_t reason);
+
+    // The second half of bring-up: the default netifs and `esp_wifi_init`.
+    // Idempotent, and taken by whichever of `StartClient` / `StartAp` / `Scan`
+    // needs it first.
+    esp_err_t EnsureStack();
+
+    // Its opposite, and the thing that gives the heap back. Stops the station
+    // if it is running, deinitialises, and **destroys the default netifs** —
+    // creating those twice is not a thing that works, so they are made in
+    // `EnsureStack` and unmade here rather than living forever.
+    void ReleaseStack();
+
+    // `esp_wifi_start`, and nothing about the stack.
     esp_err_t EnsureStarted();
+    void StopStation();
 
     // Written out rather than `++`: C++20 deprecates compound assignment on a
     // `volatile`, and the toolchain builds with `-Werror`. The load and the
@@ -177,8 +215,9 @@ class Radio {
         suppress_disconnect_ = static_cast<uint8_t>(suppress_disconnect_ + 1);
     }
 
-    bool ready_ = false;
-    bool started_ = false;
+    bool ready_ = false;        // the once-ever half of Init
+    bool stack_ready_ = false;  // esp_wifi_init has been paid for
+    bool started_ = false;      // esp_wifi_start
     bool want_connect_ = false;
     volatile bool scanning_ = false;
 

@@ -1154,16 +1154,35 @@ size-components` puts `libwifi.a` at 5,098 bytes and `libwifimgr.a` at 7,379,
 against the framework's ~415 KB of flash for `net80211` + `pp` + `lwip` that
 arrive the first time any of it is linked.
 
-**What laziness is actually saving is 130 KB of RAM, measured**: `status`
-reports 251,744 bytes of free heap on a fresh boot and 121,544 once the Wi-Fi
-stack has been initialised. On a part with 512 KB and no PSRAM (§10.1) that is
-not a rounding error — it is twice LVGL's whole pool. It is also **not given
-back**: stopping the radio stops the radio, and `esp_wifi_deinit` is not called
-anywhere. So a `wifi scan` on a device that lives with Wi-Fi off costs that
-130 KB until the next reboot. Reclaiming it means splitting `Radio::Init` into
-a once-ever half (NVS, the netifs, the event handlers — creating the default
-netifs twice does not work) and a re-runnable one. Worth doing; not done; the
-number is here so that the decision is a decision.
+**What laziness is saving is 41 KB of RAM, and off gives it back.** Bring-up is
+in two halves for exactly that reason:
+
+| | Cost | Given back? |
+|---|---|---|
+| once ever — NVS, `esp_netif`, the default event loop, our handlers on it | ~10 KB | no |
+| per bring-up — the default netifs and `esp_wifi_init` | ~41 KB | **yes, on `Stop`** |
+
+Measured with `status` at a steady state well after boot: **170,524** bytes free
+having never touched the radio, ~**160,000** once it has been used and switched
+off, **119,256** with a client running, 116,336 low-water. Twenty-six on/off
+cycles on the board return it every time and drift a few hundred bytes in
+*both* directions — the allocator, not a leak.
+
+The split exists because the two halves have different lifetimes and one of
+them **cannot** be repeated: `esp_netif_create_default_wifi_sta()` may not be
+called twice for the same interface, so the netifs are created in `EnsureStack`
+and destroyed in `ReleaseStack` rather than living forever, while the event
+handlers — which are attached to the loop, not to the driver — are registered
+once and survive the stack going up and down underneath them.
+
+**A correction worth recording, because the first number written here was
+wrong.** This section originally claimed 130 KB, from a `status` taken two
+seconds after boot against one taken after the radio came up. That first
+reading is *before LVGL takes its 64 KB pool* — the splash and the boot chime
+mean LVGL starts about five seconds in — so it was comparing two different
+moments and charging the difference to Wi-Fi. Same-instant measurements are
+above. A heap number without the point in the boot it was taken at is not a
+measurement, which is the lesson rather than the arithmetic.
 
 **`wifi scan` works with the radio off**, which is the shape the operator
 needs: "what is out there" is the question you have *before* the device is

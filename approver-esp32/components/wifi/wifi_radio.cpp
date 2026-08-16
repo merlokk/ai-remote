@@ -147,22 +147,11 @@ esp_err_t Radio::Init() {
         return err;
     }
 
-    // Both interfaces, once. The station is the ordinary case; the access
-    // point exists for §10.9's fallback and for `Desired::kAp`, and creating
-    // it here rather than on demand keeps mode changes to one call.
-    sta_netif_ = esp_netif_create_default_wifi_sta();
-    ap_netif_ = esp_netif_create_default_wifi_ap();
-    if (sta_netif_ == nullptr || ap_netif_ == nullptr) {
-        return ESP_FAIL;
-    }
-
-    wifi_init_config_t init = WIFI_INIT_CONFIG_DEFAULT();
-    err = esp_wifi_init(&init);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "esp_wifi_init: %s", esp_err_to_name(err));
-        return err;
-    }
-
+    // **Registered once and never unregistered**, which is why they are in
+    // this half: an event handler is attached to the loop rather than to the
+    // Wi-Fi driver, so it survives the stack being torn down and put back up.
+    // Registering before there is anything to post events is fine — an event
+    // base is a symbol, not a subscription to something running.
     err = esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &EventTrampoline, this,
                                               nullptr);
     if (err == ESP_OK) {
@@ -174,18 +163,83 @@ esp_err_t Radio::Init() {
         return err;
     }
 
+    ready_ = true;
+    ESP_LOGI(TAG, "radio ready (the stack is not up — that is the manager's call)");
+    return ESP_OK;
+}
+
+esp_err_t Radio::EnsureStack() {
+    if (stack_ready_) {
+        return ESP_OK;
+    }
+
+    // **The netifs are made here and destroyed in `ReleaseStack`**, not kept
+    // for the life of the device. `esp_netif_create_default_wifi_sta()` may
+    // not be called twice for the same interface, so a stack that comes back
+    // up needs them created again rather than reused — which is the whole
+    // reason bring-up is in two halves rather than one. They also have to
+    // exist *before* `esp_wifi_init`, which is the order every ESP-IDF example
+    // uses and the order below.
+    sta_netif_ = esp_netif_create_default_wifi_sta();
+    ap_netif_ = esp_netif_create_default_wifi_ap();
+    if (sta_netif_ == nullptr || ap_netif_ == nullptr) {
+        ReleaseStack();
+        return ESP_FAIL;
+    }
+
+    wifi_init_config_t init = WIFI_INIT_CONFIG_DEFAULT();
+    esp_err_t err = esp_wifi_init(&init);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_wifi_init: %s", esp_err_to_name(err));
+        // The netifs are up and the stack is not; leaving them would leak a
+        // pair that the next attempt could not create again.
+        esp_netif_destroy_default_wifi(sta_netif_);
+        esp_netif_destroy_default_wifi(ap_netif_);
+        sta_netif_ = nullptr;
+        ap_netif_ = nullptr;
+        return err;
+    }
+
     // **§10.9, and it is the reason `config.json` is worth anything.** The
     // driver's own credential store would be a second record of what this
     // device knows — one that a config restore does not clear and that nobody
     // can read off a `cat`. There is one record, and it is the file.
+    //
+    // It has to be set after every `esp_wifi_init`, not once at boot: the
+    // setting lives in the stack that was just created.
     err = esp_wifi_set_storage(WIFI_STORAGE_RAM);
     if (err != ESP_OK) {
         return err;
     }
 
-    ready_ = true;
-    ESP_LOGI(TAG, "radio ready (nothing started — that is the manager's call)");
+    stack_ready_ = true;
     return ESP_OK;
+}
+
+void Radio::ReleaseStack() {
+    if (started_) {
+        esp_wifi_stop();
+        started_ = false;
+    }
+    if (stack_ready_) {
+        esp_wifi_deinit();
+        stack_ready_ = false;
+    }
+    // Destroyed in the opposite order to their creation, and only if they were
+    // made: `esp_netif_destroy_default_wifi` on a null pointer is not a call
+    // worth finding out about.
+    if (ap_netif_ != nullptr) {
+        esp_netif_destroy_default_wifi(ap_netif_);
+        ap_netif_ = nullptr;
+    }
+    if (sta_netif_ != nullptr) {
+        esp_netif_destroy_default_wifi(sta_netif_);
+        sta_netif_ = nullptr;
+    }
+    // Nothing can post an event now, so anything we were waiting to ignore is
+    // never coming.
+    want_connect_ = false;
+    suppress_disconnect_ = 0;
 }
 
 // --- what the radio is asked to do ------------------------------------------
@@ -201,6 +255,17 @@ esp_err_t Radio::EnsureStarted() {
     }
     started_ = true;
     return ESP_OK;
+}
+
+void Radio::StopStation() {
+    if (!started_) {
+        return;
+    }
+    SuppressNextDisconnect();
+    esp_wifi_disconnect();
+    esp_wifi_stop();
+    started_ = false;
+    want_connect_ = false;
 }
 
 esp_err_t Radio::StartClient(const char *ssid, const char *password) {
@@ -246,6 +311,13 @@ esp_err_t Radio::StartClient(const char *ssid, const char *password) {
     // Retries are the policy's, not the driver's (§10.9): this driver reports
     // one outcome per attempt and lets `wifimgr` decide what it means.
     config.sta.failure_retry_cnt = 0;
+
+    // The stack, if this is the first thing to want it since boot or since the
+    // last `Stop`. Validated arguments first, so a typo does not pay for it.
+    const esp_err_t stack = EnsureStack();
+    if (stack != ESP_OK) {
+        return stack;
+    }
 
     // Whatever the station was doing is over. The disconnection this produces
     // is ours, and reporting it as a failure would fail the attempt below
@@ -331,6 +403,11 @@ esp_err_t Radio::StartAp(const char *ssid, const char *password, uint8_t channel
     config.ap.max_connection = 4;
     config.ap.pmf_cfg.required = false;
 
+    const esp_err_t stack = EnsureStack();
+    if (stack != ESP_OK) {
+        return stack;
+    }
+
     if (started_) {
         SuppressNextDisconnect();
         esp_wifi_disconnect();
@@ -370,15 +447,19 @@ esp_err_t Radio::StartAp(const char *ssid, const char *password, uint8_t channel
 }
 
 esp_err_t Radio::Stop() {
-    if (!ready_ || !started_) {
+    if (!ready_ || (!started_ && !stack_ready_)) {
         return ESP_OK;
     }
 
-    SuppressNextDisconnect();
-    esp_wifi_disconnect();
-    const esp_err_t err = esp_wifi_stop();
-    started_ = false;
-    want_connect_ = false;
+    // **Off means off, including the heap.** `ReleaseStack` stops the station,
+    // deinitialises and destroys the netifs; the ~41 KB the Wi-Fi stack holds
+    // goes back to a part that has 512 KB and no way to add more (§10.1).
+    if (started_) {
+        SuppressNextDisconnect();
+        esp_wifi_disconnect();
+    }
+    ReleaseStack();
+    const esp_err_t err = ESP_OK;
 
     Status update = {};
     xSemaphoreTake(lock_, portMAX_DELAY);
@@ -457,23 +538,31 @@ esp_err_t Radio::Scan(ScanResult *out, size_t capacity, size_t *found) {
     // A started station transmits probe requests while scanning and nothing at
     // all otherwise.
     //
-    // **What it does not undo is `esp_wifi_init`, and that is expensive:**
-    // measured on this board, `status` reports 251,744 bytes of free heap on a
-    // fresh boot and 121,544 after the first scan — the stack costs about
-    // 130 KB and does not give it back when the station stops. Giving it back
-    // would mean `esp_wifi_deinit` here and splitting `Init` into a
-    // once-ever half (NVS, the netifs, the event handlers) and a re-runnable
-    // one, because creating the default netifs twice is not a thing that
-    // works. Worth doing for a device whose normal state is Wi-Fi off; not
-    // done yet, and the number above is why it is written down rather than
-    // left for somebody to discover.
-    const bool brought_up = !started_;
-    if (brought_up) {
+    // **Whatever had to be raised is put back**, at both levels: the Wi-Fi
+    // stack costs about 41 KB of heap (160 KB free with it down against
+    // 119 KB with it up, measured on this board), so a scan on a device that
+    // lives with the radio off borrows that for two seconds rather than
+    // keeping it until the next reboot.
+    const bool stack_was_ours = !stack_ready_;
+    const bool station_was_off = !started_;
+    if (stack_was_ours) {
+        const esp_err_t up = EnsureStack();
+        if (up != ESP_OK) {
+            scanning_ = false;
+            ESP_LOGW(TAG, "scan needed the stack up and it would not start: %s",
+                     esp_err_to_name(up));
+            return up;
+        }
+    }
+    if (station_was_off) {
         esp_err_t up = esp_wifi_set_mode(WIFI_MODE_STA);
         if (up == ESP_OK) {
             up = EnsureStarted();
         }
         if (up != ESP_OK) {
+            if (stack_was_ours) {
+                ReleaseStack();
+            }
             scanning_ = false;
             ESP_LOGW(TAG, "scan needed the station up and it would not start: %s",
                      esp_err_to_name(up));
@@ -481,12 +570,20 @@ esp_err_t Radio::Scan(ScanResult *out, size_t capacity, size_t *found) {
         }
     }
 
+    // Undoes exactly what was raised, in one place, so the three exits below
+    // cannot disagree about it.
+    const auto put_back = [this, stack_was_ours, station_was_off]() {
+        if (stack_was_ours) {
+            ReleaseStack();
+        } else if (station_was_off) {
+            StopStation();
+        }
+    };
+
     wifi_scan_config_t config = {};  // active scan, every channel, no filter
     esp_err_t err = esp_wifi_scan_start(&config, true);
     if (err != ESP_OK) {
-        if (brought_up) {
-            Stop();
-        }
+        put_back();
         scanning_ = false;
         ESP_LOGW(TAG, "scan: %s", esp_err_to_name(err));
         return err;
@@ -494,11 +591,9 @@ esp_err_t Radio::Scan(ScanResult *out, size_t capacity, size_t *found) {
 
     uint16_t number = kMaxScanResults;
     err = esp_wifi_scan_get_ap_records(&number, scan_records);
-    // Back to how it was found. `Stop()` before `scanning_` is cleared, so the
+    // Back to how it was found, and *before* `scanning_` is cleared, so the
     // manager cannot start something in between and have it torn down.
-    if (brought_up) {
-        Stop();
-    }
+    put_back();
     scanning_ = false;
     if (err != ESP_OK) {
         // The records are freed by the call above whether or not it succeeded;

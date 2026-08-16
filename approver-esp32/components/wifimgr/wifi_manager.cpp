@@ -319,8 +319,12 @@ esp_err_t Scan(wifi::ScanResult *out, size_t capacity, size_t *found) {
     // Everywhere else the radio comes up because `config.json` wants a
     // network; here somebody is asking what is out there, which is exactly the
     // question you have with the radio off and no network that works. The
-    // driver takes the station down again afterwards; what stays spent is
-    // `esp_wifi_init`'s heap, and that is stated rather than hidden.
+    // driver puts back down whatever it had to raise — the station, and the
+    // Wi-Fi stack with it if that was down too — so this borrows the stack's
+    // heap for the two seconds it runs rather than keeping it.
+    //
+    // What `EnsureRadio` takes and does not give back is the once-ever half:
+    // NVS, `esp_netif` and the event handlers, a few kilobytes.
     //
     // The lock is held only across the bring-up flag, never across the scan
     // itself: that blocks for a second or two, and the manager task has a poll
