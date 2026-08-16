@@ -155,6 +155,23 @@ extern "C" void app_main(void) {
         board::Codec().SetVolume(config::Get().audio.volume_percent);
     }
 
+    // **And the brightness, which was stored and never applied.** §10.15 calls
+    // the volume "the first setting that round-trips"; this is the second, and
+    // until now it only looked like one — `config set brightness` wrote the
+    // field, `config save` put it in the file, and the panel came up at
+    // whatever `Panel::Init` left it at regardless. A setting that survives a
+    // reboot and changes nothing is worse than one that is missing, because
+    // the operator has no reason to doubt it.
+    //
+    // Found by the reading form of `display brightness`, which is the whole
+    // argument for that form existing: the live value and the stored one are
+    // two numbers, and nothing else on this device prints them side by side.
+    // Before the splash, so the first thing on the glass is already at the
+    // brightness that was asked for rather than flashing full-scale first.
+    if (board::Display().Ready()) {
+        board::Display().SetBrightness(config::Get().display.brightness);
+    }
+
     // **The splash and the boot sound are one event, and the order below is
     // what makes them one.** The picture goes on the glass first, the chime
     // plays under it, and LVGL takes the panel over only afterwards — a device

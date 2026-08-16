@@ -1869,6 +1869,24 @@ at 45 % because `main` applies `config.audio.volume` to the codec. `play` with
 no arguments uses the *file's* volume rather than whatever the codec was last
 set to — the file is the record of what the operator chose.
 
+**The brightness is the second, and for a while it only looked like one.** The
+field was there, `config set brightness` wrote it, `config save` put it in the
+file — and `main` never handed it to the panel, which came up at whatever
+`Panel::Init` left it at. A setting that survives a reboot and changes nothing
+is worse than one that is missing: there is nothing for the operator to doubt.
+It is applied now, before the splash, so the first thing on the glass is
+already at the brightness that was asked for.
+
+**What found it is the reading form of `display brightness`** — and that is the
+argument for every `[0..100]` in §10.7 being optional rather than required.
+The panel's live value and the stored one are two numbers; the read prints them
+side by side (`brightness 100% (config says 80%)`), and nothing else on this
+device does. The command had required its argument, so the documented spelling
+was an error — and the usage text it printed then said `<0..100>`, so the
+console and the docs disagreed about which of them was wrong. Fixed in the
+direction the docs had it, because `play volume` was already that shape and one
+of the two had to be the rule.
+
 Where that application happens is deliberate: `main` reads the config and sets
 the codec, because `config` knows nothing about a codec and `board` knows
 nothing about a file (§10.14.2). It is also why boot order changed — storage

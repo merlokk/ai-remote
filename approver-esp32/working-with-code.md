@@ -150,6 +150,7 @@ buttons watch 30              # print edges for 30 s (default 10, max 120)
 imu                           # the QMI8658C: six axes, tilt, die temperature
 imu watch 10                  # a line a second of the same numbers
 display                       # panel, LVGL and touch state, with missed I2C reads
+display brightness            # the panel's live value, and what `config.json` says
 display brightness 40         # the panel only; `config set brightness` is the stored one
 display off                   # blank it; `display on` brings it back
 play                          # play alert.wav; `play poweron.wav` for the other one

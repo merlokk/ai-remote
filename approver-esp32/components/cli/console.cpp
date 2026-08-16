@@ -1037,7 +1037,25 @@ int CmdDisplay(int argc, char **argv) {
     if (argc == 2 && strcmp(argv[1], "off") == 0) {
         return panel.SetOn(false) == ESP_OK ? 0 : 1;
     }
-    if (argc == 3 && strcmp(argv[1], "brightness") == 0) {
+    if (argc > 1 && strcmp(argv[1], "brightness") == 0) {
+        // **Reading is a form of this command, not a misuse of it.** §10.7
+        // writes it `display brightness [0..100]`, the same shape as
+        // `play volume [0..100]`, and for the same reason: the panel's live
+        // value and the one `config.json` carries are two different numbers,
+        // and the only way to find out they have diverged is to ask. Requiring
+        // the argument made the documented spelling an error — and an error
+        // whose usage text then printed `<0..100>`, so the docs and the
+        // console disagreed about which one was wrong.
+        if (argc == 2) {
+            printf("brightness %u%% (config says %u%%)\n",
+                   static_cast<unsigned>(panel.Brightness()),
+                   static_cast<unsigned>(config::Get().display.brightness));
+            return 0;
+        }
+        if (argc != 3) {
+            printf("usage: display brightness [0..100]\n");
+            return 1;
+        }
         char *end = nullptr;
         const long value = strtol(argv[2], &end, 10);
         if (end == argv[2] || *end != '\0' || value < 0 || value > 100) {
@@ -1059,7 +1077,7 @@ int CmdDisplay(int argc, char **argv) {
 
     printf("usage: display                    panel, LVGL and touch state\n");
     printf("       display on|off             blank the panel without dimming it\n");
-    printf("       display brightness <0..100>\n");
+    printf("       display brightness [0..100]   read it, or set the panel only\n");
     return 1;
 }
 
@@ -1139,7 +1157,7 @@ const esp_console_cmd_t kCommands[] = {
     {
         .command = "display",
         .help = "the panel, LVGL and the touch controller; on/off and brightness",
-        .hint = "[on|off|brightness <0..100>]",
+        .hint = "[on|off|brightness [0..100]]",
         .func = &CmdDisplay,
         .argtable = nullptr,
         .func_w_context = nullptr,
