@@ -18,10 +18,15 @@ about.
 
 This file owns section **10** of the project docs. The numbering is global — see
 [`../CLAUDE.md`](../CLAUDE.md) §2 for the map — and project-wide rules (TDD, the
-dependency allowlist) stay in that root file. Its one companion is
-[`working-with-code.md`](working-with-code.md): where ESP-IDF is installed on
-this machine and how to get a shell in which `idf.py` exists — mechanics, which
-this file deliberately does not carry.
+dependency allowlist) stay in that root file. It has two companions, and
+between them they carry what this file deliberately does not:
+
+- [`working-with-code.md`](working-with-code.md) — **mechanics**: where ESP-IDF
+  is installed on this machine, how to get a shell in which `idf.py` exists,
+  how to flash, and how to talk to the port from a script;
+- [`commands.md`](commands.md) — **the console reference**: every command the
+  device answers and what each one does. Design documents describe why; that
+  one describes what you can type.
 
 ## Status: a skeleton that builds, and a plan above it
 
@@ -521,78 +526,63 @@ by `py approver/registration_handler.py --get-token approver-esp32`. Typing that
 on a 2.16″ touchscreen is a bad joke, so registration is driven over **USB**,
 through `esp_console` on the USB Serial/JTAG port:
 
-```
-register <token>              # the §6 exchange — the reason this console exists
-keys                          # print this device's public key + the pinned server key
-forget                        # drop the registration and the pinned server key
-bus  nats://192.168.1.5:4222  # also on the settings screen (§10.8.5)
-```
+The four commands this section owes — `register <token>`, `keys`, `forget` and
+`bus <url>` — do not exist yet. **The ones that do are listed, with what each
+of them does, in [`commands.md`](commands.md)**, and that file is the reference
+rather than this one: a list of commands in a design document is a list that
+goes stale the first time somebody adds a subcommand and updates the code.
 
-**The Wi-Fi half of that list exists now, spelled with verbs**: `wifi join
-<ssid> [password]` rather than the bare `wifi <ssid> <password>` this section
-first sketched, because `wifi` had to grow a status readout and subcommands
-(below), and a bare pair of words that is sometimes an SSID and sometimes a
-subcommand is a parser with a trap in it. §10.9 has the rest.
-
-That list is the interface the firmware owes; how to reach it — which serial
-command opens the console, and what it fights with for the port — is in
+What stays here is why the console is shaped this way. How to *reach* it —
+which serial command opens the port, and what it fights with for it — is in
 [`working-with-code.md`](working-with-code.md).
 
-**What exists today is the console itself and two commands that need nothing
-else to be built** (`components/cli`, running on hardware):
-
-```
-status                        # firmware / IDF / chip versions, the running OTA
-                              # slot, uptime, heap free and low-water, storage use
-power                         # the AXP2101: charge state, VBUS, battery mV and %,
-                              # the system rail, die temperature (§10.13's one job)
-date                          # the RTC and the system clock in UTC, plus local
-date set <YYYY-MM-DD> <HH:MM:SS>        # local time; stored as UTC
-date set utc <YYYY-MM-DD> <HH:MM:SS>
-buttons                       # BOOT / KEY / PWR: debounced state, the raw pin
-                              # beside it, and how long it has been that way
-buttons watch [seconds]       # print edges as they happen, with press durations
-imu                           # the QMI8658C: all six axes, tilt, die temperature
-imu watch [seconds]           # a line a second of the same six numbers
-display                       # the panel, LVGL and the touch controller
-display on|off                # blank the panel without dimming it
-display brightness [0..100]   # the panel only — `config set brightness` is the stored one
-wifi                          # what the radio wants, and what it is doing (§10.9) —
-                              # mode, link, ssid, rssi, **the channel in use**, address
-
-wifi mode off|client|ap       # what it should want — in memory, `config save` keeps it
-wifi join <ssid> [password]   # remember a network, switch to client mode, try it now
-wifi forget <ssid>            # drop one
-wifi static <n> <address> <netmask> <gateway> [dns1] [dns2]   # a fixed address
-wifi static <n> off           # …and back to DHCP for that network
-wifi scan                     # what is on the air — works with the radio off, which
-                              # it then switches back off. 2.4 GHz: the C6 has no other
-wifi ping                     # is there an internet through this link, right now
-wifi check [on|off|<ip>…]     # the once-a-minute check and what it pings
-wifi retry                    # start the cycle again from the top
-play [file]                   # play a WAV from the storage partition (alert.wav)
-play volume [0..100]          # read it, or set it — same as `config set volume`
-config [reload|save|restore]  # the settings of §10.15, parsed into fields
-config set <field> <value>    # into memory only; `config save` is what writes
-config zones [filter]         # the time zones this firmware knows by name
-term                          # ask the terminal again, and turn on up-arrow history
-                              # if it answers ('term smart' / 'term dumb' to force)
-poweroff now                  # cut power — refused while USB is connected
-ls                            # what is in the storage partition, with sizes
-cat <path>                    # print a file from the storage partition (§10.15)
-```
+**The Wi-Fi half of the owed list exists now, spelled with verbs**: `wifi join
+<ssid> [password]` rather than the bare `wifi <ssid> <password>` this section
+first sketched, because `wifi` had to grow a status readout and subcommands,
+and a bare pair of words that is sometimes an SSID and sometimes a subcommand
+is a parser with a trap in it. §10.9 has the rest.
 
 `status` is the answer to "is this the build I think it is, in the slot I think
-it is" — the question every one of the five commands above will be debugged
-through. `cat` is how §10.15's files are read back off a device without a
-reflash, and it was the first thing to prove the SPIFFS image had actually
-landed.
+it is" — the question every other command will be debugged through. `cat` is
+how §10.15's files are read back off a device without a reflash, and it was the
+first thing to prove the SPIFFS image had actually landed.
 
 It is ESP-IDF's `esp_console` REPL, not a hand-written line reader: history,
 editing, argument splitting and `help` come with the component §10.4 already
 approved. The house firmware of §10.14.4 writes its own — worth knowing when
 comparing the two, and not worth copying when the in-tree one is already a
 dependency.
+
+#### Two rules for anything this console prints
+
+**Every command and every subcommand goes in the help, in the same change that
+adds it** — and in [`commands.md`](commands.md) with it. A command nobody can
+find does not exist, and `help` is the only place anybody looks. For this
+console that means four things and they are easy to get out of step — three of
+them already did, with `wifi ping` and `wifi check` reaching the usage text and
+never the registered hint, so a reader who ran `help` concluded the commands
+were not there:
+
+- the `.help` string in the `kCommands` table, which is the one line `help`
+  prints per command;
+- the `.hint` string next to it — the argument summary on the same line. It has
+  to stay short enough to read in a column, so it names the **verbs**;
+- the command's own `usage` text, which names the **forms**. Print it from one
+  function, reached both by an explicit `<command> help` and by anything
+  unrecognised: finding out what a command takes should not require typing
+  something wrong first, and two copies of a usage block drift;
+- **[`commands.md`](commands.md)**, which is the only one of the four with room
+  to say what a command is *for* — that `display brightness` prints the live
+  value next to the stored one, that `poweroff` refuses over USB, that `wifi
+  scan` works with the radio off. A hint has twelve words; this has as many as
+  it needs.
+
+**No section numbers in anything the operator sees.** `§10.9` is how this
+repository talks to itself; on a console it is a reference to a document the
+person reading has probably never opened. Every `printf`, every `ESP_LOG` and
+every `.help` string says the thing itself — "the reset is the ALDO3 rail",
+not "(§10.1)". In the **code comments** the citations stay exactly as they are:
+that is where they earn their keep.
 
 `cat` reads through a **fixed 4 KB buffer** (§10.14.1 — nothing here allocates),
 and a file too big for it is refused *with its size* rather than truncated into

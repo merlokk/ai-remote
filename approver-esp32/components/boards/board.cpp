@@ -253,7 +253,7 @@ esp_err_t Init() {
     } else {
         // Not an omission to debug later: the panel's reset is a PMIC rail, so
         // without the PMIC there is no way to bring the display up at all.
-        ESP_LOGE(TAG, "no PMIC, so no panel: its reset is ALDO3 (§10.1)");
+        ESP_LOGE(TAG, "no PMIC, so no panel: its reset is the ALDO3 rail");
     }
 
     gpio_config_t interrupt_pins = {};

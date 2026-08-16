@@ -138,45 +138,19 @@ port the monitor uses. Open one and type into it:
 idf.py -p COM4 monitor
 ```
 
-These answer today (§10.7 has the rest, and why they are not here yet):
+**What you can type is in [`commands.md`](commands.md)** — every command, every
+subcommand, and what each one does. It is not repeated here: two copies of a
+command list means one of them is wrong, and the one in a *mechanics* file is
+always the one nobody remembers to update.
+
+A few worth knowing before the first session, because they are how you find out
+the flash worked at all:
 
 ```
-status                        # firmware / IDF / chip versions, OTA slot, uptime, heap, storage
-power                         # the AXP2101: charge state, VBUS, battery, system rail, die temp
-date                          # the RTC and the system clock
-date set 2026-08-15 16:41:13  # write both
-buttons                       # BOOT / KEY / PWR: debounced state + the raw pin
-buttons watch 30              # print edges for 30 s (default 10, max 120)
-imu                           # the QMI8658C: six axes, tilt, die temperature
-imu watch 10                  # a line a second of the same numbers
-display                       # panel, LVGL and touch state, with missed I2C reads
-display brightness            # the panel's live value, and what `config.json` says
-display brightness 40         # the panel only; `config set brightness` is the stored one
-display off                   # blank it; `display on` brings it back
-play                          # play alert.wav; `play poweron.wav` for the other one
-play volume 45                # the same setter as `config set volume`; memory only
-config                        # the parsed settings; `config reload|save|restore`
-config set volume 35          # into memory only
-config set tz Europe/Kyiv     # named zones; `config zones [filter]` lists them
-date set 2026-08-16 12:00:00  # local time, per that zone — stored as UTC
-date set utc 2026-08-16 09:00:00
-config set nats nats://192.168.1.77:4222
-config save                   # …and this is what puts it in the file
-term                          # switch on up-arrow history — see below
-poweroff now                  # cut power; refused over USB, so it does nothing on the bench
-ls                            # what is in the storage partition, with sizes
-cat <path>                    # print a file from the storage partition, e.g. cat config.json
-help                          # esp_console's own, listing the above
-```
-
-The five the console exists for, once there is a protocol under them:
-
-```
-register <token>              # the §6 exchange
-keys                          # this device's public key + the pinned server key
-forget                        # drop the registration and the pinned server key
-bus  nats://192.168.1.5:4222
-wifi <ssid> <password>
+help                          # esp_console's own listing
+status                        # is this the build I think it is, in the slot I think it is
+cat config.json               # read a file back off the device without reflashing
+wifi                          # what the radio wants, and what it is doing
 ```
 
 **The up-arrow is off until you type `term`.** History is there (the last 32

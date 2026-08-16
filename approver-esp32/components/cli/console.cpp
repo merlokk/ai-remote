@@ -1329,6 +1329,29 @@ int CmdWifiScan() {
     return 0;
 }
 
+// The full list, in one place. **`esp_console`'s own `help` prints the `hint`
+// string and nothing else**, and that string has to stay short enough to read
+// in a column — so it names the verbs and this names the forms. The two got
+// out of step once already, with `ping` and `check` reaching the usage text
+// and never the registered hint; a reader looking for a command in `help`
+// concluded it did not exist.
+void PrintWifiUsage() {
+    printf("usage: wifi                          what it wants, and what it is doing\n");
+    printf("       wifi mode off|client|ap       what it should want\n");
+    printf("       wifi join <ssid> [password]   remember a network and try it\n");
+    printf("       wifi forget <ssid>            drop one\n");
+    printf("       wifi static <n> <address> <netmask> <gateway> [dns1] [dns2]\n");
+    printf("       wifi static <n> off           that network goes back to DHCP\n");
+    printf("       wifi scan                     what is on the air (2.4 GHz)\n");
+    printf("       wifi ping                     is there an internet, right now\n");
+    printf("       wifi check                    the internet check and what it pings\n");
+    printf("       wifi check on|off             stop or start asking\n");
+    printf("       wifi check <address> […]      ping these instead (up to %u)\n",
+           static_cast<unsigned>(config::kMaxProbeTargets));
+    printf("       wifi retry                    start the cycle again from the top\n");
+    printf("none of these write %s — 'config save' does\n", config::kPath);
+}
+
 int CmdWifi(int argc, char **argv) {
     if (!wifimgr::Ready()) {
         printf("the wi-fi manager did not start\n");
@@ -1337,6 +1360,15 @@ int CmdWifi(int argc, char **argv) {
 
     if (argc == 1) {
         PrintWifiStatus();
+        return 0;
+    }
+
+    // Asked for on purpose, so it is not an error. `esp_console`'s `help`
+    // cannot show this much, and finding out what a command takes should not
+    // require typing something wrong first.
+    if (strcmp(argv[1], "help") == 0 || strcmp(argv[1], "-h") == 0 ||
+        strcmp(argv[1], "--help") == 0) {
+        PrintWifiUsage();
         return 0;
     }
 
@@ -1407,17 +1439,8 @@ int CmdWifi(int argc, char **argv) {
         return 0;
     }
 
-    printf("usage: wifi                          what it wants, and what it is doing\n");
-    printf("       wifi mode off|client|ap       what it should want\n");
-    printf("       wifi join <ssid> [password]   remember a network and try it\n");
-    printf("       wifi forget <ssid>            drop one\n");
-    printf("       wifi static <n> <address> <netmask> <gateway> [dns1] [dns2]\n");
-    printf("       wifi static <n> off           that network goes back to DHCP\n");
-    printf("       wifi scan                     what is on the air (2.4 GHz)\n");
-    printf("       wifi ping                     check the internet now, don't wait a minute\n");
-    printf("       wifi check [on|off|<address>…]  the internet check and what it pings\n");
-    printf("       wifi retry                    start the cycle again from the top\n");
-    printf("none of these write %s — 'config save' does\n", config::kPath);
+    printf("no such thing as 'wifi %s'\n", argv[1]);
+    PrintWifiUsage();
     return 1;
 }
 
@@ -1629,7 +1652,7 @@ const esp_console_cmd_t kCommands[] = {
     },
     {
         .command = "config",
-        .help = "print the parsed config, or reload / save / restore it (§10.15)",
+        .help = "print the parsed settings, or reload / save / restore them",
         .hint = "[reload|save|restore]",
         .func = &CmdConfig,
         .argtable = nullptr,
@@ -1647,8 +1670,8 @@ const esp_console_cmd_t kCommands[] = {
     },
     {
         .command = "wifi",
-        .help = "what the radio wants and what it is doing; join, forget, scan (§10.9)",
-        .hint = "[mode off|client|ap | join | forget | static <n> … | scan | retry]",
+        .help = "the radio: status, join, forget, static address, scan, internet check",
+        .hint = "[mode|join|forget|static|scan|ping|check|retry] — 'wifi help' for the forms",
         .func = &CmdWifi,
         .argtable = nullptr,
         .func_w_context = nullptr,
