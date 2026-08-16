@@ -557,7 +557,9 @@ imu watch [seconds]           # a line a second of the same six numbers
 display                       # the panel, LVGL and the touch controller
 display on|off                # blank the panel without dimming it
 display brightness [0..100]   # the panel only — `config set brightness` is the stored one
-wifi                          # what the radio wants, and what it is doing (§10.9)
+wifi                          # what the radio wants, and what it is doing (§10.9) —
+                              # mode, link, ssid, rssi, **the channel in use**, address
+
 wifi mode off|client|ap       # what it should want — in memory, `config save` keeps it
 wifi join <ssid> [password]   # remember a network, switch to client mode, try it now
 wifi forget <ssid>            # drop one
@@ -1279,6 +1281,20 @@ retarget a live session, and once a minute is nowhere near often enough for the
 task churn to matter), plus **our own deadline on top of its timeout** — §10.5's
 rule about bounding every read, applied to somebody else's task, because a
 session that never calls back would otherwise freeze the check for good.
+
+**One bug the board reported immediately, and the shape of it is worth
+keeping**: `wifi check 8.8.8.8` tore down a working connection and walked the
+network list from the top again. The setter called `wifimgr::Apply()`, which
+reconfigures the *network policy* — and reconfiguring a policy restarts it, by
+design, because the network list may have changed under it. The ping list is
+not the network list. `ApplyInternetCheck()` exists now and touches only the
+probes; `Apply()` is for the settings that really do invalidate a connection.
+The `E ping_sock: send error=0` in the same log was the consequence rather than
+a second fault — a probe leaving as the interface went down.
+
+The general rule that came out of it: **a settings call that reconnects is a
+settings call people stop making**, so each one should reach for the narrowest
+thing that has actually changed.
 
 **This is the seam SNTP hangs off** (§10.8.2). A clock that syncs wants to know
 there is an internet before it tries, and it should read `Snapshot::internet`

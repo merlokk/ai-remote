@@ -83,9 +83,17 @@ esp_err_t Init();
 bool Ready();
 
 // Re-reads `config.json` into the policy and restarts whatever was in
-// progress. Called after `config reload`, `config restore` and any edit to the
-// network list.
+// progress — **including dropping a working link**, because the network list
+// it was working from may have just changed. Called after `config reload`,
+// `config restore` and any edit to the networks.
 void Apply();
+
+// The internet check alone, and **nothing about which network to be on**.
+// Editing the ping list through `Apply` cost a perfectly good connection and a
+// walk back through the whole list: the targets have nothing to do with the
+// radio, and a settings call that reconnects is a settings call people stop
+// making.
+void ApplyInternetCheck();
 
 // An override that does not touch the file — the same split `config set` makes
 // (§10.15): this changes what the device is doing, `config save` is what makes

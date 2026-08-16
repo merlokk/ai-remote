@@ -561,12 +561,25 @@ Status Radio::Get() const {
         }
     }
 
+    // The channel comes from the radio rather than from either config, and in
+    // any mode: as a station it is the AP's, as an access point it is ours —
+    // except when both are up, where the softAP is dragged onto the station's
+    // channel and the configured number stops being true.
+    uint8_t channel = 0;
+    if (started_) {
+        wifi_second_chan_t second = WIFI_SECOND_CHAN_NONE;
+        if (esp_wifi_get_channel(&channel, &second) != ESP_OK) {
+            channel = 0;
+        }
+    }
+
     xSemaphoreTake(lock_, portMAX_DELAY);
     Status copy = status_;
     xSemaphoreGive(lock_);
     if (have_rssi) {
         copy.rssi = rssi;
     }
+    copy.channel = channel;
     return copy;
 }
 

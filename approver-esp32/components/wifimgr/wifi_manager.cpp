@@ -445,6 +445,19 @@ void Apply() {
     xSemaphoreGive(lock);
 }
 
+void ApplyInternetCheck() {
+    if (!started) {
+        return;
+    }
+    xSemaphoreTake(lock, portMAX_DELAY);
+    // Deliberately *not* `policy.Configure`: the ping list and the network
+    // list are different settings, and reconfiguring the second because the
+    // first changed is how `wifi check 8.8.8.8` came to tear down a working
+    // connection and rejoin from the top of the list.
+    reach.Configure(ProbesFromConfig(), NowMs());
+    xSemaphoreGive(lock);
+}
+
 void CheckInternetNow() {
     if (!started) {
         return;

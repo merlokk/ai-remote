@@ -110,6 +110,13 @@ struct Status {
     char ssid[kSsidSize] = {};
 
     int8_t rssi = 0;
+
+    // **The channel the radio is actually tuned to**, read back rather than
+    // assumed — 0 when it is not on one. Worth having as its own field because
+    // it can disagree with the configured one: an access point raised while
+    // the station is associated is forced onto the station's channel, so
+    // `wifi.ap.channel` in `config.json` is a request and this is the answer.
+    uint8_t channel = 0;
     uint32_t ip = 0;       // IPv4, host order via esp_ip4_addr_t; 0 when none
     bool ip_is_static = false;  // …and where it came from, which a readout
                                 // needs: "it has an address" and "the address

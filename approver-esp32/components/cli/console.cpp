@@ -992,16 +992,29 @@ void PrintWifiStatus() {
         if (radio.link == wifi::Link::kConnected) {
             printf(", rssi %d dBm", static_cast<int>(radio.rssi));
         }
+        // Read off the radio, so it is the channel in use rather than the one
+        // asked for — and the two differ whenever an access point is up
+        // alongside a station, which is a support question waiting to happen.
+        if (radio.channel != 0) {
+            printf(", ch %u", static_cast<unsigned>(radio.channel));
+        }
         if (radio.ip != 0) {
+            printf(", ip %u.%u.%u.%u", static_cast<unsigned>(radio.ip & 0xFF),
+                   static_cast<unsigned>((radio.ip >> 8) & 0xFF),
+                   static_cast<unsigned>((radio.ip >> 16) & 0xFF),
+                   static_cast<unsigned>((radio.ip >> 24) & 0xFF));
             // Where the address came from, next to the address: "it has one"
             // and "it has the one that was asked for" are different facts, and
             // a static config that silently did not take looks exactly like a
             // working one until somebody tries to reach the device.
-            printf(", ip %u.%u.%u.%u (%s)", static_cast<unsigned>(radio.ip & 0xFF),
-                   static_cast<unsigned>((radio.ip >> 8) & 0xFF),
-                   static_cast<unsigned>((radio.ip >> 16) & 0xFF),
-                   static_cast<unsigned>((radio.ip >> 24) & 0xFF),
-                   radio.ip_is_static ? "static" : "dhcp");
+            //
+            // **Only as a client.** An access point's own address is neither
+            // leased nor configured here — printing `(dhcp)` next to
+            // 192.168.4.1 said it came from a server that is in fact this
+            // device.
+            if (radio.mode == wifi::Mode::kClient) {
+                printf(" (%s)", radio.ip_is_static ? "static" : "dhcp");
+            }
         }
         printf("\n");
         if (radio.link == wifi::Link::kFailed) {
@@ -1221,7 +1234,7 @@ int CmdWifiCheck(int argc, char **argv) {
 
     if (argc == 3 && (strcmp(argv[2], "on") == 0 || strcmp(argv[2], "off") == 0)) {
         net.check = strcmp(argv[2], "on") == 0;
-        wifimgr::Apply();
+        wifimgr::ApplyInternetCheck();
         printf("internet check %s — in memory only, 'config save' writes it to %s\n", argv[2],
                config::kPath);
         return 0;
@@ -1250,7 +1263,7 @@ int CmdWifiCheck(int argc, char **argv) {
     }
     net.target_count = static_cast<uint8_t>(count);
     net.check = true;
-    wifimgr::Apply();
+    wifimgr::ApplyInternetCheck();
 
     printf("checking %d address(es), starting now — in memory only, 'config save' writes it to %s\n",
            count, config::kPath);
