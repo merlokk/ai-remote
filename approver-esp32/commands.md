@@ -27,6 +27,18 @@ line. Addresses, SSIDs and channels are not secrets and are printed in full.
 
 ## What the device is
 
+### `devstatus`
+Everything at once: the board, every chip on it, the clock and the network —
+`status`, `power`, `buttons`, `imu`, `audio`, `display`, `date` and `wifi`, one
+after another under `== name` headers.
+
+**Each header is the name of the command that prints that section on its own**,
+so the dump doubles as a map: something odd under `== power`, type `power` to
+look at it by itself. It runs the real commands rather than reprinting what
+they print, so it cannot drift from them.
+
+State, not settings — `config` is the other half and prints what the file says.
+
 ### `status`
 Firmware name, version and build date; the ESP-IDF version it was built with;
 chip model, revision and core count; the MAC; **which OTA slot is running** and
@@ -150,6 +162,13 @@ found.
 ### `display brightness <0..100>`
 Sets the panel only, right now. `config set brightness` is the stored one.
 
+### `audio`
+The ES8311 and the I²S channel in front of it: whether the codec answered at
+boot, the volume, whether it is muted, and the channel's sample rate. **Muted
+is the resting state, not a fault** — the codec's one job is a chirp on a new
+request, and `play` unmutes around the file, so a codec found unmuted here is
+the odd one.
+
 ### `play [file]`
 Plays a WAV from the storage partition; with no argument, `alert.wav`. The
 firmware has no decoder — uncompressed PCM only, and a file it cannot play is
@@ -237,7 +256,18 @@ The status, and it answers two different questions at once:
   failed rounds, when the next check is due, and which addresses are pinged;
 - the remembered networks, with any fixed address, which one is current, and
   any whose password was refused;
-- the fallback access point and when it goes up.
+- the fallback access point, when it goes up, and **whether it is protected**.
+
+That last one is a setting rather than a property of the firmware: the AP this
+device raises is open or WPA2 depending on `wifi.ap.password` in
+`config.json` — empty is open, eight characters or more is WPA2, and anything
+between one and seven is refused so that the AP does not come up open while
+somebody believes it is locked.
+
+`wifi` prints `open` or `wpa2` next to the fallback AP — read off the settings,
+not off the air. So a password of one to seven characters shows up as an access
+point that never appears at all, with the reason in the log, rather than as one
+that quietly comes up open.
 
 ### `wifi mode off|client|ap`
 What the radio should be doing. `off` means the radio is down and its stack is

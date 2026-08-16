@@ -548,6 +548,24 @@ it is" — the question every other command will be debugged through. `cat` is
 how §10.15's files are read back off a device without a reflash, and it was the
 first thing to prove the SPIFFS image had actually landed.
 
+**`devstatus` is all of them at once, and it is composed rather than written.**
+It calls `status`, `power`, `buttons`, `imu`, `audio`, `display`, `date` and
+`wifi` in turn instead of printing its own version of each — a second copy of
+the `power` readout would drift from the first the day somebody adds a field to
+one of them, which is the drift the four-places rule above exists to prevent.
+
+Two things fall out of that. **Every section header is the name of a command**,
+so the dump doubles as a map — something odd under `== power`, type `power` to
+look at it alone — and keeping that rule true is why `audio` now exists as a
+command: it was the one section with nothing behind it, and adding the command
+was better than documenting an exception. And the headers are not decoration:
+run together the sections share label names (`die temp` is the PMIC's and the
+IMU's, `system` is a voltage in one section and a clock in the next), and a
+wall of aligned lines with no marks in it is a wall nobody reads twice.
+
+It prints **state, not settings**. `config` is the other half of that pair and
+answers what the device was *told* to do; this answers what it is doing.
+
 It is ESP-IDF's `esp_console` REPL, not a hand-written line reader: history,
 editing, argument splitting and `help` come with the component §10.4 already
 approved. The house firmware of §10.14.4 writes its own — worth knowing when
@@ -1315,13 +1333,40 @@ on the air during a scan is probe requests and nothing else.
 | `wifi.mode` | `"client"` or `"ap"`. **Anything else is refused and the default kept**, not guessed: the same call §10.8.2 makes about a misspelled zone |
 | `wifi.rounds` | full passes before the fallback AP. `0` behaves as 1 rather than as "never try" — the round is counted before it is compared, so every network gets one attempt whatever this says |
 | `wifi.apWindowSeconds` | how long that AP stays up with nobody on it |
-| `wifi.ap.{ssid,password,channel}` | the access point this device raises. **An empty password is an open network, which is what ships** — the AP serves nothing yet, it is up for two minutes at a time, and a WPA key committed to this repository would be a password everyone has. A password shorter than WPA2's eight characters is refused rather than silently turned into an open AP. When §10.8.6 gives that AP something to serve, this default is the line to revisit |
+| `wifi.ap.{ssid,password,channel}` | the access point this device raises. **Whether it is protected is the config's answer, not the firmware's** — see below |
 | `wifi.networks[]` | up to four ssid/password pairs — each with an optional `ip` block, below |
 
 The timings that are **not** in the file — the connect timeout, the gap between
 attempts, the backoff and its cap — are the shape of this section rather than a
 preference. A device whose connect timeout is operator-settable is a device with
 one more way to be configured into never working.
+
+**The device's own access point can be protected, and `wifi.ap.password`
+decides — it is a setting, not a property of the firmware.** Three cases, and
+the third is the one worth having a rule for:
+
+| `wifi.ap.password` | What goes on the air |
+|---|---|
+| empty | an **open** network |
+| eight characters or more | **WPA2**, and the console says `wpa2` rather than `open` where it prints the fallback AP |
+| one to seven | **refused** by the driver, and the AP does not come up |
+
+That last row is deliberate and is a driver rule rather than a config one:
+WPA2 will not take a passphrase shorter than eight, and the tempting failure
+mode — accept it and raise an open network instead — is an access point
+somebody believes is protected. Refusing is the honest answer, and `wifi`
+showing `open` next to a password that was set is the symptom to look for.
+
+**The two shipped files disagree about this on purpose, and the consequence is
+worth knowing before it surprises somebody**: `config.json` raises a WPA2 AP
+and `config.init.json` — the factory defaults — leaves it open, so a **restore
+(§10.15, or holding `KEY` at boot) opens the access point**. Neither is more
+correct than the other. A key committed to this repository is a key everyone
+with the repository has, so it is a lock against a casual neighbour rather than
+a secret; and while that AP still serves nothing and stays up two minutes at a
+time, an open one is not much of an exposure either. When §10.8.6 gives it a
+screen to serve — and a WPA key typed into it — this is the line to revisit,
+and the two files should stop disagreeing at the same time.
 
 #### Is there an internet through it?
 

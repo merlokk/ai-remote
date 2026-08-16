@@ -1804,7 +1804,99 @@ int CmdDisplay(int argc, char **argv) {
     return 1;
 }
 
+// The codec and the channel in front of it — the last piece of this board with
+// no readout of its own. `play volume` shows the volume; whether the ES8311
+// answered at all, and whether the I²S channel is running, have only ever been
+// in the boot log, which is gone by the time somebody asks.
+int CmdAudio(int argc, char **) {
+    if (argc != 1) {
+        printf("usage: audio         the codec and the I2S channel; 'play volume' sets the level\n");
+        return 1;
+    }
+
+    ::audio::Es8311 &codec = board::Codec();
+    ::audio::Speaker &sound = board::Sound();
+
+    if (!codec.Present()) {
+        printf("codec      the ES8311 did not answer at boot\n");
+        return 0;
+    }
+    // **Muted is the resting state, not a fault.** §10.13 gives this hardware
+    // one job — a chirp on a new request — and `Speaker::PlayWav` unmutes
+    // around the file, so a codec found unmuted here is the odd one.
+    printf("codec      ES8311 up, volume %u%%, %s\n", static_cast<unsigned>(codec.Volume()),
+           codec.Muted() ? "muted" : "unmuted");
+    printf("i2s        %s", sound.Ready() ? "running" : "not started");
+    if (sound.Ready()) {
+        printf(" at %" PRIu32 " Hz", sound.SampleRate());
+    }
+    printf("\n");
+    return 0;
+}
+
+// Everything, in one command.
+//
+// **It calls the other commands rather than reprinting what they print**, and
+// that is the whole design: a second copy of the `power` readout would drift
+// from the first the day somebody adds a field to one of them, which is exactly
+// the drift §10.7's four-places rule exists to prevent. The cost of this
+// command is one line per section, and it cannot go stale.
+//
+// **Every header is the name of a command**, so the dump doubles as a map: see
+// something odd under `== power`, type `power` to look at it alone. That rule
+// is also why `audio` above exists — it was the one section with no command
+// behind it, and inventing an exception was worse than adding the command.
+//
+// The headers are not decoration either. Run together, the sections share label
+// names — `die temp` is the PMIC's and the IMU's, `system` is a voltage in one
+// and a clock in the next — and a wall of aligned lines with no marks in it is
+// a wall nobody reads twice.
+//
+// It is **state, not settings**: `config` prints what the file says, this
+// prints what the device is doing, and the two answer different questions.
+int CmdDevStatus(int argc, char **) {
+    if (argc != 1) {
+        printf("usage: devstatus     everything at once: the board, the chips, time, wi-fi\n");
+        return 1;
+    }
+
+    // The frame first, then the chips roughly in the order `board::Init` brings
+    // them up, then time, then the network — which is also the order in which
+    // one of them being wrong stops the next from working.
+    struct Section {
+        const char *name;
+        int (*run)(int, char **);
+    };
+    static const Section kSections[] = {
+        {"status", &CmdStatus},   {"power", &CmdPower},     {"buttons", &CmdButtons},
+        {"imu", &CmdImu},         {"audio", &CmdAudio},     {"display", &CmdDisplay},
+        // `date` carries the clock **and** where its time came from, which is
+        // why there is no separate sync section.
+        {"date", &CmdDate},       {"wifi", &CmdWifi},
+    };
+
+    bool first = true;
+    for (const Section &section : kSections) {
+        if (!first) {
+            printf("\n");
+        }
+        first = false;
+        printf("== %s\n", section.name);
+        section.run(1, nullptr);
+    }
+    return 0;
+}
+
 const esp_console_cmd_t kCommands[] = {
+    {
+        .command = "devstatus",
+        .help = "everything at once: the board, every chip, the clock and wi-fi",
+        .hint = nullptr,
+        .func = &CmdDevStatus,
+        .argtable = nullptr,
+        .func_w_context = nullptr,
+        .context = nullptr,
+    },
     {
         .command = "status",
         .help = "firmware, IDF and chip versions, running slot, uptime, heap, storage",
@@ -1846,6 +1938,15 @@ const esp_console_cmd_t kCommands[] = {
         .help = "print the parsed settings, or reload / save / restore them",
         .hint = "[reload|save|restore]",
         .func = &CmdConfig,
+        .argtable = nullptr,
+        .func_w_context = nullptr,
+        .context = nullptr,
+    },
+    {
+        .command = "audio",
+        .help = "the ES8311 and the I2S channel: present, volume, muted, sample rate",
+        .hint = nullptr,
+        .func = &CmdAudio,
         .argtable = nullptr,
         .func_w_context = nullptr,
         .context = nullptr,

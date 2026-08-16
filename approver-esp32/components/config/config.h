@@ -123,10 +123,14 @@ struct Wifi {
     // The access point this device raises: for `mode: "ap"` and for the
     // fallback above, which are the same AP for different reasons.
     //
-    // **An empty password is an open network**, which is what ships, and the
-    // trade is stated in `config.init.json`. A password shorter than the eight
-    // characters WPA2 requires is refused by the driver rather than silently
-    // turned into an open one.
+    // **Whether that AP is protected is this field's answer, not the
+    // firmware's**: empty raises an open network, eight characters or more
+    // raise a WPA2 one, and anything in between is refused by the driver
+    // rather than silently turned into an open AP somebody believes is locked.
+    //
+    // The two shipped files deliberately differ — `config.json` sets a key and
+    // `config.init.json` does not — so a restore opens the access point.
+    // §10.9 has the argument.
     char ap_ssid[kSsidSize];
     char ap_password[kPasswordSize];
     uint8_t ap_channel;
