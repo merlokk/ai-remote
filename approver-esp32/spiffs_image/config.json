@@ -6,8 +6,8 @@
         "apWindowSeconds": 120,
         "ap": {
             "ssid": "approver-esp32",
-            "password": "",
-            "channel": 6
+            "password": "88888888",
+            "channel": 1
         },
         "networks": [
             {
@@ -21,6 +21,10 @@
                     "dns1": "192.168.1.1",
                     "dns2": ""
                 }
+            },
+            {
+                "ssid": "YOUR_SSID2",
+                "password": "CHANGEME"
             }
         ]
     },
