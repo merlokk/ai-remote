@@ -584,7 +584,12 @@ void FillDefaults(Data *out) {
     snprintf(out->internet.targets[2], kIpTextSize, "9.9.9.9");
     out->internet.target_count = 3;
 
-    snprintf(out->nats.url, sizeof(out->nats.url), "nats://192.168.1.5:4222");
+    // The bus this device is actually built against (§10.3): the NATS server
+    // on the home LAN, no TLS, no credentials. Unlike `sntp` below it names a
+    // machine of the operator's own rather than a stranger's, so having a
+    // default here is the difference between a restored device that connects
+    // and one that has to be told where the bus is over USB first.
+    snprintf(out->nats.url, sizeof(out->nats.url), "nats://192.168.11.70:4222");
     snprintf(out->time.zone, sizeof(out->time.zone), "UTC");
     snprintf(out->time.posix, sizeof(out->time.posix), "UTC0");
     // **Empty on purpose, and the only string field that is.** Every other

@@ -56,3 +56,20 @@ dependencies:
   ## `esp_lvgl_port` also speaks. One transitive component, and it is the one
   ## that makes the two fit together.
   waveshare/esp_lcd_touch_cst9217: "^1.0.4"
+
+  ## --- The bus (§10.3, §10.4, §10.5) --------------------------------------
+  ## The NATS client, approved by name and version in §10.4: header-only C++,
+  ## MIT, and the two things that were checked before it was chosen are both
+  ## still true of 1.4.0 — `subscribe` takes a queue group, so §6's `approvers`
+  ## group is expressible, and the message type carries `reply`, which is the
+  ## subject §7 answers into.
+  ##
+  ## **It brings `espressif/esp_websocket_client`, and that is a transitive
+  ## component root §1 asks about.** Its own manifest requires it
+  ## unconditionally, even though its CMakeLists is written to build without
+  ## one; there is no way to decline it from here. Nothing in this firmware
+  ## reaches the WebSocket transport — `nats_bus.h` is the whole call surface
+  ## and it has no way to name one — so what it costs is a download and
+  ## whatever the linker cannot garbage-collect. §10.12 asks for that number to
+  ## be taken with `idf.py size-components` rather than assumed.
+  debsahu/espidf-nats: "^1.4.0"

@@ -56,10 +56,11 @@ the repository owner's sign-off say so.
 | The navigation state machine — `components/ui` (§10.8.1) | **written and tested on the host**: which screen is up, the request card outranking everything, the bounded pending queue. It includes no headers at all, which is what makes it testable without a board |
 | The boot splash — `spiffs_image/splash.bin`, `components/display/rawimage` (§10.8) | **running on hardware**: white katakana, on the glass for two seconds before LVGL owns it. Generated on the host by `tools/make-splash.ps1`, streamed off SPIFFS as raw RGB565 with no decoder |
 | The language and the layering (§10.14) — C++ except where C is forced, no dynamic memory, library layer before logic, the I²C bus leased | **decided**, nothing written yet |
-| The ESP-IDF dependency set (§10.4) — LVGL + `esp_lvgl_port`, the CO5300/CST9220 drivers, libsodium for Ed25519, `debsahu/espidf-nats` for the bus | **signed off** (root §1). The display half is **resolved and building**: LVGL 9.4.0, `esp_lvgl_port` 2.9.0, `esp_lcd_sh8601` 2.0.1, `waveshare/esp_lcd_touch_cst9217` 1.0.4 — two of which are not the names §10.4 guessed, see below. libsodium and the NATS client are still unresolved |
+| The ESP-IDF dependency set (§10.4) — LVGL + `esp_lvgl_port`, the CO5300/CST9220 drivers, libsodium for Ed25519, `debsahu/espidf-nats` for the bus | **signed off** (root §1). The display half is **resolved and building**: LVGL 9.4.0, `esp_lvgl_port` 2.9.0, `esp_lcd_sh8601` 2.0.1, `waveshare/esp_lcd_touch_cst9217` 1.0.4 — two of which are not the names §10.4 guessed, see below. The **NATS client is resolved and running**: `debsahu/espidf-nats` 1.4.0, which drags `espressif/esp_websocket_client` 1.8.0 in behind it — a transitive component root §1 asks about, and the one thing on this list nobody signed off in advance. libsodium is still unresolved |
+| The bus link — `components/nats` (§10.3, §10.5) | **connected on hardware**: the §10.5 wrapper as a class, the connect policy next to it, and a task that waits for a client link and keeps a socket open. Against the server at `192.168.11.70:4222` it connected, subscribed to `approvals.*` in the queue group `approvers`, took a request-shaped message with its reply-to subject, and published into that subject with the server confirming. `nats` on the console. **Nothing of §7 is on top of it** — no key, no signing, no card |
 | The LVGL host preview (§10.12.1) | installed and rendering — the only part of this folder that runs today |
 | Bus reachable from the device at all (§10.3) | **decided**: shared on the home LAN, no TLS, no auth — the router is the trust boundary |
-| Firmware: NATS client, registration, signing | not started |
+| Firmware: registration, signing | not started — the bus underneath them is what exists |
 | The five screens — clock, limits, request, settings, Wi-Fi (§10.8) | specified, not started |
 | The Wi-Fi driver — `components/wifi` (§10.9) | **running on hardware**: two modes (access point, client), one network at a time, a latched link state, a disconnection reason turned into the three answers a person can act on, and a scan that works in both modes. It has **no opinions** — which network and when is the manager's, and that split is what makes the manager testable |
 | The internet check — `components/wifimgr/reachability.*` (§10.9) | **running on hardware**: once a minute, while there is a client link, an ICMP echo to one of a few addresses from `config.json` (8.8.8.8, 1.1.1.1, 9.9.9.9 by default). Three states — `unknown` is the honest one — two failed rounds to say offline and one reply to come back. `wifi ping` and `wifi check` on the console. **It never decides anything**: a link with no internet is reported, never a reason to change networks |
@@ -67,7 +68,7 @@ the repository owner's sign-off say so.
 | The Wi-Fi screen (§10.8.6) | specified, not started — the manager underneath it is what exists |
 | Where the configuration lives (§10.15) | **decided**: all of it in JSON on SPIFFS, nothing of ours in NVS — with the cost stated (SPIFFS cannot be encrypted at rest). `spiffs_image/config.json` + `config.init.json` are flashed; nothing reads them yet |
 | The `KEY`-at-boot config restore (§10.15) | specified, not started |
-| Host-tier tests (§10.11) — `host_test/` | **running**: 289 Unity tests over `ui`, `i2cbus`, `pmic`, `rtc`, `imu`, `audio`, `config`, `buttons`, `timezone`, `speaker`, `wifimgr` and `timesync`, one command, no board. The drivers are compiled **unmodified** against a fake ESP-IDF (`host_test/fakes/`), which is §10.14.3's owed fake backend arriving in a different shape than that section specified, and which now covers I²S and a filesystem as well as the I²C wire. Built by MSVC rather than by ESP-IDF's `linux` target, which does not work on a Windows host — §10.11 records why |
+| Host-tier tests (§10.11) — `host_test/` | **running**: 312 Unity tests over `ui`, `i2cbus`, `pmic`, `rtc`, `imu`, `audio`, `config`, `buttons`, `timezone`, `speaker`, `wifimgr`, `timesync` and `nats`, one command, no board. The drivers are compiled **unmodified** against a fake ESP-IDF (`host_test/fakes/`), which is §10.14.3's owed fake backend arriving in a different shape than that section specified, and which now covers I²S and a filesystem as well as the I²C wire. Built by MSVC rather than by ESP-IDF's `linux` target, which does not work on a Windows host — §10.11 records why |
 | Protocol parity vectors (§10.11 tier 2) | not started |
 
 Read §10.3 before anything else: it is the one part of this that changes
@@ -397,6 +398,36 @@ official one, and the choice went to a third-party component anyway:
 | `daed/nats-client` | The earlier port of `arduino-nats` the chosen one descends from; smaller, less maintained |
 | `nats.io`'s official C client (`nats.c`) | Written for POSIX servers; pulls threads and an event loop and assumes desktop-sized memory. Not a realistic target here |
 
+**Resolved: 1.4.0, and it brought something nobody signed off.** The component
+is on the registry as described and the two hard requirements checked before
+choosing it are true of the code as well as of the docs — `subscribe` takes a
+queue group and `nats_msg_t` carries `reply`. What was not visible from the
+registry page is its manifest: it requires **`espressif/esp_websocket_client`
+unconditionally** (resolved 1.8.0, in `dependencies.lock`), which is exactly
+the transitive component root §1 says is a new question for the owner. It is
+raised here rather than buried:
+
+- **nothing in this firmware can reach the WebSocket transport.** `nats_bus.h`
+  is the whole call surface and it has no way to name a transport, and
+  `endpoint.h` refuses `ws://` and `wss://` outright so that a URL cannot ask
+  for one either;
+- **it costs nothing in flash.** `idf.py size-components` has no line for
+  `libespressif__esp_websocket_client.a` at all — the archive is built and
+  never linked, because no symbol in it is referenced. The whole `nats`
+  component, the header-only client instantiated inside it included, is
+  **32,218 bytes** (25,649 of them flash text);
+- **it is compiled out, and the way that has to be done is a contradiction
+  inside the dependency.** Because the component is always present, its
+  CMakeLists puts `-DCONFIG_ESP_WEBSOCKET_CLIENT_ENABLE=1` on the command line
+  of everything that includes it — but the matching `REQUIRES` never reaches
+  ESP-IDF's requirement pass (it is computed from `BUILD_COMPONENTS`, which is
+  not populated when that pass runs), so the *include directory* does not
+  propagate. A define saying the transport is there and an include path saying
+  it is not: the build fails on `#include <esp_websocket_client.h>`.
+  `nats_bus.cpp` `#undef`s the macro before including the library, which lets
+  the header's own `__has_include` fallback decide correctly. §10.4's "Kconfig-
+  off what can be turned off" is that line.
+
 **What the component brings that this device must never use.** JetStream,
 KV, object store, NKey/JWT auth, WebSocket transport and message headers are all
 in it; the responder uses `connect`, `subscribe` (with a queue group),
@@ -467,6 +498,80 @@ tier cannot reach them, so they belong to the device tier):
 - **Reconnect with backoff, and say so on screen** (§10.8): the dot in
   `statusline` (§9.8) is the precedent — the operator has to be able to tell "no
   requests are arriving" from "nothing is asking".
+
+#### What is written, and the four decisions inside it
+
+`components/nats`, in the shape §10.9 established next door — a driver with no
+opinions, a policy with nothing but opinions, and a task where the two meet:
+
+| File | What it is |
+|---|---|
+| `endpoint.h/.cpp` | one string from `config.json` into a host and a port. `<cstdint>`/`<cstddef>` only, so it runs under Unity |
+| `link_policy.h/.cpp` | **when** to have a connection. `<cstdint>` and nothing else — the fifth file in this firmware to manage that, after `ui/navigator.h`, `wifi_policy.h`, `reachability.h` and `sync_policy.h` |
+| `nats_bus.h/.cpp` | **`class nats::Bus`** — this section's list of verbs over `debsahu/espidf-nats`, and the only file that includes it |
+| `nats_link.h/.cpp` | the task: reads the address, watches `wifimgr`, keeps a snapshot for the console |
+
+**What the board has actually done**, against the server on the LAN: connected,
+subscribed to `approvals.*` in the queue group `approvers`, received a
+request-shaped payload with its reply-to subject, published a decision-shaped
+one into that subject, and had the server confirm the flush. Both directions of
+§7's exchange, with nothing of §7 in them.
+
+Four things are decisions rather than plumbing:
+
+- **The client lives in a static arena, and that is what a `new` would have
+  bought.** The library takes its endpoint at construction and offers no way to
+  change it, so pointing the device elsewhere means destroying the object and
+  building another one. Placement new into `alignas(NATS) uint8_t[sizeof(NATS)]`
+  keeps §10.14.1's rule (no heap of ours) and costs one thing worth stating:
+  exactly one `Bus` can be open at a time, and a second one asking is refused
+  with `ESP_ERR_NO_MEM` rather than served. That singularity is also what makes
+  the library's context-free callback usable — the trampoline finds the open
+  `Bus` through a file static, which is legitimate only because there is one.
+- **Two of the library's own opinions are switched off.** Its reconnect backoff,
+  because `link_policy.h` is the half that can be tested and two things
+  deciding when to reconnect is one too many; and its offline message buffer,
+  because a responder whose decision is delivered when the socket comes back is
+  answering a request that timed out minutes ago (§10.10).
+- **A network releases it, not an internet.** §10.9's rule is "only `ONLINE`
+  releases the bus task", and on this device that means a client link with an
+  address: the server is on the LAN (§10.3), so `wifimgr`'s ping verdict about
+  8.8.8.8 has no vote, and a router with its uplink down is a perfectly good
+  place to approve a command. This is the one place the bus and the clock read
+  the same manager and want different answers from it (§10.8.2).
+- **Two locks, because one of them can block for five seconds.** `wire_lock`
+  guards the client's *lifetime* and is held by anything that publishes through
+  it; `state_lock` guards the policy and the snapshot and is never held across
+  anything that waits. One lock for both would mean `nats` hanging for the
+  length of a connect attempt just to print a status line.
+
+**Three things only the board could have said**, all fixed, and the shape they
+share is the §10.9 one: each was invisible on the host and obvious the first
+time real hardware met a real server.
+
+- **A 4 KB task stack panicked the moment a server answered** —
+  `Guru Meditation Error: Core 0 panic'ed (Stack protection fault)`, in task
+  `nats`, immediately after the `INFO`. It is the library's frame:
+  `send_connect()` declares two `char[NATS_MAX_CREDENTIAL_LEN * 2 + 1]` buffers
+  to escape a username and a password, 4 KB reserved in one function whether or
+  not the branch runs, on a device that sends no credentials at all. 8 KB now,
+  and `nats` prints the low-water mark so the number is measured rather than
+  guessed: **2,852 bytes never used** after a connect, a subscribe and a
+  publish — 4 KB was never going to be enough, and 8 KB has a real margin.
+- **A restart asked for mid-attempt was remembered forever.** `nats url` typed
+  while the task was inside a five-second connect set a flag that only the
+  teardown branch clears — and that branch is only reached while something is
+  up. The attempt failed, the flag stayed, and the next connection that
+  *worked* was dropped on its first tick. A pending restart is now consumed
+  from idle as well, where it means "try now" — which is also what an operator
+  who has just changed the address wants.
+- **The status line printed the address the device was leaving.** The snapshot
+  is written by the task, and the task was blocked in that same connect, so a
+  `nats` typed straight after `nats url` showed the old server under a config
+  line naming the new one. What was *asked for* is read live now; only what is
+  *happening* waits for the task to notice. The log line had the mirror-image
+  bug — it named the configured address for an attempt against the previous
+  one, which is a line that sends somebody hunting the wrong fault.
 
 ### 10.6 Key custody — the part worth doing properly
 
@@ -1565,8 +1670,8 @@ Three tiers, and the first one is where nearly everything belongs:
 
    **What is under it today is the navigator and four of the five chips on the
    I²C bus, the settings file, the buttons, the zone table, the speaker, the
-   Wi-Fi policy, the internet check and the clock's sync schedule** — 289
-   tests:
+   Wi-Fi policy, the internet check, the clock's sync schedule and the bus
+   link** — 312 tests:
 
    | Subject | What is pinned |
    |---|---|
@@ -1583,6 +1688,7 @@ Three tiers, and the first one is where nearly everything belongs:
 
    | `components/wifimgr` (the internet check) | §10.9's second state machine, and the same shape as the first — `<cstdint>` and nothing else, so no fake: `unknown` for "no link", "switched off" and "not asked yet" alike; a round moving to the next target at once rather than next minute; two failed rounds to say offline and **one reply to come back**, asserted in both directions because a symmetric rule would be a different design; a dropped link going to `unknown` rather than `offline`; a late answer arriving after the link went being ignored; the target that answered going first next round; and the minute counted across the ~49-day wrap |
    | `components/timesync` | §10.8.2's schedule, and the fourth file in this firmware whose subject includes `<cstdint>` and nothing else: a device that has never synced being **due**, which is what makes "at boot" and "when the internet appears" one rule; nothing asked without an internet, and nothing asked twice at once; a link flapping four times inside the guard producing **no** syncs while the same link returning after a longer gap produces one at once; `date sync` overruling the guard but **not** the off switch; the retry being far shorter than the interval and the backoff both growing and capped, because either half alone is satisfied by a constant; a success clearing what was learned about a failing server; a stray result rescheduling nothing; `Configure` keeping a sync that really did happen; and the ~49-day wrap landing inside an interval |
+   | `components/nats` | §10.5's two halves, and the fifth subject in this firmware that needs no fake. **Where**: the four spellings of an address that are accepted, and each refusal as its own case — a port that is not 1..65535, `ws://` / `wss://` / `tls://`, a path, credentials, a bracketed IPv6 literal, surrounding space, a host too long for the field — plus the one that turned out to be a real gap, that **nothing at all is written on a refusal**, host as well as port. **When**: nothing connected without a network; one attempt outstanding at a time; the backoff both growing and capped; a drop being neither a refusal nor an instant retry; a lost network and a switch-off both tearing the socket down and only the first coming back by itself; a changed address dropping what is up; `ConnectNow` beating the backoff but not the off switch; a result nobody asked for ignored; and the ~49-day wrap landing inside a backoff |
    | `components/config` (the clock) | `syncHours` read, round-tripped and **0 kept as off rather than floored** — the opposite call to `internet.intervalSeconds` next to it, and the difference is the point: a probe list with no interval is a flood, a clock told never to sync has said something. Plus the one the owner asked for: **no `sntp` in the file, and an empty one, both leave nothing to ask** rather than falling back to a compiled-in host |
    | `components/wifimgr` | every rule §10.9 states, and it needs **no fake at all** — the policy includes `<cstdint>` and nothing else, so this suite is the navigator's shape rather than the drivers': the round-robin and where a round begins; the backoff asserted as *both* growing and capped, because either alone is satisfied by a constant; the fallback AP after the configured rounds, held open by an attached station and restarted from the beginning when the last one leaves — and **not** held open by the manager's own "nobody is attached" report, which arrives on every pass and would otherwise mean an AP that never expires; the window's expiry clearing the sticky auth failures, since that window was the chance to fix them; an exhausted list going straight to the AP rather than waiting out its rounds; a drop while online being neither an auth failure nor an instant reconnect; the connect timeout; `SetDesired` being idempotent, because the manager re-asserts it five times a second; and the ~49-day millisecond wrap landing inside a delay |
 
@@ -1638,6 +1744,28 @@ Three tiers, and the first one is where nearly everything belongs:
    A third mutation would not compile, for the reason this section already
    records: `/W4 /WX` makes the code a mutation orphans into an error, so
    short-circuiting a branch has to leave nothing unreachable behind it.
+
+   **The bus link added eleven, one survivor, and a warning about the ritual
+   itself.** Ten were caught — the backoff's growth and its cap taken away
+   separately, an instant retry after a drop, the teardown that a lost network
+   and a switch-off each ask for, a result accepted without being asked for, a
+   stale restart kept, `Reached` written as `now >= at`, another scheme
+   stripped instead of refused, and a port with trailing junk taken. The
+   survivor was **writing the host before the port had been agreed**, and it
+   survived for the ordinary reason: `AssertRefused` checked that the port had
+   not moved and said nothing about the host, so half an endpoint could be
+   overwritten by a URL that was rejected. The assertion now covers both
+   fields, which is the test being wrong rather than the code — the other
+   direction from §10.11's usual finding.
+
+   And the warning, because it wasted twenty minutes and will do it again:
+   **a mutation harness has to touch the file it restores.** Ninja goes by
+   mtime, and a restore that puts back an *older* timestamp than the object
+   built from the mutated source leaves that object in the binary. The symptom
+   is a suite that fails a test nobody has touched — here the ~49-day wrap
+   test, still linked against `now >= at` three mutations after that one was
+   reverted. Every result above was re-taken with an `os.utime` after the
+   restore; the first run's failure counts were inflated by exactly this.
 
    **Four bugs came out of the pass that asked "what else can a caller do?"**,
    and the shape they share is worth more than any of them individually:
@@ -1761,9 +1889,19 @@ deprecated there in favour of `esp_lcd_touch_get_data`. Neither is a reason to
 go back a version; both are the reason a copied vendor file does not compile
 unchanged.
 
-What is still unmeasured is the other half of §10.4 — libsodium and
-`debsahu/espidf-nats`, the latter advertising 4.4–6.0 and therefore the one
-that could still reopen this. The targets this install has support for are `esp32`,
+**And so did the bus half.** `debsahu/espidf-nats` 1.4.0 advertises ESP-IDF
+4.4–6.0 and was therefore the remaining candidate to reopen the version
+argument; it resolves, compiles and connects on v6.0.2. What it needed was one
+`#undef` for a WebSocket contradiction that is the component's own rather than
+the version's (§10.4). So **libsodium is the last unmeasured entry on §10.4's
+list**, and nothing left in this project has a claim on v5.5.3.
+
+The numbers §10.12 asks for, taken with `idf.py size-components`: the whole
+`nats` component, header-only client included, is **32,218 bytes** (25,649 of
+them flash text), and `espressif__esp_websocket_client` has no line at all —
+built, never linked. The app is **1,616,744 bytes** against a 2.5 MB slot.
+
+The targets this install has support for are `esp32`,
 `esp32c6`, `esp32p4` and `esp32s3`, so `set-target esp32c6` is not the blocker.
 
 The project those commands run in is **generated** — `create-project` plus a

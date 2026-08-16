@@ -16,6 +16,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "lvgl_display.h"
+#include "nats_link.h"
 #include "rawimage.h"
 #include "storage.h"
 #include "timesync.h"
@@ -167,6 +168,17 @@ extern "C" void app_main(void) {
     // of this board (§10.14.2), and `main` is where the two meet — the same
     // shape as the codec's volume below.
     timesync::Init(&board::Clock());
+
+    // And the bus (§10.3), for the same reason in the same place: it has
+    // nothing to do until there is a client link with an address, and
+    // `wifimgr` is what tells it there is one. A task and no socket — a device
+    // with no `nats.url` pays for this existing and nothing more.
+    //
+    // **Not the clock's question, though.** `timesync` waits for an internet;
+    // this waits for a *network*, because the server is on the LAN and a
+    // household router with its uplink down is a perfectly good place to
+    // approve a command.
+    nats::Init();
 
     // Settings applied to the hardware they belong to. `main` is where the two
     // meet: `config` knows nothing about a codec, and `board` knows nothing

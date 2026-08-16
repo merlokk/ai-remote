@@ -33,6 +33,7 @@ void RegisterSpeakerTests(void);
 void RegisterWifiPolicyTests(void);
 void RegisterReachabilityTests(void);
 void RegisterTimesyncTests(void);
+void RegisterNatsTests(void);
 
 void setUp(void) { fake::Reset(); }
 
@@ -76,6 +77,7 @@ int main(int argc, char **argv) {
     if (Wanted("wifi")) RegisterWifiPolicyTests();
     if (Wanted("wifi") || Wanted("reach")) RegisterReachabilityTests();
     if (Wanted("timesync") || Wanted("sync")) RegisterTimesyncTests();
+    if (Wanted("nats") || Wanted("bus")) RegisterNatsTests();
 
     return UNITY_END();
 }

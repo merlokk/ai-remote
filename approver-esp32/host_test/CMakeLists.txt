@@ -78,6 +78,7 @@ add_executable(host_test
     test_wifi_policy.cpp
     test_reachability.cpp
     test_timesync.cpp
+    test_nats.cpp
 
     # The fake ESP-IDF the drivers are compiled against. `fakes/` shadows the
     # framework's headers on the include path below, so the sources listed
@@ -105,6 +106,11 @@ add_executable(host_test
     # And the clock's half of the same shape (§10.8.2): when to ask a server
     # what time it is, with the asking left next door.
     ../components/timesync/sync_policy.cpp
+    # And the bus link's (§10.5): where the server is, and when to have a
+    # connection to it. The socket next door is all lwIP and belongs to the
+    # device tier.
+    ../components/nats/endpoint.cpp
+    ../components/nats/link_policy.cpp
 
     # cJSON, the real one, out of the managed component `idf.py build` fetched.
     "${CJSON_DIR}/cJSON.c"
@@ -127,6 +133,7 @@ target_include_directories(host_test PRIVATE
     ../components/storage
     ../components/wifimgr
     ../components/timesync
+    ../components/nats
     "${CJSON_DIR}"
     "${UNITY_DIR}"
 )

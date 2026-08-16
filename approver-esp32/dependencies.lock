@@ -1,4 +1,24 @@
 dependencies:
+  debsahu/espidf-nats:
+    component_hash: 4af088f8dcfa912e22ca1112f62410482fa90be7eb9d2e88b6b80d22cf6201ca
+    dependencies:
+    - name: espressif/cjson
+      registry_url: https://components.espressif.com
+      require: public
+      rules:
+      - if: idf_version >= 6.0.0
+      version: '>=1.7.18'
+    - name: espressif/esp_websocket_client
+      registry_url: https://components.espressif.com
+      require: private
+      version: '>=1.0.0'
+    - name: idf
+      require: private
+      version: '>=4.4'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.4.0
   espressif/cjson:
     component_hash: e788323270d90738662d66fffa910bfe1fba019bba087f01557e70c40485b469
     dependencies:
@@ -57,6 +77,16 @@ dependencies:
       registry_url: https://components.espressif.com/
       type: service
     version: 2.9.0
+  espressif/esp_websocket_client:
+    component_hash: dc00233af846f3a744ada283a300e0d586040aadc3ee67361645ecdce4523672
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    version: 1.8.0
   idf:
     source:
       type: idf
@@ -83,12 +113,13 @@ dependencies:
       type: service
     version: 1.0.4
 direct_dependencies:
+- debsahu/espidf-nats
 - espressif/cjson
 - espressif/esp_lcd_sh8601
 - espressif/esp_lvgl_port
 - idf
 - lvgl/lvgl
 - waveshare/esp_lcd_touch_cst9217
-manifest_hash: 8aca5a0a8665db73245eab11abb8bbe1e4a377fed5e113bdd3f0ea2f0df30c81
+manifest_hash: c07a5aca086d17d5ae0cb8e541e829f1a12e7274eba68272e2f53d6029bf87c6
 target: esp32c6
 version: 3.0.0

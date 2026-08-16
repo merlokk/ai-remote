@@ -25,6 +25,7 @@
 #include "freertos/task.h"
 #include "linenoise/linenoise.h"
 #include "lvgl_display.h"
+#include "nats_link.h"
 #include "qmi8658.h"
 #include "speaker.h"
 #include "storage.h"
@@ -868,6 +869,18 @@ int SetConfigField(const char *key, const char *value) {
         return 0;
     }
 
+    // **The same check `nats url` makes**, because otherwise this is the way
+    // round it — and a URL that will not parse is a bus the device silently
+    // never connects to, which looks exactly like a bus that is down. Empty is
+    // not a typo: it is how the connection is switched off.
+    if (strcmp(key, "nats") == 0 && value[0] != '\0') {
+        nats::Endpoint parsed = {};
+        if (!nats::ParseUrl(value, &parsed)) {
+            printf("'%s' is not an address this can use — 'nats help' has the forms\n", value);
+            return 1;
+        }
+    }
+
     const StringField strings[] = {
         {"nats", c.nats.url, sizeof(c.nats.url)},
         {"sntp", c.time.sntp_server, sizeof(c.time.sntp_server)},
@@ -893,13 +906,21 @@ int SetConfigField(const char *key, const char *value) {
             // one is off), so the task is told — and told nothing else.
             timesync::Apply();
         }
+        if (strcmp(key, "nats") == 0) {
+            // Likewise the narrowest thing that changed: a new address drops
+            // the connection, an unchanged one costs nothing.
+            nats::Apply();
+        }
         if (cleared) {
             // `sntp = , in memory only` is what the general form prints for an
             // empty value, and it reads like a bug. Clearing a field is a
             // deliberate thing to do here — an empty time server is how
             // syncing is switched off — so it gets said in words.
             printf("%s cleared%s, in memory only — 'config save' writes it to %s\n", field.name,
-                   strcmp(key, "sntp") == 0 ? "; the clock will not sync" : "", config::kPath);
+                   strcmp(key, "sntp") == 0   ? "; the clock will not sync"
+                   : strcmp(key, "nats") == 0 ? "; nothing will be connected"
+                                              : "",
+                   config::kPath);
             return 0;
         }
         printf("%s = %s, in memory only — 'config save' writes it to %s\n", field.name, value,
@@ -992,6 +1013,9 @@ int CmdConfig(int argc, char **argv) {
         // And the clock's sync task, holding an interval and a server that may
         // both have just changed.
         timesync::Apply();
+        // And the bus link, which may now be pointed at a different server —
+        // and, if it is not, is left exactly as it was, connection included.
+        nats::Apply();
     }
 
     const config::Data &c = config::Get();
@@ -1635,6 +1659,286 @@ int CmdWifi(int argc, char **argv) {
     return 1;
 }
 
+// ---------------------------------------------------------------------------
+// The bus (§10.3, §10.5)
+// ---------------------------------------------------------------------------
+
+// How much of an arriving payload `nats sub` shows. Everything off the bus is
+// attacker-shaped (§10.10) — a 4 MB message, a `tool_input` with no
+// terminator, control characters that would drive the terminal — so this is a
+// bound rather than a preference, and what does not fit is *said* to be
+// missing rather than quietly dropped.
+constexpr size_t kPayloadPreview = 240;
+
+// Printed from the bus task, not from the REPL: a message arrives when it
+// arrives, and the prompt is redrawn by the next thing typed. The same shape
+// `ESP_LOG` already has on this console.
+void OnBusMessage(const nats::Message &message, void *) {
+    printf("\n[%s] %u byte(s)", message.subject, static_cast<unsigned>(message.size));
+    if (message.reply[0] != '\0') {
+        // The whole of request-reply, and the field §7 answers into.
+        printf(", reply-to %s", message.reply);
+    }
+    printf("\n  ");
+
+    const size_t shown = message.size > kPayloadPreview ? kPayloadPreview : message.size;
+    for (size_t i = 0; i < shown; ++i) {
+        const unsigned char c = static_cast<unsigned char>(message.data[i]);
+        // Anything that is not plainly printable becomes a dot. A subject that
+        // anyone on the LAN can publish to (§10.3) is not somewhere to take
+        // escape sequences from.
+        putchar(c >= 0x20 && c < 0x7F ? static_cast<int>(c) : '.');
+    }
+    if (message.size > shown) {
+        printf("… (%u more)", static_cast<unsigned>(message.size - shown));
+    }
+    printf("\n");
+}
+
+void PrintNatsStatus() {
+    if (!nats::Ready()) {
+        printf("the bus link did not start\n");
+        return;
+    }
+
+    const nats::Status link = nats::Get();
+    const char *url = config::Get().nats.url;
+
+    // **Two answers, side by side**, for the reason `wifi` prints two: what was
+    // asked for, and what is happening on the way there.
+    printf("wanted     %s  (config: %s)\n", link.wanted ? "connected" : "disconnected",
+           url[0] == '\0' ? "no address set" : url);
+
+    printf("state      %s", nats::Name(link.state));
+    if (link.state == nats::State::kConnected) {
+        printf(", up for ");
+        PrintDuration(link.connected_for_ms);
+    } else if (link.next_attempt_ms == 0) {
+        printf(", due now");
+    } else if (link.next_attempt_ms != nats::kNever) {
+        printf(", next attempt in %u ms", static_cast<unsigned>(link.next_attempt_ms));
+    }
+    printf("\n");
+
+    if (link.configured) {
+        printf("server     %s:%u\n", link.endpoint.host,
+               static_cast<unsigned>(link.endpoint.port));
+    } else {
+        printf("server     nothing to connect to — 'nats url nats://<host>[:port]'\n");
+    }
+
+    // **A client link, not an internet** — the server is on the LAN, so the
+    // ping check has no vote here; and an access point is not a way to reach
+    // anything, which is the case worth spelling out rather than leaving as
+    // "no network" on a device whose radio is plainly up.
+    printf("network    %s\n",
+           link.network ? "client link with an address"
+                        : "none — this needs a client link, not an access point");
+
+    if (link.last_error != ESP_OK && link.state != nats::State::kConnected) {
+        printf("last error %s\n", esp_err_to_name(link.last_error));
+    }
+
+    printf("history    %u connect(s), %u drop(s), %u failed attempt(s) since\n",
+           static_cast<unsigned>(link.connects), static_cast<unsigned>(link.drops),
+           static_cast<unsigned>(link.failures));
+    printf("traffic    %" PRIu64 " in / %" PRIu64 " out, %" PRIu64 " / %" PRIu64 " byte(s)\n",
+           link.counters.messages_in, link.counters.messages_out, link.counters.bytes_in,
+           link.counters.bytes_out);
+    // The client library's frames are large enough that this task's stack was
+    // sized after an overflow rather than before one, so the margin is on show.
+    printf("stack      %u byte(s) never used, of %u\n",
+           static_cast<unsigned>(link.stack_low_water),
+           static_cast<unsigned>(nats::kTaskStackBytes));
+
+    if (link.subscriptions == 0) {
+        printf("subs       none — 'nats sub <subject> [group]'\n");
+    }
+    for (size_t i = 0; i < nats::kMaxSubscriptions; ++i) {
+        nats::SubscriptionRow row = {};
+        if (!nats::SubscriptionAt(i, &row)) {
+            continue;
+        }
+        printf("subs       %s%s%s (sid %d)\n", row.subject, row.queue[0] == '\0' ? "" : " in group ",
+               row.queue, row.sid);
+    }
+}
+
+int CmdNatsUrl(int argc, char **argv) {
+    if (argc != 3) {
+        printf("usage: nats url <nats://host[:port]>\n");
+        return 1;
+    }
+    // Parsed here rather than at the task, so a typo is refused while the
+    // person who made it is still looking at the screen — `wifi static` and
+    // `config set tz` make the same call, and the reason is the same one:
+    // libc, lwIP and this parser all have a way of reading a wrong string as
+    // *something*.
+    nats::Endpoint parsed = {};
+    if (!nats::ParseUrl(argv[2], &parsed)) {
+        printf("'%s' is not an address this can use\n", argv[2]);
+        printf("expected nats://host[:port], host:port or host — no path, no\n");
+        printf("credentials, and ws:// / wss:// / tls:// are not wired up\n");
+        return 1;
+    }
+
+    config::Nats &settings = config::Get().nats;
+    if (strlen(argv[2]) >= sizeof(settings.url)) {
+        printf("that address is longer than the %u bytes the config field holds\n",
+               static_cast<unsigned>(sizeof(settings.url) - 1));
+        return 1;
+    }
+    snprintf(settings.url, sizeof(settings.url), "%s", argv[2]);
+
+    // Applied as it is set, like `volume` and `tz` (§10.15) — and a changed
+    // address is one of the few settings that really does invalidate the
+    // connection, so this is the narrow call rather than a blanket restart.
+    nats::Apply();
+    printf("bus = %s:%u, in memory only — 'config save' writes it to %s\n", parsed.host,
+           static_cast<unsigned>(parsed.port), config::kPath);
+    return 0;
+}
+
+int CmdNatsPublish(int argc, char **argv) {
+    if (argc < 3) {
+        printf("usage: nats pub <subject> [text …]\n");
+        return 1;
+    }
+
+    // The words after the subject, rejoined with single spaces. A fixed buffer
+    // (§10.14.1) and a refusal rather than a truncation: half a payload on a
+    // bus is a message somebody has to debug.
+    char payload[256] = {};
+    size_t used = 0;
+    for (int i = 3; i < argc; ++i) {
+        const size_t length = strlen(argv[i]);
+        if (used + length + 2 > sizeof(payload)) {
+            printf("that payload is longer than the %u bytes this command holds\n",
+                   static_cast<unsigned>(sizeof(payload) - 1));
+            return 1;
+        }
+        if (used > 0) {
+            payload[used++] = ' ';
+        }
+        memcpy(payload + used, argv[i], length);
+        used += length;
+    }
+    payload[used] = '\0';
+
+    const esp_err_t err = nats::Publish(argv[2], payload, nullptr);
+    if (err != ESP_OK) {
+        printf("not published: %s\n", esp_err_to_name(err));
+        return 1;
+    }
+
+    // **Published is not delivered** (§4), which is exactly the confusion this
+    // command would otherwise create on a console: the flush is what says the
+    // server has it, and it is worth the wait here because a person is
+    // watching.
+    if (!nats::Flush(2000)) {
+        printf("sent %u byte(s) to %s, but the server did not confirm within 2 s\n",
+               static_cast<unsigned>(used), argv[2]);
+        return 1;
+    }
+    printf("%u byte(s) to %s, confirmed by the server\n", static_cast<unsigned>(used), argv[2]);
+    return 0;
+}
+
+int CmdNatsSubscribe(int argc, char **argv) {
+    if (argc < 3 || argc > 4) {
+        printf("usage: nats sub <subject> [queue group]\n");
+        return 1;
+    }
+    // The queue group is an argument rather than a flag because §6 makes it
+    // one: `approvals.*` in the group `approvers` is a different subscription
+    // from `approvals.*` on its own, and the difference is who else gets the
+    // message.
+    const char *queue = argc == 4 ? argv[3] : "";
+    const esp_err_t err = nats::Subscribe(argv[2], queue, &OnBusMessage, nullptr);
+    if (err != ESP_OK) {
+        printf("not subscribed: %s%s\n", esp_err_to_name(err),
+               err == ESP_ERR_INVALID_STATE ? " — SUB is a line on the wire, so this needs a"
+                                              " connection first"
+                                            : "");
+        return 1;
+    }
+    printf("watching %s%s%s — messages print as they arrive\n", argv[2],
+           queue[0] == '\0' ? "" : " in group ", queue);
+    return 0;
+}
+
+void PrintNatsUsage() {
+    printf("usage: nats                          where the bus is, and what the link is doing\n");
+    printf("       nats connect                  try now, without waiting out the backoff\n");
+    printf("       nats disconnect               drop it, and stay off until 'nats connect'\n");
+    printf("       nats retry                    drop what is up and start again\n");
+    printf("       nats url <nats://host[:port]> point it somewhere else\n");
+    printf("       nats sub <subject> [group]    watch a subject; arrivals print themselves\n");
+    printf("       nats unsub <subject>          stop watching one\n");
+    printf("       nats pub <subject> [text …]   publish, and wait for the server to say so\n");
+    printf("none of these write %s — 'config save' does\n", config::kPath);
+}
+
+int CmdNats(int argc, char **argv) {
+    if (!nats::Ready()) {
+        printf("the bus link did not start\n");
+        return 1;
+    }
+
+    if (argc == 1) {
+        PrintNatsStatus();
+        return 0;
+    }
+
+    if (strcmp(argv[1], "help") == 0 || strcmp(argv[1], "-h") == 0 ||
+        strcmp(argv[1], "--help") == 0) {
+        PrintNatsUsage();
+        return 0;
+    }
+
+    if (strcmp(argv[1], "connect") == 0 && argc == 2) {
+        // Both halves, because "connect" from a console means both: switch it
+        // back on if somebody had switched it off, and do not make them wait
+        // out a backoff earned while the server was down.
+        nats::SetDesired(true);
+        nats::ConnectNow();
+        printf("connecting — 'nats' says how it went\n");
+        return 0;
+    }
+    if (strcmp(argv[1], "disconnect") == 0 && argc == 2) {
+        nats::SetDesired(false);
+        printf("disconnecting, and staying off until 'nats connect' or a reboot\n");
+        return 0;
+    }
+    if (strcmp(argv[1], "retry") == 0 && argc == 2) {
+        nats::Restart();
+        printf("dropping what is up and starting again\n");
+        return 0;
+    }
+    if (strcmp(argv[1], "url") == 0) {
+        return CmdNatsUrl(argc, argv);
+    }
+    if (strcmp(argv[1], "pub") == 0) {
+        return CmdNatsPublish(argc, argv);
+    }
+    if (strcmp(argv[1], "sub") == 0) {
+        return CmdNatsSubscribe(argc, argv);
+    }
+    if (strcmp(argv[1], "unsub") == 0 && argc == 3) {
+        const esp_err_t err = nats::Unsubscribe(argv[2]);
+        if (err != ESP_OK) {
+            printf("not unsubscribed: %s\n", esp_err_to_name(err));
+            return 1;
+        }
+        printf("stopped watching %s\n", argv[2]);
+        return 0;
+    }
+
+    printf("no such thing as 'nats %s'\n", argv[1]);
+    PrintNatsUsage();
+    return 1;
+}
+
 int CmdTerm(int argc, char **argv) {
     if (argc > 2) {
         printf("usage: term          ask the terminal again, and follow its answer\n");
@@ -1873,6 +2177,9 @@ int CmdDevStatus(int argc, char **) {
         // `date` carries the clock **and** where its time came from, which is
         // why there is no separate sync section.
         {"date", &CmdDate},       {"wifi", &CmdWifi},
+        // And the bus after the network that carries it, which is also the
+        // order in which one of them being wrong stops the next from working.
+        {"nats", &CmdNats},
     };
 
     bool first = true;
@@ -1965,6 +2272,15 @@ const esp_console_cmd_t kCommands[] = {
         .help = "the radio: status, join, forget, static address, scan, internet check",
         .hint = "[mode|join|forget|static|scan|ping|check|retry] — 'wifi help' for the forms",
         .func = &CmdWifi,
+        .argtable = nullptr,
+        .func_w_context = nullptr,
+        .context = nullptr,
+    },
+    {
+        .command = "nats",
+        .help = "the bus: where it is, whether it is connected, publish and subscribe",
+        .hint = "[connect|disconnect|retry|url|sub|unsub|pub] — 'nats help' for the forms",
+        .func = &CmdNats,
         .argtable = nullptr,
         .func_w_context = nullptr,
         .context = nullptr,

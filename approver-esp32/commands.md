@@ -28,9 +28,9 @@ line. Addresses, SSIDs and channels are not secrets and are printed in full.
 ## What the device is
 
 ### `devstatus`
-Everything at once: the board, every chip on it, the clock and the network —
-`status`, `power`, `buttons`, `imu`, `audio`, `display`, `date` and `wifi`, one
-after another under `== name` headers.
+Everything at once: the board, every chip on it, the clock, the network and the
+bus — `status`, `power`, `buttons`, `imu`, `audio`, `display`, `date`, `wifi`
+and `nats`, one after another under `== name` headers.
 
 **Each header is the name of the command that prints that section on its own**,
 so the dump doubles as a map: something odd under `== power`, type `power` to
@@ -213,7 +213,7 @@ In memory only. The settable fields:
 | `brightness` | 0..100 | stored; `display brightness` is the live one |
 | `dim` | seconds | idle before dimming, 0 disables |
 | `blank` | seconds | idle before the panel blanks, 0 disables |
-| `nats` | URL | the bus address |
+| `nats` | URL | the bus address; **parsed before it is stored**, and applied at once |
 | `tz` | zone name or POSIX rule | applied at once; see `config zones` |
 | `sntp` | hostname | **empty means the clock does not sync** |
 | `sync` | hours | how often the clock is corrected; **0 is off** |
@@ -321,6 +321,89 @@ any remembered password refusals.
 
 ---
 
+## The bus
+
+`nats help` prints the forms. Nothing here writes the settings file; `config
+save` does.
+
+The device connects to the NATS server named by `nats.url` as soon as there is
+a **client link with an address** — not an internet: the server is on the LAN,
+so a router whose uplink is down is a perfectly good place for this to work.
+Being an access point is not a network for this purpose; there is no route to
+the bus from a device that *is* the network.
+
+### `nats`
+Where the bus is and what the link is doing:
+
+- **wanted** — connected or disconnected, and the address the settings name;
+- **state** — off / no network / connecting / waiting with the delay before the
+  next attempt / connected with how long it has been up;
+- **server** — the host and port the URL parsed to, or a note that there is
+  nothing to connect to;
+- **network** — whether there is a client link to go through;
+- **last error**, when the last attempt failed;
+- **history** — connects, drops, and refusals since the last success;
+- **traffic** — messages and bytes each way;
+- **stack** — the lowest the bus task's free stack has ever been. It is on show
+  because the number it is watching was chosen after a stack overflow: the
+  client library reserves 4 KB of frame in one function, and the 4 KB every
+  other task on this device gets was not enough;
+- the subscriptions, with their queue group and sid.
+
+An empty `nats.url` is "off" — one switch rather than two fields that can
+disagree, the same call an empty `sntp` server makes about the clock.
+
+### `nats connect`
+Try now, without waiting out the backoff, and switch the link back on if
+`nats disconnect` had switched it off.
+
+### `nats disconnect`
+Drop the connection and stay off until `nats connect` or a reboot. It is an
+override, not a setting: nothing is written and a reboot comes back connected.
+
+### `nats retry`
+Drop whatever is up and start again from the top, whether or not anything is
+wrong with it.
+
+### `nats url <nats://host[:port]>`
+Point the device at a different server. In memory only.
+
+The address is **parsed before it is stored**, and the refusals are deliberate:
+`nats://host:4222`, `host:4222`, `nats://host` and a bare `host` are the four
+spellings accepted, the port defaults to 4222, and a path, credentials, a
+bracketed IPv6 literal, surrounding space, a port outside 1..65535 and the
+`ws://` / `wss://` / `tls://` schemes are each refused with the reason. Those
+last three name transports this firmware does not speak; accepted quietly they
+would be a device that never connects and never says why.
+
+A changed address drops the connection that is up — it is to the wrong server —
+and reconnects at once. An unchanged one costs nothing.
+
+### `nats sub <subject> [queue group]`
+Watch a subject; anything that arrives prints itself, with its size, its
+reply-to subject when it has one, and up to 240 bytes of payload with
+non-printable characters shown as dots. Everything on that bus is untrusted
+input, so the bound and the dots are the point.
+
+The queue group is an argument rather than a flag because the protocol makes it
+one: `approvals.*` in the group `approvers` is a different subscription from
+`approvals.*` on its own, and the difference is who else gets the message.
+
+Needs a connection — `SUB` is a line on the wire. Subscriptions survive a
+reconnect; the client restores them.
+
+### `nats unsub <subject>`
+Stop watching one.
+
+### `nats pub <subject> [text …]`
+Publish, then **wait for the server to confirm it**. Publishing is not
+delivery: the flush is what says the bytes arrived, and on a console — where a
+person is waiting — that is worth the two seconds. The words after the subject
+are joined with single spaces, and a payload too long for the command's buffer
+is refused rather than truncated.
+
+---
+
 ## The filesystem
 
 ### `ls`
@@ -363,7 +446,11 @@ do not exist:
 | `register <token>` | the registration exchange with the handler — the reason this console exists |
 | `keys` | print this device's public key and the pinned handler key |
 | `forget` | drop the registration and the pinned key |
-| `bus <url>` | the NATS address, also reachable through `config set nats` |
+
+`bus <url>` was the fourth of these. It exists as **`nats url <url>`** —
+alongside a status readout, `connect` / `disconnect` / `retry`, and `sub` /
+`pub` for looking at the wire — for the reason `wifi` grew subcommands rather
+than staying a bare pair of words.
 
 `wifi <ssid> <password>` was once specified as the headless way to join a
 network. It is `wifi join <ssid> [password]` now: `wifi` grew a status readout
