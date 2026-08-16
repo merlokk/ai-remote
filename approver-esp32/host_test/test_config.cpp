@@ -31,7 +31,7 @@ constexpr const char *kGoodJson = R"({
   "wifi": { "active": true, "networks": [ { "ssid": "desk", "password": "hunter2" } ] },
   "nats": { "url": "nats://10.0.0.9:4222" },
   "time": { "zone": "Europe/Kyiv", "posix": "EET-2EEST,M3.5.0/3,M10.5.0/4",
-            "sntp": "time.google.com" },
+            "sntp": "time.google.com", "syncHours": 12 },
   "display": { "brightness": 55, "dimSeconds": 15, "blankSeconds": 60 },
   "audio": { "volume": 45 }
 })";
@@ -174,6 +174,7 @@ void test_config_reads_every_field(void) {
     TEST_ASSERT_EQUAL_STRING("Europe/Kyiv", c.time.zone);
     TEST_ASSERT_EQUAL_STRING("EET-2EEST,M3.5.0/3,M10.5.0/4", c.time.posix);
     TEST_ASSERT_EQUAL_STRING("time.google.com", c.time.sntp_server);
+    TEST_ASSERT_EQUAL_UINT8(12, c.time.sync_hours);
     TEST_ASSERT_EQUAL_UINT8(55, c.display.brightness);
     TEST_ASSERT_EQUAL_UINT16(15, c.display.dim_seconds);
     TEST_ASSERT_EQUAL_UINT16(60, c.display.blank_seconds);
@@ -196,6 +197,7 @@ void test_config_every_field_missing_falls_back_field_by_field(void) {
     TEST_ASSERT_EQUAL_STRING(expected.nats.url, c.nats.url);
     TEST_ASSERT_EQUAL_STRING(expected.time.posix, c.time.posix);
     TEST_ASSERT_EQUAL_STRING(expected.time.sntp_server, c.time.sntp_server);
+    TEST_ASSERT_EQUAL_UINT8(expected.time.sync_hours, c.time.sync_hours);
     TEST_ASSERT_EQUAL_UINT8(expected.display.brightness, c.display.brightness);
     TEST_ASSERT_EQUAL_UINT8(expected.audio.volume_percent, c.audio.volume_percent);
     TEST_ASSERT_EQUAL_UINT8(0, c.wifi.network_count);
@@ -539,6 +541,52 @@ void test_config_the_internet_check_round_trips(void) {
     TEST_ASSERT_EQUAL_STRING("9.9.9.9", config::Get().internet.targets[0]);
 }
 
+void test_config_a_sync_interval_of_zero_is_off_not_floored(void) {
+    // The mirror image of the internet check above, and deliberately the other
+    // answer: a probe list with no interval is a flood, but a clock that is
+    // told never to sync has said something meaningful. Flooring this to an
+    // hour would be a device asking a stranger's server 24 times a day because
+    // somebody typed a zero meaning "don't".
+    FreshWithDefaults();
+    fake::PutFile("config.json", R"({"time":{"syncHours":0}})");
+
+    TEST_ASSERT_EQUAL_INT(ESP_OK, config::Init());
+    TEST_ASSERT_EQUAL_UINT8(0, config::Get().time.sync_hours);
+}
+
+void test_config_no_sntp_server_means_no_sync_rather_than_a_guess(void) {
+    // Both spellings of "there is nothing to ask": the key absent, and the key
+    // present and empty. Neither may fall back to a compiled-in host — a
+    // device that syncs against a server nobody wrote down is the mistake
+    // `internet.targets` already refuses, and a device that keeps trying one
+    // that is not there is an error every interval, forever.
+    FreshWithDefaults();
+    fake::PutFile("config.json", R"({"time":{"zone":"UTC","syncHours":6}})");
+    TEST_ASSERT_EQUAL_INT(ESP_OK, config::Init());
+    TEST_ASSERT_EQUAL_STRING("", config::Get().time.sntp_server);
+
+    FreshWithDefaults();
+    fake::PutFile("config.json", R"({"time":{"sntp":"","syncHours":6}})");
+    TEST_ASSERT_EQUAL_INT(ESP_OK, config::Init());
+    TEST_ASSERT_EQUAL_STRING("", config::Get().time.sntp_server);
+}
+
+void test_config_the_sync_interval_round_trips(void) {
+    FreshWithDefaults();
+    fake::PutFile("config.json", kGoodJson);
+    TEST_ASSERT_EQUAL_INT(ESP_OK, config::Init());
+
+    config::Get().time.sync_hours = 24;
+    TEST_ASSERT_EQUAL_INT(ESP_OK, config::Save());
+
+    config::Get().time.sync_hours = 1;
+    TEST_ASSERT_EQUAL_INT(ESP_OK, config::Reload());
+    TEST_ASSERT_EQUAL_UINT8(24, config::Get().time.sync_hours);
+    // And the file it shares a section with is intact: a writer that forgot a
+    // sibling field is how a save turns into a quiet reset.
+    TEST_ASSERT_EQUAL_STRING("time.google.com", config::Get().time.sntp_server);
+}
+
 // --- The restore path (§10.15) -------------------------------------------
 
 void test_config_a_missing_file_is_restored(void) {
@@ -867,6 +915,9 @@ void RegisterConfigTests(void) {
     RUN_TEST(test_config_an_empty_target_list_means_none_not_the_defaults);
     RUN_TEST(test_config_an_interval_of_zero_is_floored_not_taken);
     RUN_TEST(test_config_the_internet_check_round_trips);
+    RUN_TEST(test_config_a_sync_interval_of_zero_is_off_not_floored);
+    RUN_TEST(test_config_no_sntp_server_means_no_sync_rather_than_a_guess);
+    RUN_TEST(test_config_the_sync_interval_round_trips);
 
     RUN_TEST(test_config_a_string_too_long_for_its_field_is_refused_not_truncated);
     RUN_TEST(test_config_a_network_whose_ssid_does_not_fit_is_dropped);

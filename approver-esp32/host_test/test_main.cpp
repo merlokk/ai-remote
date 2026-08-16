@@ -32,6 +32,7 @@ void RegisterTimezoneTests(void);
 void RegisterSpeakerTests(void);
 void RegisterWifiPolicyTests(void);
 void RegisterReachabilityTests(void);
+void RegisterTimesyncTests(void);
 
 void setUp(void) { fake::Reset(); }
 
@@ -74,6 +75,7 @@ int main(int argc, char **argv) {
     if (Wanted("speaker")) RegisterSpeakerTests();
     if (Wanted("wifi")) RegisterWifiPolicyTests();
     if (Wanted("wifi") || Wanted("reach")) RegisterReachabilityTests();
+    if (Wanted("timesync") || Wanted("sync")) RegisterTimesyncTests();
 
     return UNITY_END();
 }

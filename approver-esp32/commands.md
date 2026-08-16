@@ -81,6 +81,40 @@ A clock that was never set prints `--:--`-style dashes rather than a plausible
 wrong time: the chip's oscillator-stopped flag makes "the read succeeded" and
 "the time can be trusted" two different answers.
 
+Then a `sync` block, which answers a question a clock face cannot: where this
+time came from.
+
+```
+sync       pool.ntp.org every 6 h
+           last 2026-08-16 22:35:44 Europe/Kyiv, 9 s ago, moved the clock +2 s
+           next in 5h 59m
+```
+
+The middle line is printed **whether or not syncing is switched on** — when it
+last synced is a fact about the time above rather than about the schedule — and
+it is in the configured zone, like the `local` line, because that is how people
+ask the question. `never synced` when it has not.
+
+**How far it moved the clock** is the number worth reading: a device stepped by
+several seconds every time has an RTC to be suspicious of, and nothing else
+here would say so. A `+1` or `+2` on the first sync after a reboot is normal
+arithmetic rather than drift — the RTC keeps whole seconds, so the clock
+adopted at boot always starts a fraction of a second behind.
+
+The last line is the schedule, and it is left out when syncing is off. `no
+internet to ask through` is what it says instead of a countdown when there is
+nothing to ask.
+
+### `date sync`
+Asks the time server now instead of at the next interval, waits for the answer,
+and prints the same `sync` block. Refused, with the reason, when syncing is off
+or there is no internet — a device that cannot ask should say so rather than
+appear to have asked.
+
+It does not need the RTC: SNTP sets the system clock whether or not there is a
+chip to store it in, and a board whose RTC did not answer is the one that needs
+the network's time most.
+
 ### `date set <YYYY-MM-DD> <HH:MM:SS>`
 Writes both the RTC and the system clock. The time is read as **local** — what
 is on a wall or a phone — and stored as UTC.
@@ -152,12 +186,18 @@ In memory only. The settable fields:
 | `blank` | seconds | idle before the panel blanks, 0 disables |
 | `nats` | URL | the bus address |
 | `tz` | zone name or POSIX rule | applied at once; see `config zones` |
-| `sntp` | hostname | |
+| `sntp` | hostname | **empty means the clock does not sync** |
+| `sync` | hours | how often the clock is corrected; **0 is off** |
 | `wifi` | `on` / `off` | the radio switch |
 
 A `tz` that is neither a known zone name nor a POSIX rule is **refused** — libc
 reads a misspelled zone as UTC and says nothing, so a typo would silently move
 the clock.
+
+`sync` is the gap between *scheduled* corrections and not the whole rule: a
+fresh boot and an internet that has just come back both sync at once, whatever
+it says. Setting either `sync` or `sntp` takes effect immediately and touches
+nothing else — in particular it does not disturb the connection.
 
 The Wi-Fi networks and the ping targets are lists rather than single values and
 have their own verbs (`wifi join`, `wifi check`).

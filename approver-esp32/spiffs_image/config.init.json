@@ -24,7 +24,8 @@
     "time": {
         "zone": "UTC",
         "posix": "UTC0",
-        "sntp": "pool.ntp.org"
+        "sntp": "pool.ntp.org",
+        "syncHours": 6
     },
     "display": {
         "brightness": 80,

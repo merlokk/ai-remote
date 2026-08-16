@@ -18,6 +18,7 @@
 #include "lvgl_display.h"
 #include "rawimage.h"
 #include "storage.h"
+#include "timesync.h"
 #include "timezone.h"
 #include "wifi_manager.h"
 
@@ -155,6 +156,17 @@ extern "C" void app_main(void) {
     // nothing — `esp_wifi_init` costs tens of kilobytes of heap, and a device
     // configured with Wi-Fi off should not pay them.
     wifimgr::Init();
+
+    // And the clock's network half (§10.8.2), which is why it is after the
+    // radio: it has nothing to do until there is an internet, and `wifimgr` is
+    // what tells it there is one. It starts a task and asks nothing — a device
+    // with no network, or with `time.syncHours` at 0, pays a task and no
+    // packets for this existing.
+    //
+    // The RTC is passed in rather than reached for: `timesync` has never heard
+    // of this board (§10.14.2), and `main` is where the two meet — the same
+    // shape as the codec's volume below.
+    timesync::Init(&board::Clock());
 
     // Settings applied to the hardware they belong to. `main` is where the two
     // meet: `config` knows nothing about a codec, and `board` knows nothing

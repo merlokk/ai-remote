@@ -28,6 +28,7 @@
 #include "qmi8658.h"
 #include "speaker.h"
 #include "storage.h"
+#include "timesync.h"
 #include "timezone.h"
 #include "wifi_manager.h"
 #include "wifi_radio.h"
@@ -99,8 +100,131 @@ int CmdStatus(int, char **) {
 constexpr size_t kMaxListed = 16;
 storage::Entry entries[kMaxListed];
 
+// A duration a person reads at a glance. The internet check prints plain
+// seconds because its numbers *are* seconds; the clock's are hours, and
+// "21600 s ago" is a conversion nobody should have to do in their head.
+void PrintDuration(uint32_t ms) {
+    const uint32_t seconds = ms / 1000;
+    if (seconds < 90) {
+        printf("%u s", static_cast<unsigned>(seconds));
+        return;
+    }
+    const uint32_t minutes = seconds / 60;
+    if (minutes < 90) {
+        printf("%u m", static_cast<unsigned>(minutes));
+        return;
+    }
+    printf("%uh %02um", static_cast<unsigned>(minutes / 60),
+           static_cast<unsigned>(minutes % 60));
+}
+
+// Where the clock's time actually comes from, which is a different question
+// from what time it is — and the one nobody can answer by looking at a clock
+// face. Whether syncing is on, when it last worked, **how far it moved the
+// clock** (a device stepped by four seconds every time has an RTC to be
+// suspicious of, and nothing else here would ever say so), and when the next
+// one is due.
+void PrintSyncStatus() {
+    if (!timesync::Ready()) {
+        printf("sync       not running\n");
+        return;
+    }
+
+    const timesync::Status sync = timesync::Get();
+    const config::Time &settings = config::Get().time;
+
+    // What the setting is.
+    if (!sync.enabled) {
+        printf("sync       off%s\n",
+               settings.sntp_server[0] == '\0' ? " — no server set" : " — sync hours is 0");
+    } else {
+        printf("sync       %s every %u h%s\n", settings.sntp_server,
+               static_cast<unsigned>(settings.sync_hours), sync.syncing ? ", asking now" : "");
+    }
+
+    // **When it last heard from a server, printed whether or not syncing is
+    // still on.** That is a fact about the time above rather than about the
+    // schedule, and switching the schedule off afterwards does not unmake it —
+    // it makes it the *only* thing that says where this clock's time came
+    // from.
+    //
+    // Shown in the configured zone, like the `local` line above it: the device
+    // keeps UTC and a zone is presentation (§10.8.2), and "when did it last
+    // sync" is a question people ask in wall-clock time.
+    if (sync.ever_synced) {
+        struct tm fields = {};
+        localtime_r(&sync.last_utc, &fields);
+        printf("           last %04d-%02d-%02d %02d:%02d:%02d %s, ", fields.tm_year + 1900,
+               fields.tm_mon + 1, fields.tm_mday, fields.tm_hour, fields.tm_min, fields.tm_sec,
+               settings.zone);
+        PrintDuration(sync.since_last_ms);
+        printf(" ago, moved the clock %+d s\n", static_cast<int>(sync.last_step_seconds));
+    } else {
+        printf("           never synced\n");
+    }
+
+    if (!sync.enabled) {
+        // Nothing is scheduled and the line above already said why. A "next"
+        // clause here would be a countdown to something that will not happen.
+        return;
+    }
+
+    printf("           ");
+    if (sync.next_in_ms == timesync::kNever) {
+        // Enabled and nothing scheduled can only mean one thing, and saying it
+        // is the difference between a broken device and a waiting one.
+        printf("no internet to ask through");
+    } else if (sync.next_in_ms == 0) {
+        printf("due now");
+    } else {
+        printf("next in ");
+        PrintDuration(sync.next_in_ms);
+    }
+    if (sync.failures > 0) {
+        printf(", %u attempt(s) failed since", static_cast<unsigned>(sync.failures));
+    }
+    printf("\n");
+}
+
 int CmdDate(int argc, char **argv) {
     rtc::Pcf85063 &clock = board::Clock();
+
+    // **Before the RTC check**, because this one does not need the chip: SNTP
+    // sets the system clock whether or not there is anything to store it in,
+    // and a board whose RTC did not answer is exactly the board that needs the
+    // network's time most.
+    if (argc == 2 && strcmp(argv[1], "sync") == 0) {
+        if (!timesync::Ready()) {
+            printf("the clock sync task is not running — see the boot log\n");
+            return 1;
+        }
+        timesync::Status sync = timesync::Get();
+        if (!sync.enabled) {
+            printf("clock sync is off — 'config set sync <hours>' turns it on\n");
+            return 1;
+        }
+        if (!sync.internet) {
+            printf("no internet to ask through; it will sync by itself as soon as there is\n");
+            return 1;
+        }
+
+        const uint32_t before = static_cast<uint32_t>(sync.successes) + sync.failures;
+        timesync::SyncNow();
+        printf("asking %s…\n", config::Get().time.sntp_server);
+        // Waiting for the answer rather than returning to the prompt, the same
+        // call `wifi ping` makes: a command that returns before its result
+        // does is a command people run twice.
+        for (uint32_t waited = 0; waited < 20000; waited += 200) {
+            vTaskDelay(pdMS_TO_TICKS(200));
+            sync = timesync::Get();
+            if (static_cast<uint32_t>(sync.successes) + sync.failures != before) {
+                break;
+            }
+        }
+        PrintSyncStatus();
+        return 0;
+    }
+
     if (!clock.Present()) {
         printf("the PCF85063 did not answer at boot — no clock to read\n");
         return 1;
@@ -139,6 +263,7 @@ int CmdDate(int argc, char **argv) {
                local_fields.tm_hour, local_fields.tm_min, local_fields.tm_sec,
                config::Get().time.zone, offset / 3600, abs(offset % 3600) / 60,
                tz::IsDaylightSaving(system_now) ? ", DST" : "");
+        PrintSyncStatus();
         return 0;
     }
 
@@ -163,6 +288,7 @@ int CmdDate(int argc, char **argv) {
 
     if (date_arg == nullptr) {
         printf("usage: date                    read it: RTC and system in UTC, plus local\n");
+        printf("       date sync                              ask the time server now\n");
         printf("       date set <YYYY-MM-DD> <HH:MM:SS>       in %s\n", config::Get().time.zone);
         printf("       date set utc <YYYY-MM-DD> <HH:MM:SS>   in UTC\n");
         return 1;
@@ -626,6 +752,7 @@ int SetConfigField(const char *key, const char *value) {
         {"brightness", 0, 100, "%"},
         {"dim", 0, 65535, " s"},
         {"blank", 0, 65535, " s"},
+        {"sync", 0, 255, " h"},
     };
 
     for (const NumberField &field : kNumbers) {
@@ -649,6 +776,13 @@ int SetConfigField(const char *key, const char *value) {
             c.display.brightness = static_cast<uint8_t>(parsed);
         } else if (strcmp(key, "dim") == 0) {
             c.display.dim_seconds = static_cast<uint16_t>(parsed);
+        } else if (strcmp(key, "sync") == 0) {
+            c.time.sync_hours = static_cast<uint8_t>(parsed);
+            // Applied at once, like the volume and the zone — and **only the
+            // sync**, not the connection: the lesson `wifi check` taught is
+            // that a settings call reaching for more than it changed is a
+            // settings call people stop making.
+            timesync::Apply();
         } else {
             c.display.blank_seconds = static_cast<uint16_t>(parsed);
         }
@@ -720,6 +854,21 @@ int SetConfigField(const char *key, const char *value) {
             return 1;
         }
         snprintf(field.target, field.capacity, "%s", value);
+        const bool cleared = value[0] == '\0';
+        if (strcmp(key, "sntp") == 0) {
+            // The server is half of whether syncing happens at all (an empty
+            // one is off), so the task is told — and told nothing else.
+            timesync::Apply();
+        }
+        if (cleared) {
+            // `sntp = , in memory only` is what the general form prints for an
+            // empty value, and it reads like a bug. Clearing a field is a
+            // deliberate thing to do here — an empty time server is how
+            // syncing is switched off — so it gets said in words.
+            printf("%s cleared%s, in memory only — 'config save' writes it to %s\n", field.name,
+                   strcmp(key, "sntp") == 0 ? "; the clock will not sync" : "", config::kPath);
+            return 0;
+        }
         printf("%s = %s, in memory only — 'config save' writes it to %s\n", field.name, value,
                config::kPath);
         return 0;
@@ -736,7 +885,8 @@ int SetConfigField(const char *key, const char *value) {
         return 1;
     }
 
-    printf("unknown field '%s'. settable: volume, brightness, dim, blank, nats, tz, sntp, wifi\n",
+    printf("unknown field '%s'. settable: volume, brightness, dim, blank, nats, tz, sntp, sync, "
+           "wifi\n",
            key);
     printf("the Wi-Fi networks are a list of ssid/password pairs and are not set from here\n");
     return 1;
@@ -806,6 +956,9 @@ int CmdConfig(int argc, char **argv) {
         // may have just been replaced — an attempt against index 2 of the old
         // list is an attempt against a network that is no longer there.
         wifimgr::Apply();
+        // And the clock's sync task, holding an interval and a server that may
+        // both have just changed.
+        timesync::Apply();
     }
 
     const config::Data &c = config::Get();
@@ -829,9 +982,14 @@ int CmdConfig(int argc, char **argv) {
     }
     printf("nats       %s\n", c.nats.url);
     const int offset = tz::OffsetSeconds();
-    printf("time       %s (%s), UTC%+03d:%02d%s, sntp %s\n", c.time.zone, c.time.posix,
-           offset / 3600, abs(offset % 3600) / 60, tz::IsDaylightSaving() ? ", DST now" : "",
-           c.time.sntp_server);
+    printf("time       %s (%s), UTC%+03d:%02d%s\n", c.time.zone, c.time.posix, offset / 3600,
+           abs(offset % 3600) / 60, tz::IsDaylightSaving() ? ", DST now" : "");
+    if (c.time.sync_hours == 0) {
+        printf("           sntp %s, sync off\n", c.time.sntp_server);
+    } else {
+        printf("           sntp %s every %u h\n", c.time.sntp_server,
+               static_cast<unsigned>(c.time.sync_hours));
+    }
     printf("display    %u%%, dim after %us, blank after %us\n",
            static_cast<unsigned>(c.display.brightness),
            static_cast<unsigned>(c.display.dim_seconds),
@@ -1688,8 +1846,8 @@ const esp_console_cmd_t kCommands[] = {
     },
     {
         .command = "date",
-        .help = "read the RTC, or 'date set <YYYY-MM-DD> <HH:MM:SS>' to write it",
-        .hint = "[set <YYYY-MM-DD> <HH:MM:SS>]",
+        .help = "read the clock and how it is synced, set it, or sync it now",
+        .hint = "[sync|set [utc] <YYYY-MM-DD> <HH:MM:SS>]",
         .func = &CmdDate,
         .argtable = nullptr,
         .func_w_context = nullptr,

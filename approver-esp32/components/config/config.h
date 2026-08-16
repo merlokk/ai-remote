@@ -155,6 +155,18 @@ struct Time {
     char zone[kTimezoneSize];
     char posix[kTimezoneSize];
     char sntp_server[kHostSize];
+
+    // How often the clock is corrected from `sntp_server` (§10.8.2), in hours.
+    // **Zero is off**, which is the one switch rather than a second boolean
+    // that could disagree with it — the same call `Wifi::active` makes. An
+    // empty `sntp_server` is off as well, and for the same reason: both are
+    // the setting being absent rather than two settings arguing.
+    //
+    // It is a floor on the gap between *scheduled* syncs and not the whole
+    // rule: a fresh boot and an internet that has just come back both sync at
+    // once, whatever this says. `sync_policy.h` owns that, and this is the one
+    // number of it the operator gets to set.
+    uint8_t sync_hours;
 };
 
 // How many addresses the internet check may try (§10.9). Must match

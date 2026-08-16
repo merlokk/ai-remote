@@ -274,6 +274,14 @@ esp_err_t Parse(const char *json, Data *out) {
         CopyString(time, "posix", out->time.posix, sizeof(out->time.posix));
         CopyString(time, "sntp", out->time.sntp_server, sizeof(out->time.sntp_server));
 
+        // Hours, and **0 is off** rather than a floor of one: "never sync" has
+        // to be expressible, and a field that silently became hourly would be
+        // a device asking a stranger's server 24 times a day because somebody
+        // typed a zero.
+        long value = out->time.sync_hours;
+        CopyNumber(time, "syncHours", 0, 255, &value);
+        out->time.sync_hours = static_cast<uint8_t>(value);
+
         // A file that names a zone but carries no rule — hand-edited, or
         // written by a firmware whose table was smaller — is completed from
         // the table rather than refused. The name is the operator's intent;
@@ -396,6 +404,7 @@ esp_err_t Serialise(const Data &in, size_t *length) {
         cJSON_AddStringToObject(time, "zone", in.time.zone);
         cJSON_AddStringToObject(time, "posix", in.time.posix);
         cJSON_AddStringToObject(time, "sntp", in.time.sntp_server);
+        cJSON_AddNumberToObject(time, "syncHours", in.time.sync_hours);
     }
 
     cJSON *display = cJSON_AddObjectToObject(root, "display");
@@ -578,7 +587,17 @@ void FillDefaults(Data *out) {
     snprintf(out->nats.url, sizeof(out->nats.url), "nats://192.168.1.5:4222");
     snprintf(out->time.zone, sizeof(out->time.zone), "UTC");
     snprintf(out->time.posix, sizeof(out->time.posix), "UTC0");
-    snprintf(out->time.sntp_server, sizeof(out->time.sntp_server), "pool.ntp.org");
+    // **Empty on purpose, and the only string field that is.** Every other
+    // default here is a number this firmware can pick for itself; this one
+    // names somebody else's machine, and a device that talks to a host the
+    // operator never wrote down is the same mistake `internet.targets` refuses
+    // to make. No server in the file means no server — and therefore no clock
+    // sync, rather than an exchange that fails every interval forever. The
+    // shipped `config.init.json` names `pool.ntp.org`, so a device that can
+    // read its filesystem does sync; this is what a device that cannot falls
+    // back to.
+    out->time.sntp_server[0] = '\0';
+    out->time.sync_hours = 6;
     out->display.brightness = 80;
     out->display.dim_seconds = 30;
     out->display.blank_seconds = 120;

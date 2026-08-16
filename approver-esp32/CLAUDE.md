@@ -48,7 +48,8 @@ the repository owner's sign-off say so.
 | ES8311 codec + speaker — `components/audio` (§10.8.1, §10.13) | **playing on hardware**: the codec configured from its datasheet, an I²S transmit channel, uncompressed WAV streamed off SPIFFS. `poweron.wav` at boot, `alert.wav` on `play`. No microphone, no decoder |
 | Settings — `components/config` (§10.15) | **read, written and surviving a reboot**: `config.json` parsed into a fixed struct at boot, `reload` / `save` / `restore` on the console, and the codec's volume is the first setting that round-trips |
 | QMI8658C IMU — `components/imu` (§10.13) | **reading on hardware**: 0x6B, six axes, tilt and die temperature through `imu`. A diagnostic and nothing more — §10.13's rule that no gesture approves anything is unchanged |
-| PCF85063 RTC — `components/rtc` (§10.8.2) | **running on hardware**: read, written and surviving a reboot; the system clock is adopted from it at boot, **in UTC**. No SNTP yet |
+| PCF85063 RTC — `components/rtc` (§10.8.2) | **running on hardware**: read, written and surviving a reboot; the system clock is adopted from it at boot, **in UTC** |
+| SNTP — `components/timesync` (§10.8.2) | **running on hardware**: on this board the radio walked its list, joined at 6.3 s, held an address at 8.4 s and the clock was set from `pool.ntp.org` at **13.1 s** — the boot case and the internet-appears case being the same one, as designed. `date` and `date sync` on the console, the RTC written back each time. `sync_policy.h` includes `<cstdint>` and nothing else, the way the navigator and the Wi-Fi policy do, so the schedule, the flap guard and the backoff run under Unity. What no board has reached is the **six-hour** interval and the backoff — a device has to be up that long to prove them |
 | Named time zones — `components/timezone` (§10.8.2) | **running on hardware**: 72 zones compiled in, `Europe/Kyiv` or plain `EET` rather than a POSIX rule, applied at boot from `config.json`. The clock stays UTC; a zone only changes what is printed and how a typed time is read |
 | AXP2101 — `components/pmic`, brought up from `board::Init()` (§10.1, §10.13) | **configured and reading on hardware**: TS pin silenced, ADC channels, VBUS limit, rail voltages, charge currents — all cross-checked against the vendor's `pmicpower` component — plus `SetAldo2`/`SetAldo3` for the audio and panel rails |
 | The panel and the touch — `components/display` (§10.1, §10.8) | **lit on hardware**: the CO5300 over QSPI with the vendor's init sequence, its reset driven as a PMIC rail through a callback, the CST9220 read under the I²C lease, and LVGL 9.4 on two 480×40 buffers. `display` on the console. No screens yet — §10.8's five are the next thing, and what is on the panel today is a placeholder that says so |
@@ -66,7 +67,7 @@ the repository owner's sign-off say so.
 | The Wi-Fi screen (§10.8.6) | specified, not started — the manager underneath it is what exists |
 | Where the configuration lives (§10.15) | **decided**: all of it in JSON on SPIFFS, nothing of ours in NVS — with the cost stated (SPIFFS cannot be encrypted at rest). `spiffs_image/config.json` + `config.init.json` are flashed; nothing reads them yet |
 | The `KEY`-at-boot config restore (§10.15) | specified, not started |
-| Host-tier tests (§10.11) — `host_test/` | **running**: 271 Unity tests over `ui`, `i2cbus`, `pmic`, `rtc`, `imu`, `audio`, `config`, `buttons`, `timezone`, `speaker` and `wifimgr`, one command, no board. The drivers are compiled **unmodified** against a fake ESP-IDF (`host_test/fakes/`), which is §10.14.3's owed fake backend arriving in a different shape than that section specified, and which now covers I²S and a filesystem as well as the I²C wire. Built by MSVC rather than by ESP-IDF's `linux` target, which does not work on a Windows host — §10.11 records why |
+| Host-tier tests (§10.11) — `host_test/` | **running**: 289 Unity tests over `ui`, `i2cbus`, `pmic`, `rtc`, `imu`, `audio`, `config`, `buttons`, `timezone`, `speaker`, `wifimgr` and `timesync`, one command, no board. The drivers are compiled **unmodified** against a fake ESP-IDF (`host_test/fakes/`), which is §10.14.3's owed fake backend arriving in a different shape than that section specified, and which now covers I²S and a filesystem as well as the I²C wire. Built by MSVC rather than by ESP-IDF's `linux` target, which does not work on a Windows host — §10.11 records why |
 | Protocol parity vectors (§10.11 tier 2) | not started |
 
 Read §10.3 before anything else: it is the one part of this that changes
@@ -779,11 +780,11 @@ registered, and a gear.
   shows `--:--`, not `00:00` — a plausible wrong time is worse than an obviously
   unset one, the same call §10.7 makes about `ts`.
 
-  **The half of this that exists** is `components/rtc` and `board::Init()`
-  adopting the RTC into the system clock at boot; the console reads and writes
-  it with `date` (§10.7). The zones below exist as well, and the RTC now holds
-  UTC rather than whatever was typed. What is *not* there yet is SNTP: the
-  clock is set by hand until there is a network.
+  **Both halves exist now.** `components/rtc` and `board::Init()` adopt the RTC
+  into the system clock at boot; the console reads and writes it with `date`
+  (§10.7); the zones below are there and the RTC holds UTC rather than whatever
+  was typed. And `components/timesync` is the network half — the split below
+  says how it is shaped and what it refuses to do.
 
   The chip makes the `--:--` rule cheap rather than a convention to remember:
   the **OS flag** in its seconds register says the oscillator stopped or never
@@ -850,6 +851,92 @@ registered, and a gear.
   boot self-test (§10.6) failed, or no bus — it is on this screen, in words, not
   buried in settings. The device's whole value is that a glance at the desk tells
   you the loop is alive.
+
+##### SNTP — when the clock asks, and when it does not
+
+The RTC is right across a power cut and cannot be *accurate*: it is a watch
+crystal, it drifts, and nothing on this board can say by how much. So when
+there is a network the device asks a server, sets the system clock and writes
+the answer back to the chip — which is what makes the *next* boot start from a
+good number rather than from a drifted one.
+
+**Three moments, and they are one rule.** At boot, whenever the internet comes
+back, and every `time.syncHours` after that. There is no separate boot case in
+the code because there does not need to be: a device that has never synced is
+*due*, and "due plus an internet" is the whole trigger. `components/timesync`
+is the same split as §10.9's — `sync_policy.h` includes `<cstdint>` and nothing
+else and holds every decision (host-tested, §10.11); `timesync.cpp` resolves a
+name and waits on a packet, and has none.
+
+- **It reads `wifimgr` rather than asking the network itself** — the seam
+  §10.9 said this would hang off. What it needs is narrower than that section's
+  three states, though, and the mapping is the interesting part: a client link
+  with an address and an internet state that is **not `kOffline`** is enough to
+  try. `kUnknown` counts as yes, deliberately — the check being switched off is
+  not a statement that there is no internet, and an operator who turned the
+  ping off would otherwise have quietly lost the clock as well. An SNTP
+  exchange is its own reachability test.
+- **A link that flaps is not four reasons to sync.** Coming back after a week
+  off the air is; coming back four times in a minute is not, and the guard is a
+  minimum gap between *successful* syncs (five minutes) rather than a debounce
+  on the link. Inside it, a reconnection changes nothing at all — not even the
+  schedule.
+- **A failure retries far sooner than the interval, growing and capped** — six
+  hours is the gap between good answers, not a penalty for a server that was
+  busy. A minute, doubling, to fifteen. Without the cap a device with no route
+  to any NTP server would ask sixty times an hour forever; without the growth
+  it would do the same at a constant rate.
+- **The exchange is bounded** (§10.5's rule about somebody else's wait): fifteen
+  seconds for a DNS lookup and an answer, and the client is deinitialised on
+  every path — it keeps a socket and a semaphore, and refuses a second `init`
+  over a live one, so leaking it once would mean never syncing again.
+- **An answer outside 2024..2099 is refused and counted as a failure.**
+  §10.8.2's rule about an obviously unset clock beating a plausible wrong one,
+  applied to an answer rather than to a chip — and 2099 is the RTC's own limit,
+  since it stores two digits and no century.
+- **No server named is off, and so is `syncHours: 0`.** Two spellings of "there
+  is nothing to ask", not two switches that can disagree — and the compiled-in
+  default for the server is **empty**, alone among the string fields, because
+  it names somebody else's machine. A device syncing against a host the
+  operator never wrote down is the mistake `internet.targets` already refuses;
+  a device retrying a server that is not there is an error line every interval
+  for the life of the board. The shipped `config.init.json` names
+  `pool.ntp.org`, so a device that can read its filesystem does sync.
+- **Nothing about this is persisted, and that is a decision.** "When did it
+  last sync" lives in RAM: writing a timestamp to `config.json` every six hours
+  would be flash wear for a fact the next boot re-establishes in seconds
+  anyway, since a fresh device is due the moment it has an internet. What
+  *does* survive a reboot is the corrected time itself, in the RTC — which is
+  the point of writing it there.
+- **`date` says where the time came from**, which a clock face cannot: the
+  server, when it last worked, how far it moved the clock, and when the next
+  one is due. `date sync` asks now and waits for the answer.
+
+  Two details of that readout, both of which started out wrong. The last sync
+  is printed **whether or not syncing is still on** — it is a fact about the
+  time on screen rather than about the schedule, and switching the schedule off
+  is exactly when it becomes the only thing that says where that time came
+  from. And it is printed **in the configured zone**, like the `local` line
+  above it: the device keeps UTC and a zone is presentation, and "when did it
+  last sync" is a question people ask in wall-clock time.
+
+**And the step is the number worth having, which is why getting it wrong
+mattered.** A device corrected by several seconds every time has an RTC to be
+suspicious of, and nothing else on this board would ever say so. The first
+version computed it as `after - before` around the exchange — and `time()` runs
+normally during the seconds spent resolving a name and waiting for a packet, so
+it reported the correction *plus the duration*. The board said so immediately:
+**`+5 s` twenty-six seconds after a sync that had already set the clock**,
+which is a drift rate no crystal has. `esp_timer_get_time()` is monotonic and
+no `settimeofday` touches it, so subtracting the elapsed time leaves the
+correction alone; the same two syncs then read `+0 s`. Rounded rather than
+truncated, or a 4.6-second exchange counted as 4 leaves 0.6 s of itself in the
+answer — which is how a device with a perfect clock came to report `+1 s`.
+
+  A **boot** sync showing `+1` or `+2` is expected and not drift: the RTC holds
+  whole seconds, so adopting it at boot loses the fraction and always lands
+  *behind* the true time. Systematically positive, and about a second of it is
+  arithmetic rather than the crystal.
 
 #### 10.8.3 Limits — the `status` document, when there is one
 
@@ -929,7 +1016,7 @@ One list, no cleverness:
 | Bus | the NATS URL — the host's LAN address per §10.3, no credentials to enter unless that bus ever gains auth. Editing it drops the connection and reconnects |
 | Key & registration | `key_id`, this device's public key, the pinned handler key (the strings §10.7 has the operator compare), the boot self-test result — and `forget`, which unpins both |
 | Display | brightness, idle-dim and blank timeouts |
-| Time | the `TZ` string and the SNTP server |
+| Time | the `TZ` string, the SNTP server and how often to ask it — plus when it last answered, which is the one line here that is a readout rather than a setting |
 | About | firmware version, chip and MAC, uptime, and the heap **low-water mark** rather than the current free heap (§10.14.1 — the minimum ever seen is the number that says whether the device is safe) |
 | Restore config | puts `config.init.json` back over `config.json` (§10.15) — the same thing holding `KEY` at boot does, with a screen to confirm on. Wi-Fi, bus and display go back to defaults; the registration survives |
 | Factory reset | that, **and** deletes `registration.json`. Two-step, and it says exactly what will be lost |
@@ -1286,10 +1373,13 @@ The general rule that came out of it: **a settings call that reconnects is a
 settings call people stop making**, so each one should reach for the narrowest
 thing that has actually changed.
 
-**This is the seam SNTP hangs off** (§10.8.2). A clock that syncs wants to know
-there is an internet before it tries, and it should read `Snapshot::internet`
-rather than grow a second probe of its own. That is the next piece, not this
-one.
+**This is the seam SNTP hangs off, and it is taken now** (§10.8.2).
+`components/timesync` reads `Snapshot::internet` rather than growing a second
+probe of its own — with one wrinkle worth recording here, where the states are
+defined: it treats `kUnknown` as **permission to try**, not as a refusal. Only
+`kOffline` stops it. The check being switched off is not a statement that there
+is no internet, and a device whose operator turned the ping off must not
+quietly lose its clock as well.
 
 #### A fixed address, per network
 
@@ -1411,8 +1501,9 @@ Three tiers, and the first one is where nearly everything belongs:
    ESP-IDF. One command, in [`working-with-code.md`](working-with-code.md).
 
    **What is under it today is the navigator and four of the five chips on the
-   I²C bus, the settings file, the buttons, the zone table, the speaker and the
-   Wi-Fi policy and the internet check** — 271 tests:
+   I²C bus, the settings file, the buttons, the zone table, the speaker, the
+   Wi-Fi policy, the internet check and the clock's sync schedule** — 289
+   tests:
 
    | Subject | What is pinned |
    |---|---|
@@ -1428,6 +1519,8 @@ Three tiers, and the first one is where nearly everything belongs:
    | `components/audio` (speaker) | mostly the RIFF parser, which is where the value is: a `LIST` chunk between `fmt ` and `data` walked past, an odd-sized chunk padded the way RIFF requires, a 40-byte `WAVE_FORMAT_EXTENSIBLE` header stepped over, compressed-but-in-a-.wav named apart from not-a-WAV, and three claims a file is not allowed to make about itself — a `fmt ` chunk too short to hold a format, a `data` chunk with nothing in it, and a chunk length that runs off the end of the file. Then what reaches the wire — the fake channel **captures the bytes**, so "it streamed the audio and not the header" is known rather than guessed; stereo and 8-bit refused without ever unmuting; a truncated `data` chunk played as far as the file goes; the codec muted again after a failed write; a rate change stopping the channel, retuning both halves, and starting it — and **a rate the codec cannot clock refused before the channel is stopped**, with the next file still playing afterwards, which is the bug that section below is about |
 
    | `components/wifimgr` (the internet check) | §10.9's second state machine, and the same shape as the first — `<cstdint>` and nothing else, so no fake: `unknown` for "no link", "switched off" and "not asked yet" alike; a round moving to the next target at once rather than next minute; two failed rounds to say offline and **one reply to come back**, asserted in both directions because a symmetric rule would be a different design; a dropped link going to `unknown` rather than `offline`; a late answer arriving after the link went being ignored; the target that answered going first next round; and the minute counted across the ~49-day wrap |
+   | `components/timesync` | §10.8.2's schedule, and the fourth file in this firmware whose subject includes `<cstdint>` and nothing else: a device that has never synced being **due**, which is what makes "at boot" and "when the internet appears" one rule; nothing asked without an internet, and nothing asked twice at once; a link flapping four times inside the guard producing **no** syncs while the same link returning after a longer gap produces one at once; `date sync` overruling the guard but **not** the off switch; the retry being far shorter than the interval and the backoff both growing and capped, because either half alone is satisfied by a constant; a success clearing what was learned about a failing server; a stray result rescheduling nothing; `Configure` keeping a sync that really did happen; and the ~49-day wrap landing inside an interval |
+   | `components/config` (the clock) | `syncHours` read, round-tripped and **0 kept as off rather than floored** — the opposite call to `internet.intervalSeconds` next to it, and the difference is the point: a probe list with no interval is a flood, a clock told never to sync has said something. Plus the one the owner asked for: **no `sntp` in the file, and an empty one, both leave nothing to ask** rather than falling back to a compiled-in host |
    | `components/wifimgr` | every rule §10.9 states, and it needs **no fake at all** — the policy includes `<cstdint>` and nothing else, so this suite is the navigator's shape rather than the drivers': the round-robin and where a round begins; the backoff asserted as *both* growing and capped, because either alone is satisfied by a constant; the fallback AP after the configured rounds, held open by an attached station and restarted from the beginning when the last one leaves — and **not** held open by the manager's own "nobody is attached" report, which arrives on every pass and would otherwise mean an AP that never expires; the window's expiry clearing the sticky auth failures, since that window was the chance to fix them; an exhausted list going straight to the AP rather than waiting out its rounds; a drop while online being neither an auth failure nor an instant reconnect; the connect timeout; `SetDesired` being idempotent, because the manager re-asserts it five times a second; and the ~49-day millisecond wrap landing inside a delay |
 
    The fake platform is `host_test/fakes/` — an ESP-IDF-shaped set of headers
@@ -1453,6 +1546,15 @@ Three tiers, and the first one is where nearly everything belongs:
    Four more needed no mutation, because they failed on the real code the
    first time they ran: §10.14.3 has two, §10.8.2 the third, and §10.8.1 the
    fourth.
+
+   **The clock's schedule added six**, all caught, and they are the six rules
+   §10.8.2 spends its words on: the flap guard removed (a link bouncing then
+   syncs per bounce), the backoff made constant, the backoff's cap removed,
+   `Configure` forgetting a sync that happened (a shorter interval typed into
+   the console would then re-sync at once, which is how a settings command
+   becomes a way to hammer a server), a result nobody asked for being
+   accepted, and the wrap-safe deadline comparison replaced with `now >= at`
+   — that last one caught by the ~49-day test and nothing else.
 
    **The Wi-Fi policy added nine mutations and, more usefully, two
    survivors** — and §10.11's rule held: a mutation that survives is a
@@ -2205,8 +2307,14 @@ and belonging to a device this one is not. What is in them now is what this
 firmware has or is specified to have: the Wi-Fi block (§10.9 —
 `active`, `mode`, `rounds`, `apWindowSeconds`, `ap.{ssid,password,channel}` and
 `networks[]`, four of them; that section's table says what each is for),
-`nats.url` (§10.3), `time.zone` / `time.posix` / `time.sntp` (§10.8.2), the
-display timeouts (§10.8.5) and `audio.volume`.
+`nats.url` (§10.3), `time.zone` / `time.posix` / `time.sntp` /
+`time.syncHours` (§10.8.2), the display timeouts (§10.8.5) and `audio.volume`.
+
+**`time.sntp` is the one string with no compiled-in default**, and §10.8.2 says
+why: it names somebody else's machine, so an absent one means "do not sync"
+rather than "sync against whatever this firmware was built believing". Empty
+and absent are the same answer, and `time.syncHours: 0` is the third spelling
+of it.
 
 **An access-point block is back, and it is not the one that was deleted.** The
 house firmware's was a device whose *normal* mode was to serve a web UI over
@@ -2221,7 +2329,7 @@ address instead of as an abstraction with a single implementation.
 
 **Editing and persisting are two commands, deliberately.** `config set <field>
 <value>` writes the field and nothing else — the settable ones are `volume`,
-`brightness`, `dim`, `blank`, `nats`, `tz`, `sntp` and `wifi`, and every one of
+`brightness`, `dim`, `blank`, `nats`, `tz`, `sntp`, `sync` and `wifi`, and every one of
 them says "in memory only" when it succeeds; `config save` is what reaches the
 filesystem. A console where each keystroke lands in flash is a console that
 wears the partition out during an experiment, and `config reload` is then the
@@ -2230,8 +2338,15 @@ not settable this way: they are a list of ssid/password pairs, and a list needs
 add and remove rather than assignment — `wifi join <ssid> [password]` and
 `wifi forget <ssid>` are those two verbs (§10.9), and they follow the same rule
 to the letter: memory only, and `config save` writes. §10.8.6's screen is the
-same pair of verbs with a keyboard in front of them. `volume` is also the one
-field applied as it is set, so the next `play` is audibly the number just typed.
+same pair of verbs with a keyboard in front of them.
+
+**Four of them are applied as they are set** — `volume`, so the next `play` is
+audibly the number just typed; `tz`, because the point of a zone is what `date`
+prints; and `sync` and `sntp`, which reach the clock's sync task and *only*
+that task. Which is the §10.9 lesson written down as a habit rather than as a
+story about `wifi check`: reach for the narrowest thing that actually changed.
+Being applied is not being saved — all four still say "in memory only", and
+`config save` is still what writes.
 
 `play volume <n>` is the same setter reached by a shorter name — it calls the
 same function, so there is one behaviour rather than two commands differing in
