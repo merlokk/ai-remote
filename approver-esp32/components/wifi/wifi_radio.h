@@ -80,6 +80,23 @@ enum class Failure : uint8_t {
     kOther,
 };
 
+// A fixed address for the network being joined (§10.9), in the binary form
+// `esp_netif_ip_info_t` takes — first octet in the low byte. The **text** lives
+// in `config.json` and turning one into the other is `config::ParseIpv4`'s job:
+// this driver is handed an address the same way it is handed an SSID, and has
+// no idea where either came from (§10.14.2).
+//
+// A zero DNS entry means "do not set one", which is different from 0.0.0.0 and
+// is the only value that could not be a real server anyway.
+struct StaticIp {
+    bool enabled = false;
+    uint32_t address = 0;
+    uint32_t netmask = 0;
+    uint32_t gateway = 0;
+    uint32_t dns1 = 0;
+    uint32_t dns2 = 0;
+};
+
 struct Status {
     Mode mode = Mode::kOff;
     Link link = Link::kIdle;
@@ -94,6 +111,9 @@ struct Status {
 
     int8_t rssi = 0;
     uint32_t ip = 0;       // IPv4, host order via esp_ip4_addr_t; 0 when none
+    bool ip_is_static = false;  // …and where it came from, which a readout
+                                // needs: "it has an address" and "the address
+                                // is the one that was asked for" differ
     uint8_t clients = 0;   // stations attached to our AP
     uint32_t changes = 0;  // bumped on every transition, for a poller
 };
@@ -139,7 +159,14 @@ class Radio {
 
     // Join `ssid`. Replaces whatever the station was doing. An empty password
     // means an open network.
-    esp_err_t StartClient(const char *ssid, const char *password);
+    //
+    // `ip` is per call rather than per device, because it is per *network*:
+    // the same object joins a home that hands out addresses and an office that
+    // does not. `nullptr`, or one with `enabled` false, is DHCP — and it
+    // actively puts the DHCP client back if a previous network had switched it
+    // off, which is the half of this that is easy to forget.
+    esp_err_t StartClient(const char *ssid, const char *password,
+                          const StaticIp *ip = nullptr);
 
     // Become an access point. An empty password means an open network — which
     // is the shipped default and is argued in `config.init.json`; a password
@@ -207,6 +234,17 @@ class Radio {
     esp_err_t EnsureStarted();
     void StopStation();
 
+    // Called once the station has associated: either the fixed address goes
+    // on, or the DHCP client is put back in case the last network turned it
+    // off. Both paths end in `IP_EVENT_STA_GOT_IP`, which is what the rest of
+    // this driver treats as "connected".
+    void ApplyAddressing();
+
+    // `type` is an `esp_netif_dns_type_t`, taken as an int so this header
+    // stays clear of `esp_netif.h` — the same reason the netif handles above
+    // are `void *`.
+    esp_err_t SetDns(uint32_t address, int type);
+
     // Written out rather than `++`: C++20 deprecates compound assignment on a
     // `volatile`, and the toolchain builds with `-Werror`. The load and the
     // store are two operations, which is safe here because only the manager
@@ -227,6 +265,13 @@ class Radio {
     // Incremented before every deliberate disconnect and consumed by the
     // handler.
     volatile uint8_t suppress_disconnect_ = 0;
+
+    // **A copy, not the caller's pointer.** The house firmware of §10.14.4
+    // keeps a `IPConfig*` into its config object and applies it from an event
+    // handler; that works there and would be a lifetime trap here, where the
+    // console can edit the network list between the association starting and
+    // the event arriving.
+    StaticIp static_ip_ = {};
 
     Status status_ = {};
 

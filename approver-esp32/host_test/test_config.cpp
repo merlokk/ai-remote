@@ -260,6 +260,161 @@ void test_config_a_file_with_no_wifi_section_still_has_an_access_point(void) {
     TEST_ASSERT_TRUE(config::Get().wifi.ap_window_seconds > 0);
 }
 
+// --- A fixed address for a network (§10.9) -------------------------------
+
+void test_config_parses_a_dotted_quad_first_octet_in_the_low_byte(void) {
+    uint32_t value = 0xDEADBEEF;
+    TEST_ASSERT_TRUE(config::ParseIpv4("0.0.0.0", &value));
+    TEST_ASSERT_EQUAL_HEX32(0u, value);
+
+    TEST_ASSERT_TRUE(config::ParseIpv4("255.255.255.255", &value));
+    TEST_ASSERT_EQUAL_HEX32(0xFFFFFFFFu, value);
+
+    // The byte order is the whole point of this test: `esp_netif_ip_info_t`
+    // and the console's own `%u.%u.%u.%u` both put the first octet in the low
+    // byte, and getting it backwards gives a plausible address on a network
+    // nobody is on.
+    TEST_ASSERT_TRUE(config::ParseIpv4("192.168.1.42", &value));
+    TEST_ASSERT_EQUAL_HEX32(0x2A01A8C0u, value);
+}
+
+void test_config_refuses_an_address_that_is_not_one(void) {
+    const char *const rubbish[] = {
+        "",  "192.168.1", "192.168.1.2.3", "192.168.1.256", "192.168.1.-1",
+        "192.168.1.a", " 192.168.1.1", "192.168.1.1 ", "192.168..1", "1.2.3.4\n",
+        "0x7f.0.0.1",
+    };
+    for (const char *text : rubbish) {
+        uint32_t value = 0;
+        TEST_ASSERT_FALSE_MESSAGE(config::ParseIpv4(text, &value), text);
+    }
+    uint32_t ignored = 0;
+    TEST_ASSERT_FALSE(config::ParseIpv4(nullptr, &ignored));
+}
+
+void test_config_refuses_a_leading_zero_rather_than_reading_it_as_octal(void) {
+    // `inet_aton("010.1.1.1")` is 8.1.1.1 — the C library's oldest trap, and
+    // one that produces a *working-looking* address on the wrong subnet. An
+    // operator who writes `010` means ten, so the honest answer is to refuse
+    // rather than to pick one of the two meanings.
+    uint32_t value = 0;
+    TEST_ASSERT_FALSE(config::ParseIpv4("010.1.1.1", &value));
+    TEST_ASSERT_FALSE(config::ParseIpv4("192.168.01.1", &value));
+    // A single zero octet is not a leading zero.
+    TEST_ASSERT_TRUE(config::ParseIpv4("10.0.0.1", &value));
+}
+
+void test_config_reads_a_static_address_for_one_network(void) {
+    FreshWithDefaults();
+    fake::PutFile("config.json", R"({"wifi":{"networks":[
+        {"ssid":"home","password":"x"},
+        {"ssid":"office","password":"y","ip":{"static":true,
+         "address":"10.0.0.42","netmask":"255.255.255.0","gateway":"10.0.0.1",
+         "dns1":"10.0.0.1","dns2":"1.1.1.1"}}]}})");
+
+    TEST_ASSERT_EQUAL_INT(ESP_OK, config::Init());
+    const config::Wifi &wifi = config::Get().wifi;
+    TEST_ASSERT_EQUAL_UINT8(2, wifi.network_count);
+
+    // **Per network, not per device** — the home entry stays on DHCP, which is
+    // the case that makes this worth having at all.
+    TEST_ASSERT_FALSE(wifi.networks[0].ip.enabled);
+    TEST_ASSERT_TRUE(wifi.networks[1].ip.enabled);
+    TEST_ASSERT_EQUAL_STRING("10.0.0.42", wifi.networks[1].ip.address);
+    TEST_ASSERT_EQUAL_STRING("255.255.255.0", wifi.networks[1].ip.netmask);
+    TEST_ASSERT_EQUAL_STRING("10.0.0.1", wifi.networks[1].ip.gateway);
+    TEST_ASSERT_EQUAL_STRING("10.0.0.1", wifi.networks[1].ip.dns1);
+    TEST_ASSERT_EQUAL_STRING("1.1.1.1", wifi.networks[1].ip.dns2);
+}
+
+void test_config_a_static_block_with_no_dns_is_still_static(void) {
+    // The house firmware requires both DNS servers before it will call a
+    // static config valid. A LAN with no resolver of its own is an ordinary
+    // thing and the NATS URL of §10.3 is an address rather than a name, so
+    // the entries are optional here.
+    FreshWithDefaults();
+    fake::PutFile("config.json", R"({"wifi":{"networks":[{"ssid":"lab","ip":{
+        "static":true,"address":"10.0.0.9","netmask":"255.255.255.0",
+        "gateway":"10.0.0.1"}}]}})");
+
+    TEST_ASSERT_EQUAL_INT(ESP_OK, config::Init());
+    TEST_ASSERT_TRUE(config::Get().wifi.networks[0].ip.enabled);
+    TEST_ASSERT_EQUAL_STRING("", config::Get().wifi.networks[0].ip.dns1);
+}
+
+void test_config_a_broken_static_address_falls_back_to_dhcp(void) {
+    // **The network is kept and the static config is dropped**, which is the
+    // only combination that leaves a device reachable: refusing the whole
+    // entry would lose a working SSID over a typo in an optional field, and
+    // honouring half of it would give an interface with an address and no
+    // route.
+    const char *const broken[] = {
+        R"({"static":true,"netmask":"255.255.255.0","gateway":"10.0.0.1"})",
+        R"({"static":true,"address":"10.0.0.300","netmask":"255.255.255.0","gateway":"10.0.0.1"})",
+        R"({"static":true,"address":"10.0.0.9","gateway":"10.0.0.1"})",
+        R"({"static":true,"address":"10.0.0.9","netmask":"255.255.255.0"})",
+        R"({"static":true,"address":"10.0.0.9","netmask":"nonsense","gateway":"10.0.0.1"})",
+    };
+    for (const char *ip : broken) {
+        FreshWithDefaults();
+        char json[512] = {};
+        snprintf(json, sizeof(json), R"({"wifi":{"networks":[{"ssid":"lab","ip":%s}]}})", ip);
+        fake::PutFile("config.json", json);
+
+        TEST_ASSERT_EQUAL_INT_MESSAGE(ESP_OK, config::Init(), ip);
+        TEST_ASSERT_EQUAL_UINT8_MESSAGE(1, config::Get().wifi.network_count, ip);
+        TEST_ASSERT_EQUAL_STRING_MESSAGE("lab", config::Get().wifi.networks[0].ssid, ip);
+        TEST_ASSERT_FALSE_MESSAGE(config::Get().wifi.networks[0].ip.enabled, ip);
+    }
+}
+
+void test_config_a_bad_dns_entry_does_not_disable_the_address(void) {
+    // DNS is the optional half, so a typo there costs name resolution and not
+    // the interface. The entry is dropped rather than passed on.
+    FreshWithDefaults();
+    fake::PutFile("config.json", R"({"wifi":{"networks":[{"ssid":"lab","ip":{
+        "static":true,"address":"10.0.0.9","netmask":"255.255.255.0",
+        "gateway":"10.0.0.1","dns1":"not-an-address"}}]}})");
+
+    TEST_ASSERT_EQUAL_INT(ESP_OK, config::Init());
+    TEST_ASSERT_TRUE(config::Get().wifi.networks[0].ip.enabled);
+    TEST_ASSERT_EQUAL_STRING("", config::Get().wifi.networks[0].ip.dns1);
+}
+
+void test_config_a_static_address_round_trips(void) {
+    FreshWithDefaults();
+    fake::PutFile("config.json", kGoodJson);
+    TEST_ASSERT_EQUAL_INT(ESP_OK, config::Init());
+
+    config::StaticIp &ip = config::Get().wifi.networks[0].ip;
+    ip.enabled = true;
+    snprintf(ip.address, sizeof(ip.address), "192.168.7.7");
+    snprintf(ip.netmask, sizeof(ip.netmask), "255.255.255.0");
+    snprintf(ip.gateway, sizeof(ip.gateway), "192.168.7.1");
+    TEST_ASSERT_EQUAL_INT(ESP_OK, config::Save());
+
+    config::Get().wifi.networks[0].ip = {};  // scribble over it
+    TEST_ASSERT_EQUAL_INT(ESP_OK, config::Reload());
+    TEST_ASSERT_TRUE(config::Get().wifi.networks[0].ip.enabled);
+    TEST_ASSERT_EQUAL_STRING("192.168.7.7", config::Get().wifi.networks[0].ip.address);
+    TEST_ASSERT_EQUAL_STRING("192.168.7.1", config::Get().wifi.networks[0].ip.gateway);
+}
+
+void test_config_a_network_on_dhcp_writes_no_ip_block(void) {
+    // Every entry carrying an empty `ip` object would be noise in a file
+    // people edit by hand, and §10.15 already warns that a write is what the
+    // struct says rather than what the file said. So the block appears when
+    // there is something in it.
+    FreshWithDefaults();
+    fake::PutFile("config.json", kGoodJson);
+    TEST_ASSERT_EQUAL_INT(ESP_OK, config::Init());
+    TEST_ASSERT_EQUAL_INT(ESP_OK, config::Save());
+
+    char back[config::kMaxFileSize] = {};
+    TEST_ASSERT_TRUE(fake::GetFile("config.json", back, sizeof(back)));
+    TEST_ASSERT_NULL(std::strstr(back, "\"ip\""));
+}
+
 // --- The restore path (§10.15) -------------------------------------------
 
 void test_config_a_missing_file_is_restored(void) {
@@ -571,6 +726,16 @@ void RegisterConfigTests(void) {
     RUN_TEST(test_config_an_unknown_wifi_mode_keeps_the_default);
     RUN_TEST(test_config_the_access_point_settings_round_trip);
     RUN_TEST(test_config_a_file_with_no_wifi_section_still_has_an_access_point);
+
+    RUN_TEST(test_config_parses_a_dotted_quad_first_octet_in_the_low_byte);
+    RUN_TEST(test_config_refuses_an_address_that_is_not_one);
+    RUN_TEST(test_config_refuses_a_leading_zero_rather_than_reading_it_as_octal);
+    RUN_TEST(test_config_reads_a_static_address_for_one_network);
+    RUN_TEST(test_config_a_static_block_with_no_dns_is_still_static);
+    RUN_TEST(test_config_a_broken_static_address_falls_back_to_dhcp);
+    RUN_TEST(test_config_a_bad_dns_entry_does_not_disable_the_address);
+    RUN_TEST(test_config_a_static_address_round_trips);
+    RUN_TEST(test_config_a_network_on_dhcp_writes_no_ip_block);
 
     RUN_TEST(test_config_a_string_too_long_for_its_field_is_refused_not_truncated);
     RUN_TEST(test_config_a_network_whose_ssid_does_not_fit_is_dropped);

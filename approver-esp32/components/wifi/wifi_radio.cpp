@@ -268,7 +268,80 @@ void Radio::StopStation() {
     want_connect_ = false;
 }
 
-esp_err_t Radio::StartClient(const char *ssid, const char *password) {
+// One DNS server, skipped when the entry is zero — which is how "not set" is
+// spelled and is the one value that could not be a real server.
+esp_err_t Radio::SetDns(uint32_t address, int type) {
+    if (address == 0) {
+        return ESP_OK;
+    }
+    esp_netif_dns_info_t dns = {};
+    dns.ip.type = ESP_IPADDR_TYPE_V4;
+    dns.ip.u_addr.ip4.addr = address;
+    return esp_netif_set_dns_info(static_cast<esp_netif_t *>(sta_netif_),
+                                  static_cast<esp_netif_dns_type_t>(type), &dns);
+}
+
+void Radio::ApplyAddressing() {
+    auto *netif = static_cast<esp_netif_t *>(sta_netif_);
+    if (netif == nullptr) {
+        return;
+    }
+
+    if (!static_ip_.enabled) {
+        // **Put the DHCP client back.** Nothing here starts it — `esp_netif`
+        // does, when the interface comes up — but a *previous* network with a
+        // fixed address stopped it, and the netif outlives one association.
+        // Without this, joining a static network and then a DHCP one gives an
+        // interface that never asks for an address and a device that hangs at
+        // "connecting" with no reason to show for it.
+        const esp_err_t err = esp_netif_dhcpc_start(netif);
+        if (err != ESP_OK && err != ESP_ERR_ESP_NETIF_DHCP_ALREADY_STARTED) {
+            ESP_LOGW(TAG, "dhcp client would not start: %s", esp_err_to_name(err));
+        }
+        return;
+    }
+
+    // The order is the one the house firmware of §10.14.4 uses and the one
+    // ESP-IDF documents: stop asking, then say what the answer is. Setting the
+    // address with the client still running is a race against a lease.
+    esp_err_t err = esp_netif_dhcpc_stop(netif);
+    if (err != ESP_OK && err != ESP_ERR_ESP_NETIF_DHCP_ALREADY_STOPPED) {
+        ESP_LOGE(TAG, "dhcp client would not stop: %s — staying on DHCP",
+                 esp_err_to_name(err));
+        return;
+    }
+
+    esp_netif_ip_info_t info = {};
+    info.ip.addr = static_ip_.address;
+    info.netmask.addr = static_ip_.netmask;
+    info.gw.addr = static_ip_.gateway;
+    err = esp_netif_set_ip_info(netif, &info);
+    if (err != ESP_OK) {
+        // Nothing to roll back to that is better than this: the interface has
+        // no address either way, and the association will time out and be
+        // reported as a failure like any other (§10.9).
+        ESP_LOGE(TAG, "static address refused: %s", esp_err_to_name(err));
+        return;
+    }
+
+    if (SetDns(static_ip_.dns1, ESP_NETIF_DNS_MAIN) != ESP_OK ||
+        SetDns(static_ip_.dns2, ESP_NETIF_DNS_BACKUP) != ESP_OK) {
+        // A name server that would not take is worth one line and not a
+        // failed join: this device talks to an address (§10.3), so DNS is a
+        // convenience rather than the point.
+        ESP_LOGW(TAG, "static dns servers not fully set");
+    }
+
+    ESP_LOGI(TAG, "static address " IPSTR "/" IPSTR " gw " IPSTR, IP2STR(&info.ip),
+             IP2STR(&info.netmask), IP2STR(&info.gw));
+
+    // **`esp_netif_set_ip_info` on an interface that is already up raises
+    // `IP_EVENT_STA_GOT_IP` itself**, so the link still becomes `kConnected`
+    // through the one path that does it for DHCP. Nothing special is needed
+    // here, and that is worth writing down because it looks like an omission.
+}
+
+esp_err_t Radio::StartClient(const char *ssid, const char *password, const StaticIp *ip) {
     if (!ready_) {
         return ESP_ERR_INVALID_STATE;
     }
@@ -336,10 +409,15 @@ esp_err_t Radio::StartClient(const char *ssid, const char *password) {
         return err;
     }
 
+    // Copied now, applied when the association lands. A pointer kept until
+    // then would be a pointer into a network list the console can edit.
+    static_ip_ = ip != nullptr ? *ip : StaticIp{};
+
     {
         Status update = {};
         update.mode = Mode::kClient;
         update.link = Link::kConnecting;
+        update.ip_is_static = static_ip_.enabled;
         CopyField(update.ssid, sizeof(update.ssid), ssid);
         xSemaphoreTake(lock_, portMAX_DELAY);
         update.changes = status_.changes + 1;
@@ -648,6 +726,14 @@ void Radio::OnEvent(const char *base, int32_t id, void *data) {
                 }
                 break;
 
+            case WIFI_EVENT_STA_CONNECTED:
+                // Associated, but with no address yet. This is the moment the
+                // fixed one goes on — the same point the house firmware of
+                // §10.14.4 picks, and for the same reason: the interface is up
+                // and the DHCP client has not had time to get anywhere.
+                ApplyAddressing();
+                break;
+
             case WIFI_EVENT_STA_DISCONNECTED: {
                 if (suppress_disconnect_ > 0) {
                     // Ours. We tore the association down to start another one,
@@ -709,9 +795,11 @@ void Radio::OnEvent(const char *base, int32_t id, void *data) {
         status_.failure = Failure::kNone;
         status_.reason = 0;
         status_.ip = address.addr;
+        status_.ip_is_static = static_ip_.enabled;
         ++status_.changes;
         xSemaphoreGive(lock_);
-        ESP_LOGI(TAG, "connected to '%s', ip " IPSTR, status_.ssid, IP2STR(&address));
+        ESP_LOGI(TAG, "connected to '%s', ip " IPSTR " (%s)", status_.ssid, IP2STR(&address),
+                 static_ip_.enabled ? "static" : "dhcp");
     }
 }
 

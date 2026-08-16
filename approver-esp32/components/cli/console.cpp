@@ -821,10 +821,11 @@ int CmdConfig(int argc, char **argv) {
     for (uint8_t i = 0; i < c.wifi.network_count; ++i) {
         // **The password is never printed** (§10.8.6, §10.15): it is a secret
         // from the moment it is typed, and a console dump is exactly the place
-        // it must not turn up.
-        printf("           %u. %s (password %s)\n", static_cast<unsigned>(i + 1),
+        // it must not turn up. An address is not a secret and is printed.
+        printf("           %u. %s (password %s, %s)\n", static_cast<unsigned>(i + 1),
                c.wifi.networks[i].ssid,
-               c.wifi.networks[i].password[0] == '\0' ? "not set" : "set");
+               c.wifi.networks[i].password[0] == '\0' ? "not set" : "set",
+               c.wifi.networks[i].ip.enabled ? c.wifi.networks[i].ip.address : "dhcp");
     }
     printf("nats       %s\n", c.nats.url);
     const int offset = tz::OffsetSeconds();
@@ -992,10 +993,15 @@ void PrintWifiStatus() {
             printf(", rssi %d dBm", static_cast<int>(radio.rssi));
         }
         if (radio.ip != 0) {
-            printf(", ip %u.%u.%u.%u", static_cast<unsigned>(radio.ip & 0xFF),
+            // Where the address came from, next to the address: "it has one"
+            // and "it has the one that was asked for" are different facts, and
+            // a static config that silently did not take looks exactly like a
+            // working one until somebody tries to reach the device.
+            printf(", ip %u.%u.%u.%u (%s)", static_cast<unsigned>(radio.ip & 0xFF),
                    static_cast<unsigned>((radio.ip >> 8) & 0xFF),
                    static_cast<unsigned>((radio.ip >> 16) & 0xFF),
-                   static_cast<unsigned>((radio.ip >> 24) & 0xFF));
+                   static_cast<unsigned>((radio.ip >> 24) & 0xFF),
+                   radio.ip_is_static ? "static" : "dhcp");
         }
         printf("\n");
         if (radio.link == wifi::Link::kFailed) {
@@ -1008,11 +1014,17 @@ void PrintWifiStatus() {
         printf("networks   none remembered — 'wifi join <ssid> [password]'\n");
     }
     for (uint8_t i = 0; i < settings.network_count; ++i) {
+        const config::StaticIp &ip = settings.networks[i].ip;
         printf("           %u. %-20s %s%s%s\n", static_cast<unsigned>(i + 1),
                settings.networks[i].ssid,
                settings.networks[i].password[0] == '\0' ? "open" : "password set",
                about_a_network && i == snapshot.network ? "  <- current" : "",
                snapshot.auth_failed[i] ? "  (password refused)" : "");
+        if (ip.enabled) {
+            printf("              %s/%s gw %s%s%s%s%s\n", ip.address, ip.netmask, ip.gateway,
+                   ip.dns1[0] != '\0' ? " dns " : "", ip.dns1,
+                   ip.dns2[0] != '\0' ? "," : "", ip.dns2);
+        }
     }
 
     printf("fallback   ap '%s' %s on ch %u after %u round(s)", settings.ap_ssid,
@@ -1075,6 +1087,83 @@ int CmdWifiJoin(int argc, char **argv) {
     printf("network %u is now '%s' (%s), trying it — in memory only, 'config save' writes it to %s\n",
            static_cast<unsigned>(slot + 1), ssid, password[0] == '\0' ? "open" : "password set",
            config::kPath);
+    return 0;
+}
+
+// `wifi static <n> <address> <netmask> <gateway> [dns1] [dns2]`, or
+// `wifi static <n> off`. By network number, because that is how the status
+// listing above numbers them and an SSID with a space in it is not something a
+// console argument survives.
+int CmdWifiStatic(int argc, char **argv) {
+    config::Wifi &settings = config::Get().wifi;
+    if (argc < 3) {
+        printf("usage: wifi static <n> <address> <netmask> <gateway> [dns1] [dns2]\n");
+        printf("       wifi static <n> off        go back to DHCP\n");
+        return 1;
+    }
+
+    char *end = nullptr;
+    const long index = strtol(argv[2], &end, 10);
+    if (end == argv[2] || *end != '\0' || index < 1 || index > settings.network_count) {
+        printf("network %s does not exist — 'wifi' lists them 1..%u\n", argv[2],
+               static_cast<unsigned>(settings.network_count));
+        return 1;
+    }
+    config::StaticIp &ip = settings.networks[index - 1].ip;
+
+    if (argc == 4 && strcmp(argv[3], "off") == 0) {
+        // The strings are kept, so turning it back on does not mean typing the
+        // address again — the same thing `config.cpp` does when it writes the
+        // block for a disabled entry.
+        ip.enabled = false;
+        printf("network %ld is back on DHCP — in memory only, 'config save' writes it to %s\n",
+               index, config::kPath);
+        wifimgr::Apply();
+        return 0;
+    }
+
+    if (argc < 6 || argc > 8) {
+        printf("usage: wifi static <n> <address> <netmask> <gateway> [dns1] [dns2]\n");
+        printf("       wifi static <n> off        go back to DHCP\n");
+        return 1;
+    }
+
+    // **Every field is parsed before any of it is stored.** §10.7's rule about
+    // deciding first and touching nothing until then: half an address written
+    // into the config is a network entry that will not connect and will not
+    // say why.
+    const char *const fields[] = {argv[3], argv[4], argv[5], argc > 6 ? argv[6] : "",
+                                  argc > 7 ? argv[7] : ""};
+    static const char *const names[] = {"address", "netmask", "gateway", "dns1", "dns2"};
+    for (size_t i = 0; i < 5; ++i) {
+        if (fields[i][0] == '\0') {
+            continue;  // the two DNS entries are optional
+        }
+        uint32_t parsed = 0;
+        if (!config::ParseIpv4(fields[i], &parsed)) {
+            printf("%s '%s' is not an IPv4 address (four octets 0..255, no leading zeros)\n",
+                   names[i], fields[i]);
+            return 1;
+        }
+        if (strlen(fields[i]) >= config::kIpTextSize) {
+            printf("%s is longer than the field holds\n", names[i]);
+            return 1;
+        }
+    }
+
+    snprintf(ip.address, sizeof(ip.address), "%s", fields[0]);
+    snprintf(ip.netmask, sizeof(ip.netmask), "%s", fields[1]);
+    snprintf(ip.gateway, sizeof(ip.gateway), "%s", fields[2]);
+    snprintf(ip.dns1, sizeof(ip.dns1), "%s", fields[3]);
+    snprintf(ip.dns2, sizeof(ip.dns2), "%s", fields[4]);
+    ip.enabled = true;
+
+    printf("network %ld (%s) is %s/%s gw %s — in memory only, 'config save' writes it to %s\n",
+           index, settings.networks[index - 1].ssid, ip.address, ip.netmask, ip.gateway,
+           config::kPath);
+    // The address only takes effect on the next association, so restart the
+    // cycle rather than leaving the operator to wonder why nothing moved.
+    wifimgr::Apply();
     return 0;
 }
 
@@ -1157,6 +1246,9 @@ int CmdWifi(int argc, char **argv) {
     if (strcmp(argv[1], "forget") == 0) {
         return CmdWifiForget(argc, argv);
     }
+    if (strcmp(argv[1], "static") == 0) {
+        return CmdWifiStatic(argc, argv);
+    }
     if (strcmp(argv[1], "retry") == 0) {
         // Start the cycle again from the top, which is what an operator means
         // by "try now": it clears the sticky refusals and the round counter.
@@ -1190,6 +1282,8 @@ int CmdWifi(int argc, char **argv) {
     printf("       wifi mode off|client|ap       what it should want\n");
     printf("       wifi join <ssid> [password]   remember a network and try it\n");
     printf("       wifi forget <ssid>            drop one\n");
+    printf("       wifi static <n> <address> <netmask> <gateway> [dns1] [dns2]\n");
+    printf("       wifi static <n> off           that network goes back to DHCP\n");
     printf("       wifi scan                     what is on the air (2.4 GHz)\n");
     printf("       wifi retry                    start the cycle again from the top\n");
     printf("none of these write %s — 'config save' does\n", config::kPath);
@@ -1423,7 +1517,7 @@ const esp_console_cmd_t kCommands[] = {
     {
         .command = "wifi",
         .help = "what the radio wants and what it is doing; join, forget, scan (§10.9)",
-        .hint = "[mode off|client|ap | join <ssid> [password] | forget <ssid> | scan | retry]",
+        .hint = "[mode off|client|ap | join | forget | static <n> … | scan | retry]",
         .func = &CmdWifi,
         .argtable = nullptr,
         .func_w_context = nullptr,

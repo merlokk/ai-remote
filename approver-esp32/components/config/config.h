@@ -48,10 +48,53 @@ inline constexpr size_t kUrlSize = 64;
 inline constexpr size_t kTimezoneSize = 48;  // POSIX TZ, e.g. CET-1CEST,M3.5.0,M10.5.0/3
 inline constexpr size_t kHostSize = 64;
 
+// "255.255.255.255" plus the terminator. Addresses are kept as **text**, the
+// way they were typed: that is what `cat config.json` shows and what the
+// console prints back, and an operator debugging a network wants to see the
+// string they wrote rather than a number somebody re-rendered for them.
+inline constexpr size_t kIpTextSize = 16;
+
+// A fixed address for one network (§10.9). The house firmware of §10.14.4 has
+// the same struct hanging off the same place — per *network*, not per device,
+// and that is the half worth copying: a desk object that moves between a home
+// with DHCP and an office that hands out nothing needs one of each, and a
+// single device-wide setting would make the two mutually exclusive.
+//
+// Where it differs: theirs validates by checking the strings are non-empty and
+// requires both DNS servers. Empty is not the way an address is usually wrong
+// — `192.168.1.` and `192.168.1.256` are — so `ParseIpv4` below is what
+// decides, and the DNS entries are optional.
+struct StaticIp {
+    bool enabled;
+    char address[kIpTextSize];
+    char netmask[kIpTextSize];
+    char gateway[kIpTextSize];
+    char dns1[kIpTextSize];  // empty is "don't set one"
+    char dns2[kIpTextSize];
+};
+
 struct Network {
     char ssid[kSsidSize];
     char password[kPasswordSize];
+    // DHCP unless this says otherwise, which is what `enabled` false means.
+    StaticIp ip;
 };
+
+// Dotted quad to the 32-bit form `esp_netif_ip_info_t` wants — first octet in
+// the **low** byte, which is what lwIP calls network order and what the
+// console's own `%u.%u.%u.%u` already assumes.
+//
+// **Strict on purpose**, because this is the one place a typo can be caught
+// while somebody is still looking at the screen: exactly four octets, decimal,
+// 0..255, nothing before or after, and **no leading zeros** — `010` is ten
+// here and eight to anything that reaches for `inet_aton`, and a device that
+// silently lands on a different address than the one written down is a
+// half-hour nobody gets back.
+//
+// Pure, and in the config layer rather than the driver, for the reason
+// `tz::Lookup` is: turning what the file says into what the hardware takes is
+// the file's job, and it makes both testable without a board.
+bool ParseIpv4(const char *text, uint32_t *out);
 
 // What the operator asked the radio to be (§10.9). Not what it is doing —
 // that is `wifimgr`'s, and the difference between the two is the whole shape

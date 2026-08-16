@@ -60,7 +60,7 @@ the repository owner's sign-off say so.
 | The Wi-Fi screen (§10.8.6) | specified, not started — the manager underneath it is what exists |
 | Where the configuration lives (§10.15) | **decided**: all of it in JSON on SPIFFS, nothing of ours in NVS — with the cost stated (SPIFFS cannot be encrypted at rest). `spiffs_image/config.json` + `config.init.json` are flashed; nothing reads them yet |
 | The `KEY`-at-boot config restore (§10.15) | specified, not started |
-| Host-tier tests (§10.11) — `host_test/` | **running**: 239 Unity tests over `ui`, `i2cbus`, `pmic`, `rtc`, `imu`, `audio`, `config`, `buttons`, `timezone`, `speaker` and `wifimgr`, one command, no board. The drivers are compiled **unmodified** against a fake ESP-IDF (`host_test/fakes/`), which is §10.14.3's owed fake backend arriving in a different shape than that section specified, and which now covers I²S and a filesystem as well as the I²C wire. Built by MSVC rather than by ESP-IDF's `linux` target, which does not work on a Windows host — §10.11 records why |
+| Host-tier tests (§10.11) — `host_test/` | **running**: 248 Unity tests over `ui`, `i2cbus`, `pmic`, `rtc`, `imu`, `audio`, `config`, `buttons`, `timezone`, `speaker` and `wifimgr`, one command, no board. The drivers are compiled **unmodified** against a fake ESP-IDF (`host_test/fakes/`), which is §10.14.3's owed fake backend arriving in a different shape than that section specified, and which now covers I²S and a filesystem as well as the I²C wire. Built by MSVC rather than by ESP-IDF's `linux` target, which does not work on a Windows host — §10.11 records why |
 | Protocol parity vectors (§10.11 tier 2) | not started |
 
 Read §10.3 before anything else: it is the one part of this that changes
@@ -560,6 +560,8 @@ wifi                          # what the radio wants, and what it is doing (§10
 wifi mode off|client|ap       # what it should want — in memory, `config save` keeps it
 wifi join <ssid> [password]   # remember a network, switch to client mode, try it now
 wifi forget <ssid>            # drop one
+wifi static <n> <address> <netmask> <gateway> [dns1] [dns2]   # a fixed address
+wifi static <n> off           # …and back to DHCP for that network
 wifi scan                     # what is on the air — works with the radio off, which
                               # it then switches back off. 2.4 GHz: the C6 has no other
 wifi retry                    # start the cycle again from the top
@@ -1111,9 +1113,15 @@ exist: brought the radio up on demand, tried the network, been told `reason
 air with a DHCP server on 192.168.4.1 and a 120-second window counting down,
 scanned eight neighbours while doing it, switched to a permanent AP and back to
 off — and, from a cold `state off / radio not started`, answered `wifi scan`
-with eight networks and went back to off without anything else being typed.
-**What it has not done is join anything** — the whole success path, and the
-auth-failure classification with it, waits on a real SSID and password.
+with eight networks and went back to off without anything else being typed. A
+fixed address is set, refused when it is not one (`010.0.0.42`, `10.0.0.300`),
+saved, reloaded and visible in `cat config.json`.
+
+**What it has not done is join anything** — the whole success path waits on a
+real SSID and password, and three things wait with it: the auth-failure
+classification, `esp_netif_set_ip_info` actually taking, and the DHCP client
+being put back for a network that follows a static one. Those are device-tier
+(§10.11) and cannot be reached from a bench with no access point on it.
 
 Two things only the board could have said, both now fixed:
 
@@ -1202,12 +1210,74 @@ on the air during a scan is probe requests and nothing else.
 | `wifi.rounds` | full passes before the fallback AP. `0` behaves as 1 rather than as "never try" — the round is counted before it is compared, so every network gets one attempt whatever this says |
 | `wifi.apWindowSeconds` | how long that AP stays up with nobody on it |
 | `wifi.ap.{ssid,password,channel}` | the access point this device raises. **An empty password is an open network, which is what ships** — the AP serves nothing yet, it is up for two minutes at a time, and a WPA key committed to this repository would be a password everyone has. A password shorter than WPA2's eight characters is refused rather than silently turned into an open AP. When §10.8.6 gives that AP something to serve, this default is the line to revisit |
-| `wifi.networks[]` | up to four ssid/password pairs, as before |
+| `wifi.networks[]` | up to four ssid/password pairs — each with an optional `ip` block, below |
 
 The timings that are **not** in the file — the connect timeout, the gap between
 attempts, the backoff and its cap — are the shape of this section rather than a
 preference. A device whose connect timeout is operator-settable is a device with
 one more way to be configured into never working.
+
+#### A fixed address, per network
+
+DHCP unless a network says otherwise, and the "otherwise" hangs off the network
+rather than off the device:
+
+```json
+{ "ssid": "office", "password": "…",
+  "ip": { "static": true, "address": "10.0.0.42", "netmask": "255.255.255.0",
+          "gateway": "10.0.0.1", "dns1": "10.0.0.1", "dns2": "" } }
+```
+
+**Per network is the half of the house firmware's shape worth copying**
+(§10.14.4 — its `WifiCredentials::StaticIP` sits in exactly the same place). A
+desk object that moves between a home that hands out addresses and an office
+that hands out nothing needs one of each, and a single device-wide setting
+would make the two mutually exclusive. `wifi static <n> <address> <netmask>
+<gateway> [dns1] [dns2]` sets one from the console and `wifi static <n> off`
+puts that network back on DHCP, both memory-only until `config save`, like
+every other setter (§10.15).
+
+Where it does **not** follow the house:
+
+- **The address is parsed, not just checked for being non-empty.** Theirs
+  validates by testing the five strings against `""`; empty is not how an
+  address is usually wrong — `192.168.1.` and `10.0.0.300` are. `ParseIpv4` is
+  strict about all of it and **refuses a leading zero** rather than picking one
+  of its two meanings: `010` is ten to the person who typed it and eight to
+  `inet_aton`, and a device quietly on 8.1.1.1 is an evening nobody gets back.
+- **The DNS entries are optional.** Theirs requires both before it will call a
+  static config valid. A LAN with no resolver is ordinary, and §10.3's bus is
+  reached by address rather than by name.
+- **Three fields or none, and the SSID survives either way.** A static block
+  that is enabled but missing an address, a netmask or a gateway falls back to
+  DHCP with one log line naming the field. Refusing the whole entry would lose
+  a working network over a typo in an optional field; honouring half of it
+  would give an interface with an address and no route, which looks connected
+  and reaches nothing.
+- **The driver is handed a copy, not a pointer.** Theirs keeps an `IPConfig*`
+  into the config object and dereferences it from an event handler; here the
+  console can edit the network list between an association starting and the
+  event arriving, so `StartClient` takes the binary form by value.
+- **The DHCP client is put back.** The netif outlives one association, so a
+  network with a fixed address leaves the client stopped for whatever is joined
+  next. Theirs destroys and recreates the netif per connect and never meets
+  this; here `ApplyAddressing` starts the client again when the network being
+  joined has no address of its own. Without it, static-then-DHCP is an
+  interface that never asks for an address and a device stuck at "connecting"
+  with nothing to show for it.
+
+Two things that are the same because they are simply right: the address goes on
+at **`WIFI_EVENT_STA_CONNECTED`** — associated, and before the DHCP client has
+got anywhere — and the order is stop asking, then say what the answer is.
+`esp_netif_set_ip_info` on an interface that is already up raises
+`IP_EVENT_STA_GOT_IP` itself, so the link reaches `kConnected` through the one
+path that also serves DHCP; that looks like an omission in the code and is not.
+
+Text in the file, binary at the driver, and `config::ParseIpv4` between them —
+in the config layer for the reason `tz::Lookup` is there: turning what the file
+says into what the hardware takes is the file's job, and it keeps both halves
+testable without a board. What `cat config.json` and the console show is the
+string that was typed, never a number somebody re-rendered.
 
 ### 10.10 Rules this firmware inherits (do not soften them)
 
@@ -1268,7 +1338,7 @@ Three tiers, and the first one is where nearly everything belongs:
 
    **What is under it today is the navigator and four of the five chips on the
    I²C bus, the settings file, the buttons, the zone table, the speaker and the
-   Wi-Fi policy** — 239 tests:
+   Wi-Fi policy** — 248 tests:
 
    | Subject | What is pinned |
    |---|---|
@@ -2137,6 +2207,15 @@ Four came with that block: the settings read back as written; an unknown
 surviving a `Save`/`Reload` round trip; and **a `config.json` of `{}` still
 leaving an SSID to raise** — the fallback AP is what rescues a device that
 cannot reach a network, so it must not itself depend on the file being complete.
+
+Nine more came with the fixed address of §10.9, and the parser is where most of
+the value is: the dotted quad with the **first octet in the low byte** (get
+that backwards and you have a plausible address on a network nobody is on), a
+leading zero refused rather than read as octal, trailing junk and an octet over
+255 refused, DNS optional, a broken static block falling back to DHCP **with
+the SSID kept**, a bad DNS entry costing only that entry, the whole thing
+round-tripping through `Save`/`Reload`, and a network on DHCP writing no `ip`
+block at all. All seven mutations of that logic were caught.
 
 Three more that came out of asking what an *edited* file can contain, since
 this one is meant to be edited by hand:

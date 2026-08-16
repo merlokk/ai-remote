@@ -62,6 +62,25 @@ void CopyNumber(const cJSON *object, const char *name, long min, long max, long 
     *out = value;
 }
 
+// Reads one field into a fixed buffer and keeps it only if it is an address.
+// A typo is dropped rather than passed to lwIP, and the drop is logged with
+// the field's name — an operator who wrote `10.0.0.300` needs to be told
+// which of the five strings was the problem.
+bool CopyAddress(const cJSON *object, const char *name, char *out, size_t capacity) {
+    out[0] = '\0';
+    CopyString(object, name, out, capacity);
+    if (out[0] == '\0') {
+        return false;
+    }
+    uint32_t ignored = 0;
+    if (!ParseIpv4(out, &ignored)) {
+        ESP_LOGW(TAG, "ip.%s is '%s', which is not an address; dropped", name, out);
+        out[0] = '\0';
+        return false;
+    }
+    return true;
+}
+
 esp_err_t ReadFileInto(const char *path, size_t *length) {
     const esp_err_t err = storage::ReadFile(path, file_buffer, sizeof(file_buffer), length);
     if (err == ESP_ERR_INVALID_SIZE) {
@@ -145,10 +164,43 @@ esp_err_t Parse(const char *json, Data *out) {
                     continue;
                 }
                 Network &slot = out->wifi.networks[out->wifi.network_count];
-                slot.ssid[0] = '\0';
-                slot.password[0] = '\0';
+                slot = Network{};
                 CopyString(entry, "ssid", slot.ssid, sizeof(slot.ssid));
                 CopyString(entry, "password", slot.password, sizeof(slot.password));
+
+                // The fixed address for *this* network (§10.9), and DHCP when
+                // there is none. Per network rather than per device: a desk
+                // object that moves between a home with DHCP and an office
+                // that hands out nothing needs one of each.
+                const cJSON *ip = cJSON_GetObjectItemCaseSensitive(entry, "ip");
+                if (cJSON_IsObject(ip)) {
+                    CopyBool(ip, "static", &slot.ip.enabled);
+                    const bool address = CopyAddress(ip, "address", slot.ip.address,
+                                                     sizeof(slot.ip.address));
+                    const bool netmask = CopyAddress(ip, "netmask", slot.ip.netmask,
+                                                     sizeof(slot.ip.netmask));
+                    const bool gateway = CopyAddress(ip, "gateway", slot.ip.gateway,
+                                                     sizeof(slot.ip.gateway));
+                    // Optional, and a typo in one costs name resolution rather
+                    // than the interface.
+                    CopyAddress(ip, "dns1", slot.ip.dns1, sizeof(slot.ip.dns1));
+                    CopyAddress(ip, "dns2", slot.ip.dns2, sizeof(slot.ip.dns2));
+
+                    // **Three fields or none.** An interface with an address
+                    // and no route is a device that looks connected and can
+                    // reach nothing, which is worse than one that fell back to
+                    // DHCP and said so. The SSID survives either way — losing
+                    // a working network over a typo in an optional field would
+                    // be the wrong trade.
+                    if (slot.ip.enabled && !(address && netmask && gateway)) {
+                        ESP_LOGW(TAG,
+                                 "'%s' asks for a static address but %s is missing or bad; "
+                                 "falling back to DHCP",
+                                 slot.ssid, !address ? "address" : (!netmask ? "netmask" : "gateway"));
+                        slot.ip.enabled = false;
+                    }
+                }
+
                 if (slot.ssid[0] != '\0') {
                     ++out->wifi.network_count;
                 }
@@ -236,8 +288,27 @@ esp_err_t Serialise(const Data &in, size_t *length) {
             if (entry == nullptr) {
                 break;
             }
-            cJSON_AddStringToObject(entry, "ssid", in.wifi.networks[i].ssid);
-            cJSON_AddStringToObject(entry, "password", in.wifi.networks[i].password);
+            const Network &network = in.wifi.networks[i];
+            cJSON_AddStringToObject(entry, "ssid", network.ssid);
+            cJSON_AddStringToObject(entry, "password", network.password);
+
+            // Written only when there is something to write. An empty `ip`
+            // object on every entry would be noise in a file people edit by
+            // hand — and anything typed is preserved even while `static` is
+            // off, so turning it back on does not mean typing it again.
+            const StaticIp &ip = network.ip;
+            if (ip.enabled || ip.address[0] != '\0' || ip.netmask[0] != '\0' ||
+                ip.gateway[0] != '\0' || ip.dns1[0] != '\0' || ip.dns2[0] != '\0') {
+                cJSON *ip_object = cJSON_AddObjectToObject(entry, "ip");
+                if (ip_object != nullptr) {
+                    cJSON_AddBoolToObject(ip_object, "static", ip.enabled);
+                    cJSON_AddStringToObject(ip_object, "address", ip.address);
+                    cJSON_AddStringToObject(ip_object, "netmask", ip.netmask);
+                    cJSON_AddStringToObject(ip_object, "gateway", ip.gateway);
+                    cJSON_AddStringToObject(ip_object, "dns1", ip.dns1);
+                    cJSON_AddStringToObject(ip_object, "dns2", ip.dns2);
+                }
+            }
             cJSON_AddItemToArray(networks, entry);
         }
     }
@@ -357,6 +428,53 @@ void RecoverInterruptedWrite() {
 }
 
 }  // namespace
+
+bool ParseIpv4(const char *text, uint32_t *out) {
+    if (text == nullptr || out == nullptr) {
+        return false;
+    }
+
+    uint32_t value = 0;
+    const char *p = text;
+    for (int octet = 0; octet < 4; ++octet) {
+        if (octet > 0) {
+            if (*p != '.') {
+                return false;
+            }
+            ++p;
+        }
+        if (*p < '0' || *p > '9') {
+            // Catches the empty string, `192.168..1`, a leading space, and a
+            // `0x7f` that `inet_aton` would happily read as hexadecimal.
+            return false;
+        }
+        // **A leading zero is refused, not interpreted.** `010` is ten to the
+        // person who typed it and eight to `inet_aton`, and a device quietly
+        // on 8.1.1.1 instead of 10.1.1.1 is a long evening.
+        const bool leading_zero = *p == '0' && p[1] >= '0' && p[1] <= '9';
+        uint32_t part = 0;
+        int digits = 0;
+        while (*p >= '0' && *p <= '9') {
+            part = part * 10 + static_cast<uint32_t>(*p - '0');
+            ++p;
+            if (++digits > 3 || part > 255) {
+                return false;
+            }
+        }
+        if (leading_zero) {
+            return false;
+        }
+        // First octet in the low byte — what lwIP calls network order, and
+        // what the console's own `%u.%u.%u.%u` already assumes.
+        value |= part << (8 * octet);
+    }
+    if (*p != '\0') {
+        return false;  // trailing anything: "1.2.3.4.5", "1.2.3.4 ", a newline
+    }
+
+    *out = value;
+    return true;
+}
 
 void FillDefaults(Data *out) {
     if (out == nullptr) {

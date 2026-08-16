@@ -73,6 +73,35 @@ Failure Translate(wifi::Failure failure) {
     return Failure::kOther;
 }
 
+// `config.json` keeps addresses as text (so a `cat` shows what was typed) and
+// the driver takes them binary. This is the one place the two meet, and it is
+// in the manager for the same reason `Translate` above is: the driver has
+// never heard of a config file and the policy has never heard of an address.
+//
+// Anything that does not parse has already been dropped at load (§10.15's
+// `CopyAddress`), so a field that is empty here is one the file did not have
+// or the parser refused — either way the answer is the same: not set.
+wifi::StaticIp AddressFor(const config::Network &network) {
+    wifi::StaticIp ip;
+    if (!network.ip.enabled) {
+        return ip;
+    }
+    // Belt and braces: `config` will not enable a static block whose three
+    // required fields are not all addresses, so a failure here means the two
+    // disagree — and going out with half an address is the one outcome worth
+    // ruling out twice.
+    if (!config::ParseIpv4(network.ip.address, &ip.address) ||
+        !config::ParseIpv4(network.ip.netmask, &ip.netmask) ||
+        !config::ParseIpv4(network.ip.gateway, &ip.gateway)) {
+        ESP_LOGE(TAG, "'%s' has a static address that will not parse; using DHCP", network.ssid);
+        return wifi::StaticIp{};
+    }
+    config::ParseIpv4(network.ip.dns1, &ip.dns1);  // optional; 0 stays 0
+    config::ParseIpv4(network.ip.dns2, &ip.dns2);
+    ip.enabled = true;
+    return ip;
+}
+
 Settings SettingsFromConfig() {
     const config::Wifi &wifi_config = config::Get().wifi;
     Settings settings;
@@ -154,7 +183,8 @@ bool ApplyAction(Action action, uint32_t now_ms) {
                 return true;
             }
             const config::Network &network = wifi_config.networks[index];
-            const esp_err_t err = radio.StartClient(network.ssid, network.password);
+            const wifi::StaticIp ip = AddressFor(network);
+            const esp_err_t err = radio.StartClient(network.ssid, network.password, &ip);
             if (err == ESP_ERR_INVALID_STATE) {
                 // Busy — a scan has the radio. **Nothing is logged on this
                 // path**, and that is a fix rather than an omission: the retry
@@ -165,8 +195,9 @@ bool ApplyAction(Action action, uint32_t now_ms) {
             // **The SSID is logged and the password never is** (§10.15): a
             // secret from the moment it is typed, and a boot log is exactly
             // the place it must not turn up.
-            ESP_LOGI(TAG, "joining '%s' (network %u, round %u)", network.ssid,
-                     static_cast<unsigned>(index + 1), static_cast<unsigned>(policy.Round() + 1));
+            ESP_LOGI(TAG, "joining '%s' (network %u, round %u, %s)", network.ssid,
+                     static_cast<unsigned>(index + 1), static_cast<unsigned>(policy.Round() + 1),
+                     ip.enabled ? network.ip.address : "dhcp");
             reported_connected = false;
             reported_failed = false;
             if (err != ESP_OK) {
