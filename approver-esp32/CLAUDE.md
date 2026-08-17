@@ -523,6 +523,41 @@ tier cannot reach them, so they belong to the device tier):
   are higher than a traceback — an unhandled parse is a reboot loop. The
   frame-level half of this is the component's parser now, not ours, which is
   exactly why something has to fire a lying length at it on purpose.
+
+  **Half of that has now been fired at it, and the size half is what found
+  something.** Against the real server: an empty payload, a payload that is not
+  JSON, one full of control characters (the `ESC` becomes a dot, so a payload
+  cannot drive the operator's terminal), 300 bytes against the 240-byte preview,
+  and 64 KB — all delivered, socket kept, no reboot, uptime continuous. Then, at
+  128 KB, 256 KB, 512 KB and a full 1 MB, every time the same three lines:
+  `Failed to allocate read buffer for N bytes`, the library **drops the socket**,
+  and `link_policy` reconnects 2 s later and the library restores the
+  subscription. Never a panic, and the heap low-water never moved — the
+  allocation refuses rather than succeeding and squeezing everything else, which
+  is the good half of this.
+
+  The bad half is that a drop is a denial of service by another route: `history`
+  counted one drop per oversized message, exactly, so a loop of 1 MB publishes on
+  `approvals.*` keeps this responder reconnecting and a real request never
+  arrives — §10.10's scenario, reached without a malformed frame and without
+  crashing anything. **It is bounded at the server**: `nats/docker-compose.yml`
+  runs with `--max_payload=65536`, so the publisher is refused instead of the
+  device, and `nats/CLAUDE.md` §3 carries what that costs (a `Write` over 64 KB
+  can no longer be approved, and falls back to §7's timeout). Bounding it on the
+  device is not possible from here — the library allocates off the `MSG` header
+  before any of our code is reached.
+
+  What is still unfired is the frame-level half proper: a length that lies about
+  the bytes that follow, a truncated header, a server that stops mid-payload.
+  Those need something pretending to be a NATS server rather than a real one, and
+  they remain owed.
+
+  And one number worth keeping: the 64 KB message that **succeeded** took the heap
+  low-water mark from 89,480 to **23,068** free. That is §10.14.1's "number that
+  says whether the device is safe", and 23 KB is what an attacker-chosen payload
+  size can currently take it to before the server bound above existed. It is also
+  the argument for measuring that section's worst case — a request arriving during
+  a Wi-Fi scan with the codec running — before trusting the margin.
 - **Bound every read.** A truncated `MSG` header, a server that stops mid-payload
   and a `PING` that never comes must all end in a socket timeout and a
   reconnect, not a blocked task and a watchdog panic.

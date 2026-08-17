@@ -8,7 +8,15 @@ services:
       - "6222:6222" # Routing port for clustering
     volumes:
       - nats_data:/data
-    command: "-js --store_dir=/data -m 8222 --name nats-server" # JetStream (store on the mounted volume) + HTTP monitoring on 8222, human-readable server name
+      # `max_payload` is a config-file key with no command-line equivalent, which
+      # is the only reason there is a config file at all. `nats-server.conf` says
+      # what it is for; `-c` and flags combine, so everything else stays below.
+      - ./nats-server.conf:/etc/nats/nats-server.conf:ro
+    # JetStream (store on the mounted volume) + HTTP monitoring on 8222,
+    # human-readable server name, and the 64 KB payload ceiling from the config
+    # file — a fail-safe for the ESP32 responder, argued in
+    # `approver-esp32/CLAUDE.md` §10.5 and summarised in `CLAUDE.md` §3.
+    command: "-c /etc/nats/nats-server.conf -js --store_dir=/data -m 8222 --name nats-server"
 
   nats-dashboard:
     image: mdawar/nats-dashboard
