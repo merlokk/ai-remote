@@ -85,7 +85,7 @@ a decision with a cost that section states in a table of its own.
 | The Wi-Fi driver — `components/wifi` (§10.9) | **running on hardware**: two modes (access point, client), one network at a time, a latched link state, a disconnection reason turned into the three answers a person can act on, and a scan that works in both modes. It has **no opinions** — which network and when is the manager's, and that split is what makes the manager testable |
 | The internet check — `components/wifimgr/reachability.*` (§10.9) | **running on hardware**: once a minute, while there is a client link, an ICMP echo to one of a few addresses from `config.json` (8.8.8.8, 1.1.1.1, 9.9.9.9 by default). Three states — `unknown` is the honest one — two failed rounds to say offline and one reply to come back. `wifi ping` and `wifi check` on the console. **It never decides anything**: a link with no internet is reported, never a reason to change networks |
 | The Wi-Fi manager — `components/wifimgr` (§10.9) | **running on hardware, and tested on the host**: desired state (off / client / AP) against current, round-robin over the remembered networks with a growing capped backoff, sticky auth failures, and after N fruitless rounds a fallback access point that stays up for two minutes unless somebody attaches to it. `wifi` on the console. `wifi_policy.h` includes `<cstdint>` and nothing else, the way the navigator's does; the radio is lazily brought up, so a device with `wifi.active` false pays nothing for this existing. **It has joined a real network**, walked past one that refuses on the way, and come up on both DHCP and a fixed address — §10.9 has that run, and it is what makes the cycle, the fallback AP and the scan more than a proof against a network that does not exist. What no board has produced yet is a deliberate **auth failure**, which needs a network whose password is wrong on purpose |
-| The limits screen (§10.8.3) — `components/ui/limits_view.*`, `components/screens/limits_screen.*`, `components/watcher` | **running on hardware**: it came up on its own when this repository's own status line published, showed the model over three gauges on §9.2's two scales, and went back to the clock 73 s after the last document. **It arrives rather than being swiped to**, at the repository owner's request — that section says what changed and why `PWR` dismisses a burst rather than a message. The deciding half is `<cstdint>`-only and host-tested (21 tests, 10 of 11 mutations caught, and the eleventh has an answer) |
+| The limits screen (§10.8.3) — `components/ui/limits_view.*`, `components/screens/limits_screen.*`, `components/watcher` | **running on hardware, and every rule of it checked there**: it came up on its own when this repository's own status line published, went back to the clock 73 s after the last document, was dismissed by `PWR`, held that dismissal through ten more documents, dropped it when the stream stopped, and came back on the first document after. A subscription-less payload draws `7d --` with no fill at all, which is §9.7's "absent is absent" on the glass. **It arrives rather than being swiped to**, at the repository owner's request — that section says what changed and why `PWR` dismisses a burst rather than a message. The deciding half is `<cstdint>`-only and host-tested (21 tests, 10 of 11 mutations caught, and the eleventh has an answer) |
 | The Wi-Fi screen (§10.8.6) | specified, not started — the manager underneath it is what exists |
 | Where the configuration lives (§10.15) | **decided**: all of it in JSON on SPIFFS, nothing of ours in NVS — with the cost stated (SPIFFS cannot be encrypted at rest). `spiffs_image/config.json` + `config.init.json` are flashed, and `components/config` is what reads them |
 | The `KEY`-at-boot config restore (§10.15) | specified, not started |
@@ -1567,11 +1567,28 @@ firmware rather than a choice made per screen:
 | `screens/limits_screen.h/.cpp` | three bars, a model and an age. No decisions |
 | `components/watcher` | the subscription. A component of its own, and the next paragraph is why |
 
-**What the board has actually done**: come up on its own when this repository's
+**What the board has actually done**, and it is the whole of this screen's
+behaviour rather than a sample of it: come up on its own when this repository's
 own status line published, shown `Opus 5 (1M context) · high` over three gauges —
 61 % and 76 % in yellow, 72 % of the context window in red, which is §9.2's two
 scales disagreeing exactly as they should — and gone back to the clock 73 seconds
 after the last document, keeping the numbers for `limits` to print.
+
+Then the button, in the three steps that are the only way to tell this rule from
+the literal one: `PWR` put it back on the clock and the readout said `dismissed
+until the stream goes quiet`; ten further documents arrived and it stayed on the
+clock; eighty seconds of silence cleared the flag — the note disappeared and the
+readout said `the stream has stopped` — and the very next document brought the
+screen back. A dismissal that lasted one message would have failed the second
+step, and one that never expired would have failed the third.
+
+And one payload worth having photographed: a document with `five_hour` and no
+`seven_day`, which is what §9.7 publishes for an API key rather than a
+subscription. `7d` draws as `--` over an empty track with **no fill at all**,
+distinguishable at a glance from a window at 0 % — which is the difference that
+paragraph is about. The `5h` countdown read `now` in the same frame, because that
+reset was already in the past: `render.rs`'s own rule, reached by a device that
+had never heard of it.
 
 Four things are decisions rather than plumbing:
 

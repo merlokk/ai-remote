@@ -701,7 +701,15 @@ up while you are working and the clock is up when you are not.
 
 `PWR` dismisses the **burst**, not the message — the next document is a few
 seconds away, so a back that lasted one message would be undone before your finger
-left the button. The screen stays away until the stream stops and starts again.
+left the button. The screen stays away until the stream stops and starts again,
+and while it is away this readout says so:
+
+```
+screen     on the clock (dismissed until the stream goes quiet)
+```
+
+Once the minute passes, that note disappears and `last … s ago` gains `- the
+stream has stopped`. The next document after that raises the screen again.
 
 Two things the readout is honest about that the screen alone could not be:
 
