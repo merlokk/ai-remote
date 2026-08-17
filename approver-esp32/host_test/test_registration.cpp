@@ -89,33 +89,17 @@ void AssertRejectedBeforeVerifying(const char *json, ReplyStatus expected) {
 }
 
 // ---------------------------------------------------------------------------
-// The signing bytes, against Python's own output.
-
-void test_reply_signing_bytes_match_python(void) {
-    char out[protocol::kReplySigningBytesMax];
-
-    size_t n = protocol::RegistrationReplySigningBytes(1, true, "approver-esp32", kNonce,
-                                                       1737345600, "", out, sizeof out);
-    TEST_ASSERT_EQUAL_STRING(
-        "registration-reply\n1\ntrue\napprover-esp32\n"
-        "Tm9uY2VOb25jZU5vbmNlTm9uY2VOb25jZU5vbmNlMTI=\n1737345600\n",
-        out);
-    TEST_ASSERT_EQUAL_UINT32(97, n);
-
-    n = protocol::RegistrationReplySigningBytes(1, false, "approver-esp32", kNonce, 1737345600,
-                                                "token unknown", out, sizeof out);
-    TEST_ASSERT_EQUAL_STRING(
-        "registration-reply\n1\nfalse\napprover-esp32\n"
-        "Tm9uY2VOb25jZU5vbmNlTm9uY2VOb25jZU5vbmNlMTI=\n1737345600\ntoken unknown",
-        out);
-    TEST_ASSERT_EQUAL_UINT32(111, n);
-
-    // Empty `key_id`, empty `error` and a negative `ts` — the shape a rejection
-    // takes before the handler has worked out whose it was.
-    n = protocol::RegistrationReplySigningBytes(1, false, "", "n", -1, "", out, sizeof out);
-    TEST_ASSERT_EQUAL_STRING("registration-reply\n1\nfalse\n\nn\n-1\n", out);
-    TEST_ASSERT_EQUAL_UINT32(33, n);
-}
+// The signing bytes moved to the parity vectors (§10.11 tier 2).
+//
+// They were three pasted literals here, and `test_vectors.cpp` now runs the same
+// assembler over a **generated** set that covers the same three cases and three
+// more — including an `error` with a separator inside it, which is the vector
+// that makes "`error` is last because it is free text" load-bearing rather than
+// decorative.
+//
+// What is still asserted below is the ordering, the refusals and the pin: the
+// rules this implementation keeps, as opposed to the bytes both languages have
+// to agree on.
 
 // `true`/`false`, not `1`/`0`, and it is the difference between a reply that
 // verifies and one that does not.
@@ -561,7 +545,6 @@ void test_every_status_has_something_to_say(void) {
 }  // namespace
 
 void RegisterRegistrationTests(void) {
-    RUN_TEST(test_reply_signing_bytes_match_python);
     RUN_TEST(test_the_ok_flag_is_spelled_the_way_json_spells_it);
     RUN_TEST(test_reply_signing_bytes_refuse_what_does_not_fit);
 

@@ -7,18 +7,18 @@
 // a responder that is simply not answering, and Claude Code keeps asking in its
 // own terminal.
 //
-// So the expected strings below are **not derived from `signing.h` and not typed
-// out of §7's table**: they were produced by `approver/protocol.py::signing_bytes`
-// on this machine and pasted in, which is §10.11 tier 2's method arriving early
-// for the one field layout that cannot wait for it. The command that made them
-// is in `working-with-code.md`. A test that computed the expectation the same way
-// the code does would pass for a layout that is wrong in both places.
+// **The complete messages moved out of this file, and that is tier 2 arriving.**
+// They used to be three string literals here — Python's own output, pasted in,
+// which is better than deriving the expectation from `signing.h` and worse than
+// it looks: a pasted literal cannot be checked for staleness, so it would go on
+// passing forever after `protocol.py` changed underneath it. They now live in
+// `vectors/parity_vectors.h`, which is **generated** from the Python side and
+// checked against it on every `pytest` run, and `test_vectors.cpp` is what runs
+// the assembler over them.
 //
-// What is pinned:
+// What stays here is everything that is a claim about *this* implementation
+// rather than about the other language:
 //
-//   * three complete messages, byte for byte, against Python's own output —
-//     including a negative `ts` and `INT64_MAX`, because the integers are the
-//     half that fails silently;
 //   * the two empty fields keeping their **positions**: `updated_input_sha256`
 //     between two separators and `reason` at the tail, which is what makes the
 //     message end in `\n` and is the single easiest thing to lose while tidying;
@@ -28,12 +28,17 @@
 //     something a caller could sign;
 //   * `AppendInt` on its own, `INT64_MIN` included: the value with no positive
 //     counterpart, and the one the obvious negate-and-divide loop gets wrong.
+//
+// The sample request the refusals are built from is still the parity vector, so
+// there is one description of a realistic decision in this directory rather than
+// two that can drift.
 
 #include <cstdint>
 #include <cstring>
 
 #include "signing.h"
 #include "unity.h"
+#include "vectors/parity_vectors.h"
 
 using protocol::Decision;
 using protocol::kBehaviorAllow;
@@ -43,51 +48,27 @@ using protocol::kSigningBytesMax;
 namespace {
 
 // ---------------------------------------------------------------------------
-// The fixtures, from `approver/protocol.py`.
+// The sample, from the generated parity vectors.
 
-constexpr char kSessionId[] = "4f9a2c1e-77b3-4d0a-9f21-8c6e5b3a1d02";
-constexpr char kNonce[] = "Zm9vYmFyYmF6cXV1eDEyMzQ1Njc4OWFiY2RlZg==";
-constexpr char kSha[] = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08";
-
-constexpr char kExpectedAllow[] =
-    "1\n"
-    "4f9a2c1e-77b3-4d0a-9f21-8c6e5b3a1d02\n"
-    "Zm9vYmFyYmF6cXV1eDEyMzQ1Njc4OWFiY2RlZg==\n"
-    "Bash\n"
-    "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08\n"
-    "allow\n"
-    "\n"
-    "1737345600\n";
-
-constexpr char kExpectedDeny[] =
-    "1\n"
-    "s\n"
-    "n\n"
-    "Write\n"
-    "0000000000000000000000000000000000000000000000000000000000000000\n"
-    "deny\n"
-    "\n"
-    "-1\n";
-
-constexpr char kExpectedMaxTs[] =
-    "1\n"
-    "s\n"
-    "n\n"
-    "Bash\n"
-    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
-    "allow\n"
-    "\n"
-    "9223372036854775807\n";
+// The realistic `Bash` approval, as `approver/protocol.py` describes it. Reached
+// through the lookup rather than by index so a reordered generator cannot quietly
+// point this whole file at a different request.
+const vectors::DecisionVector &Vector() {
+    const vectors::DecisionVector *found = vectors::FindDecision("allow-bash");
+    TEST_ASSERT_NOT_NULL_MESSAGE(found, "the allow-bash parity vector is gone");
+    return *found;
+}
 
 Decision Sample() {
+    const vectors::DecisionVector &v = Vector();
     Decision d;
-    d.v = 1;
-    d.ts = 1737345600;
-    d.session_id = kSessionId;
-    d.nonce = kNonce;
-    d.tool_name = "Bash";
-    d.input_sha256 = kSha;
-    d.behavior = kBehaviorAllow;
+    d.v = v.v;
+    d.ts = v.ts;
+    d.session_id = v.session_id;
+    d.nonce = v.nonce;
+    d.tool_name = v.tool_name;
+    d.input_sha256 = v.input_sha256;
+    d.behavior = v.behavior;
     return d;
 }
 
@@ -119,49 +100,11 @@ size_t CountSeparators(const char *text, size_t length) {
 }
 
 // ---------------------------------------------------------------------------
-// The three messages, byte for byte.
-
-void test_signing_bytes_match_python(void) {
-    char out[kSigningBytesMax];
-    const size_t n = Assemble(Sample(), out);
-
-    TEST_ASSERT_EQUAL_UINT32(std::strlen(kExpectedAllow), n);
-    TEST_ASSERT_EQUAL_STRING(kExpectedAllow, out);
-}
-
-void test_signing_bytes_match_python_for_a_deny_and_a_negative_ts(void) {
-    Decision d = Sample();
-    d.ts = -1;
-    d.session_id = "s";
-    d.nonce = "n";
-    d.tool_name = "Write";
-    d.input_sha256 = "0000000000000000000000000000000000000000000000000000000000000000";
-    d.behavior = kBehaviorDeny;
-
-    char out[kSigningBytesMax];
-    const size_t n = Assemble(d, out);
-    TEST_ASSERT_EQUAL_UINT32(std::strlen(kExpectedDeny), n);
-    TEST_ASSERT_EQUAL_STRING(kExpectedDeny, out);
-}
-
-// The widest `ts` that can arrive. It is not a plausible timestamp; it is the
-// value that proves the digits are not going through a `double` on the way out —
-// a float path loses the low bits here and nowhere a human would notice.
-void test_signing_bytes_carry_the_widest_timestamp_intact(void) {
-    Decision d = Sample();
-    d.ts = INT64_MAX;
-    d.session_id = "s";
-    d.nonce = "n";
-    d.input_sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-
-    char out[kSigningBytesMax];
-    const size_t n = Assemble(d, out);
-    TEST_ASSERT_EQUAL_UINT32(std::strlen(kExpectedMaxTs), n);
-    TEST_ASSERT_EQUAL_STRING(kExpectedMaxTs, out);
-}
-
-// ---------------------------------------------------------------------------
 // The shape of the message, independently of what is in it.
+//
+// The complete messages are `test_vectors.cpp`'s job now. What is below is what
+// stays true whatever the fields hold, which is a different kind of claim and the
+// one a generated fixture cannot make.
 
 // §10.2: `updated_input_sha256` is a position, not a value. If somebody ever
 // "tidies" the empty write away, this is what fails — and it fails before any
@@ -172,7 +115,7 @@ void test_the_two_empty_fields_keep_their_positions(void) {
 
     // Two separators in a row, which is the empty `updated_input_sha256` between
     // `behavior` and `ts`.
-    TEST_ASSERT_NOT_NULL(std::strstr(out, "\nallow\n\n1737345600\n"));
+    TEST_ASSERT_NOT_NULL(std::strstr(out, "\nallow\n\n"));
 
     // And `reason`, last and empty, is why the whole thing ends in a separator
     // with nothing after it.
@@ -286,7 +229,7 @@ void test_a_behaviour_this_protocol_does_not_have_is_refused(void) {
 // message — the same call §10.8.4 makes about a command that does not fit.
 void test_a_buffer_that_is_too_small_is_refused_rather_than_filled(void) {
     char out[kSigningBytesMax];
-    const size_t exact = std::strlen(kExpectedAllow);
+    const size_t exact = Vector().signing_length;
 
     std::memset(out, kPoison, sizeof out);
     TEST_ASSERT_EQUAL_UINT32(0, protocol::DecisionSigningBytes(Sample(), out, exact));
@@ -385,10 +328,6 @@ void test_the_declared_bound_holds_every_field_at_its_limit(void) {
 }  // namespace
 
 void RegisterSigningTests(void) {
-    RUN_TEST(test_signing_bytes_match_python);
-    RUN_TEST(test_signing_bytes_match_python_for_a_deny_and_a_negative_ts);
-    RUN_TEST(test_signing_bytes_carry_the_widest_timestamp_intact);
-
     RUN_TEST(test_the_two_empty_fields_keep_their_positions);
     RUN_TEST(test_there_are_always_exactly_eight_separators);
     RUN_TEST(test_the_length_excludes_the_terminator_and_the_buffer_still_has_one);

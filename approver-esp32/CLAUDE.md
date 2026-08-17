@@ -89,8 +89,9 @@ a decision with a cost that section states in a table of its own.
 | The Wi-Fi screen (§10.8.6) | specified, not started — the manager underneath it is what exists |
 | Where the configuration lives (§10.15) | **decided**: all of it in JSON on SPIFFS, nothing of ours in NVS — with the cost stated (SPIFFS cannot be encrypted at rest). `spiffs_image/config.json` + `config.init.json` are flashed, and `components/config` is what reads them |
 | The `KEY`-at-boot config restore (§10.15) | specified, not started |
-| Host-tier tests (§10.11) — `host_test/` | **running**: 446 Unity tests over `ui` (the navigator, the clock face, the request card and the limits), `protocol` (§7's signing bytes, its wire format, §6's registration exchange and §9.7's status document), `i2cbus`, `pmic`, `rtc`, `imu`, `audio`, `config`, `buttons`, `timezone`, `speaker`, `wifimgr`, `timesync` and `nats`, one command, no board. The drivers are compiled **unmodified** against a fake ESP-IDF (`host_test/fakes/`), which is §10.14.3's owed fake backend arriving in a different shape than that section specified, and which now covers I²S and a filesystem as well as the I²C wire. Built by MSVC rather than by ESP-IDF's `linux` target, which does not work on a Windows host — §10.11 records why |
-| Protocol parity vectors (§10.11 tier 2) | not started |
+| Host-tier tests (§10.11) — `host_test/` | **running**: 450 Unity tests over `ui` (the navigator, the clock face, the request card and the limits), `protocol` (§7's signing bytes, its wire format, §6's registration exchange and §9.7's status document), `i2cbus`, `pmic`, `rtc`, `imu`, `audio`, `config`, `buttons`, `timezone`, `speaker`, `wifimgr`, `timesync`, `nats` and the parity vectors, one command, no board. The drivers are compiled **unmodified** against a fake ESP-IDF (`host_test/fakes/`), which is §10.14.3's owed fake backend arriving in a different shape than that section specified, and which now covers I²S and a filesystem as well as the I²C wire. Built by MSVC rather than by ESP-IDF's `linux` target, which does not work on a Windows host — §10.11 records why |
+| Protocol parity vectors (§10.11 tier 2) | **done, and it has two halves in two languages**: `tools/make_vectors.py` generates `host_test/vectors/parity_vectors.h` (six §7 decisions, six §6 replies) and `components/crypto/selftest_vector.h` (§10.6's Ed25519 vector) from `approver/protocol.py` and `lib/crypto.py` themselves; both are committed, so the build needs no Python. `test_vectors.cpp` runs the firmware's assemblers over them, and **`tests/test_esp32_vectors.py` is what stops them going stale** — it regenerates on every `pytest` run and fails if the committed files are not what today's Python produces. The three pasted literals this replaced are gone from `test_signing.cpp`, `test_registration.cpp` and `device_key.cpp`. Mutation-checked from both ends: a swapped field in `protocol.py` fails the guard, a dropped separator in `signing.cpp` fails the vectors |
+| Device-tier tests (§10.11 tier 3) — `tests/test_esp32_device.py` | **written, and half of it has run against the board**: one press produces a reply `hook.verify_reply` calls trusted, and every tamper is asserted on that reply without a second press — the verdict flipped, each of §7's six echoed fields changed in turn, the `key_id` renamed, the signature removed. `scripts/esp32-approval.cmd` is the one command, and `AI_REMOTE_ESP32_DEVICE=1` is what stops an unattended `pytest` quietly testing the software responder instead. **§10.10's half is confirmed on hardware**: a card nobody pressed produced no reply at all in 20 s and the hook fell back. The pressed half needs a finger and has not been run since it was written |
 
 Read §10.3 before anything else: it is the one part of this that changes
 something outside this folder.
@@ -2347,17 +2348,18 @@ Three tiers, and the first one is where nearly everything belongs:
    already here for §10.12.1's LVGL preview, CMake and Ninja ship with
    ESP-IDF. One command, in [`working-with-code.md`](working-with-code.md).
 
-   **What is under it today is the navigator, the clock face and four of the
-   five chips on the I²C bus, the settings file, the buttons, the zone table,
-   the speaker, the Wi-Fi policy, the internet check, the clock's sync schedule
-   and the bus link** — 344 tests:
+   **What is under it today is the navigator, the three screens' arithmetic, all
+   of §6 and §7's wire format, four of the five chips on the I²C bus, the
+   settings file, the buttons, the zone table, the speaker, the Wi-Fi policy,
+   the internet check, the clock's sync schedule and the bus link** — 450 tests,
+   and the last row of the table is tier 2 living in the same binary:
 
    | Subject | What is pinned |
    |---|---|
    | `components/ui` | every transition of §10.8's table; swipes that must *not* navigate on the settings and Wi-Fi screens; the settings screen being reachable from the clock **and from nowhere else**, and the Wi-Fi screen only from settings; a request preempting all four screens without moving any of them; navigation vanishing entirely while the card is up; the screen underneath surviving both an answer and an expiry; the pending queue refusing a fifth arrival. Its `CMakeLists.txt` has an empty `REQUIRES`, which is not an omission — a navigator that included LVGL would be a navigator that needs a board |
    | `components/ui` (the clock face) | §10.8.2's rules, and the sixth subject in this firmware that needs no fake. **The time**: an unset clock showing dashes rather than a plausible `00:00`, a year outside the RTC's own 2024..2099 refused at each end, the digits being 24-hour with their leading zeros, and a wall clock out of range showing dashes rather than rendering an hour of 74. **The three indicators**: a connected link never showing *no* bars, because an empty icon reads as "not connected"; the connecting animation never being blank; an access point and a switched-off radio both lighting none; no server configured being a shape rather than a red light; the two-minute traffic window opening on a delivery, closing on time, surviving the ~49-day wrap, **not** opening on the first reading of a counter that was already non-zero, and **not** opening on a counter that went backwards — which is a reconnect (§10.5) rather than a message; traffic never showing through a dropped link; and a battery percentage clamped, with negative meaning "nothing to ask" rather than empty. **The panel's own two**: the drift staying inside its box, reaching all four corners of it, never standing still, and being continuous across the millisecond wrap — the last of which is the only test that catches a cycle read as `now_ms % period`; and the water bounded away from both ends of the scale, travelling with the phase, varying down the face, and free of hard edges. Plus `Wave` interpolating rather than reading its 64-entry table flat, which is here because the mutation pass showed that breaking it was invisible through `Shimmer` |
    | `components/ui` (the request card) | §10.8.4's rules, and the ones where a test is worth the most. **What a card is allowed to be**: every refusal is its own case — a queue that is full, a field with no terminator in it (all seven, in one loop, so a field added later cannot skip the check), a request with no reply subject, one with no tool name — because a refused card is §10.10's fail-safe and a *shown* card is a question put to a human. **The queue**: the oldest is the one on screen, the bound is asserted equal to the navigator's, and room freed is room usable. **The press guard**: a press inside the first 300 ms is thrown away, a press that *began* before the card appeared is thrown away by the same comparison, the next card in the queue gets its own guard from scratch, and pressing nothing decides nothing. **The outcomes**: a press hands back the whole request the reply will have to echo; a card that timed out reads as a timeout and not as a deny; a request that waited past its own life is dropped without ever being shown; a missing TTL falls back to one that expires rather than to forever; the countdown floors at zero; and the ~49-day wrap lands inside a card's life. **The receipt**: it fades on its own, it is skipped when another card is waiting, and an arriving request outranks it. Plus the assertion the whole file is built around — **no amount of ticking produces a verdict** |
-   | `components/protocol` | §7's signing bytes (§10.2), and the suite with the least room to be approximately right — every other test here protects a behaviour somebody would notice going wrong, this one protects an exact byte string whose failure is invisible from the device's side. So the expectations are **not derived from the header and not typed out of §7's table**: three complete messages generated by `approver/protocol.py` and pasted in, which is tier 2's method arriving early for the one layout that could not wait for it. Plus the shape independently of the content — the two always-empty fields keeping their *positions*, which is what makes the message end in a separator and is the easiest thing to lose while tidying; exactly eight separators whatever the fields hold; and every refusal writing **nothing**, because a half-assembled buffer here is something a caller could sign. And the integers on their own, `INT64_MIN` included: the value with no positive counterpart, which the obvious negate-and-divide loop gets wrong and which is the reason `AppendInt` accumulates downwards |
+   | `components/protocol` | §7's signing bytes (§10.2), and the suite with the least room to be approximately right — every other test here protects a behaviour somebody would notice going wrong, this one protects an exact byte string whose failure is invisible from the device's side. The complete messages have **moved to tier 2's generated vectors** in the row below, which is where they should have been: they used to be three literals pasted into this file, and a pasted literal is the one kind of expectation nobody can check for staleness. What is left here is the shape independently of the content — the two always-empty fields keeping their *positions*, which is what makes the message end in a separator and is the easiest thing to lose while tidying; exactly eight separators whatever the fields hold; and every refusal writing **nothing**, because a half-assembled buffer here is something a caller could sign. And the integers on their own, `INT64_MIN` included: the value with no positive counterpart, which the obvious negate-and-divide loop gets wrong and which is the reason `AppendInt` accumulates downwards |
    | `components/protocol` (the registration exchange) | §6/§10.7's, and the suite is mostly about **one rule**: the handler's signature is checked before any field of the reply is read. That is testable at all because the verifier comes in as an argument — the one used here *records the message it was handed*, so "these are `registration_reply_signing_bytes`" is an assertion rather than a reading of the code, and every rejection that happens *before* the signature uses a verifier that fails the test if it runs. Then each refusal as its own case, because each has its own sentence on a console: not an object, another protocol version, an `ok` that is a string rather than a bool, no handler key, a **pin mismatch** (which is not a bad signature and must not be spelled as one), a nonce that answers a different request, no timestamp, a `ts` past 2^53 that cJSON would silently round, a field longer than the device will hold, and a signature that is not one. Plus the two that are about agreeing with Python rather than refusing anything: the signing bytes byte for byte, and an absent optional field signing as `""` — because the handler omits `error` on success and the other side signs it as empty |
    | `components/protocol` (the wire format) | §7's JSON, and the fixture is **`hook.py`'s own output** rather than something written to match the parser — a request invented here would pass for a parser that agrees with this file and with nothing else. The parse: every field where §7 says, `tool_input` rendered **whole** rather than reached into (§10.8.4 forbids showing part of what is being asked for), and no TTL arriving so the card's own default is what expires one. Then every refusal as its own case, because this is the one subject anybody on the LAN can publish to: not an object, another version, a missing field one at a time, a field longer than the card holds, a `tool_input` too big to show whole — the refusal with a stated cost — a `ts` that cannot be echoed exactly, and no reply subject at all. Each of them asserted to leave the caller's card **untouched**, because the card in that struct belongs to a request somebody is still reading. The reply: the six fields `hook.py::verify_reply` compares one by one, an empty `reason`, and **no `updated_input`** — whose absence is what keeps `updated_input_sha256` empty in the signed bytes |
    | `components/ui` + `components/protocol` (the limits) | §9.2, §9.7 and §10.8.3, and the fixture is §9.7's own example document. **The two traffic-light scales**, both boundaries of each, and the assertion §10.8.3 asks for by name — that they cannot drift into each other, checked at every percentage from 0 to 100 rather than at a sample. `countdown()` against `render.rs`'s own cases, a reset in the past reading `now` rather than underflowing. **Absent is absent**: a document with no `rate_limits` is ordinary, and one window without the other is read. `ts` as the only required field, junk keeping the last good document, a percentage clamped and *rounded*, and a field too long **truncated** rather than refused — the one place in this firmware where that is right, and the test says so. Then the arrival rules: a document raises the screen, the minute is checked at both sides of its boundary and across the ~49-day wrap, a stream that keeps arriving keeps the screen, and a dismissal survives ten more documents but not the silence after them |
@@ -2376,6 +2378,7 @@ Three tiers, and the first one is where nearly everything belongs:
    | `components/nats` | §10.5's two halves, and the fifth subject in this firmware that needs no fake. **Where**: the four spellings of an address that are accepted, and each refusal as its own case — a port that is not 1..65535, `ws://` / `wss://` / `tls://`, a path, credentials, a bracketed IPv6 literal, surrounding space, a host too long for the field — plus the one that turned out to be a real gap, that **nothing at all is written on a refusal**, host as well as port. **When**: nothing connected without a network; one attempt outstanding at a time; the backoff both growing and capped; a drop being neither a refusal nor an instant retry; a lost network and a switch-off both tearing the socket down and only the first coming back by itself; a changed address dropping what is up; `ConnectNow` beating the backoff but not the off switch; a result nobody asked for ignored; and the ~49-day wrap landing inside a backoff |
    | `components/config` (the clock) | `syncHours` read, round-tripped and **0 kept as off rather than floored** — the opposite call to `internet.intervalSeconds` next to it, and the difference is the point: a probe list with no interval is a flood, a clock told never to sync has said something. Plus the one the owner asked for: **no `sntp` in the file, and an empty one, both leave nothing to ask** rather than falling back to a compiled-in host |
    | `components/wifimgr` | every rule §10.9 states, and it needs **no fake at all** — the policy includes `<cstdint>` and nothing else, so this suite is the navigator's shape rather than the drivers': the round-robin and where a round begins; the backoff asserted as *both* growing and capped, because either alone is satisfied by a constant; the fallback AP after the configured rounds, held open by an attached station and restarted from the beginning when the last one leaves — and **not** held open by the manager's own "nobody is attached" report, which arrives on every pass and would otherwise mean an AP that never expires; the window's expiry clearing the sticky auth failures, since that window was the chance to fix them; an exhausted list going straight to the AP rather than waiting out its rounds; a drop while online being neither an auth failure nor an instant reconnect; the connect timeout; `SetDesired` being idempotent, because the manager re-asserts it five times a second; and the ~49-day millisecond wrap landing inside a delay |
+   | `host_test/vectors` (tier 2) | the parity vectors, run against the assemblers that have to reproduce them: every §7 decision and every §6 reply, byte for byte, against what `approver/protocol.py` produced. Plus the assertions a generated fixture needs to be worth anything — that there **are** vectors (a suite iterating an empty array passes), that a renamed one answers null rather than being silently substituted, and that the two extreme timestamps and the non-ASCII field are still among them. The bound vector doubles as the check that `kSigningBytesMax` holds the largest message §7 can produce |
 
    The fake platform is `host_test/fakes/` — an ESP-IDF-shaped set of headers
    with a register-file I²C device behind them. It models the shape all five
@@ -2640,26 +2643,88 @@ Three tiers, and the first one is where nearly everything belongs:
 2. **Cross-language parity vectors**, mirroring what `approver-web` does with
    `protocol.test.ts`: fixtures generated by the Python implementation itself and
    compiled into the host tests, so "does the device still speak §7?" is a
-   question a test answers. Never hand-typed from this document — the generating
-   command is in [`working-with-code.md`](working-with-code.md).
+   question a test answers. Never hand-typed from this document.
 
-   **Two of these exist already, ahead of the tier**, because the code they
-   check could not sensibly be written without them: three `signing_bytes`
-   messages in `test_signing.cpp`, and the Ed25519 key pair with a known
-   signature that §10.6's boot self-test consumes. Both were generated by the
-   Python side and pasted in. What is missing is the *tier* rather than the
-   idea — a fixture file rather than string literals in two places, and
-   `registration_reply_signing_bytes`, which arrives with §10.7.
+   **This exists now, and the shape it took is not the one this section
+   sketched.** The sketch was a fixture file; what it needed to be was a fixture
+   file *plus a test on the other side of the repository*, and the second half is
+   the whole reason the tier is worth having.
 
-   Include a `registration_reply_signing_bytes` vector and an Ed25519 key pair
-   with a known signature — the latter is what the boot self-test of §10.6
-   consumes, so the vector has one job on the host and one on the device.
+   | Piece | Where |
+   |---|---|
+   | the generator | `tools/make_vectors.py`, run under the venv (`lib/crypto.py` needs `cryptography`) |
+   | §7's decisions and §6's replies | `host_test/vectors/parity_vectors.h` — generated, **committed** |
+   | §10.6's Ed25519 vector | `components/crypto/selftest_vector.h` — generated, committed, and included by `device_key.cpp` |
+   | the device reproducing them | `host_test/test_vectors.cpp` |
+   | **the vectors still being current** | `tests/test_esp32_vectors.py`, in the pytest suite |
+
+   - **Committed, the way `dependencies.lock` is.** A fresh checkout builds and
+     runs the host tests with no Python step at all; the generator is something
+     you run when `protocol.py` changes, not something the build depends on.
+   - **A fixture without a staleness check is a pasted literal with extra
+     steps**, and that is what this file previously had in three places. Change
+     `signing_bytes` and a compiled-in expectation goes on passing against
+     yesterday's layout forever — while the device signs bytes the hook does not
+     recompute, every reply is rejected, and from the desk that is
+     indistinguishable from a responder that is not answering. Nothing logs it.
+     So the pytest guard regenerates both headers into memory on every run and
+     compares whole files: a vector that quietly stopped being generated fails
+     too, which a field-by-field check would not catch.
+   - **What is in them.** Six decisions: a realistic `Bash` allow, a deny with a
+     negative `ts`, `INT64_MAX` and `INT64_MIN` — the two values a `double`
+     cannot carry — every field at its declared bound with both integers at their
+     widest, and a `session_id` that is **not ASCII**, because `approvals.*` is
+     open on the LAN (§10.3) and the device copies bytes while Python encodes
+     utf-8. Six replies: an acceptance, a signed rejection, an anonymous one, a
+     maximum `ts`, every field at its bound, and an `error` with a separator
+     inside it — the vector that makes "`error` is last because it is free text"
+     load-bearing rather than decorative.
+   - **The counts are asserted.** A suite that iterates an empty array passes, so
+     a truncated header or an include that resolved elsewhere has to fail rather
+     than report a green run over nothing.
+   - **Mutation-checked from both ends**, which is the only way to know a
+     two-language check is wired up: swapping `session_id` and `nonce` in
+     `protocol.py` fails the pytest guard (and `--check` names the stale file);
+     dropping the trailing separator in `signing.cpp` fails
+     `test_every_decision_vector_is_reproduced` with the vector's name in the
+     message.
+   - And one rule that came from the generator rather than from the tests:
+     `INT64_MIN` and `INT32_MIN` **cannot be emitted as digits**. C++ reads
+     `-9223372036854775808` as unary minus on a constant that does not fit, which
+     under `/W4 /WX` is an error and inside a braced initialiser is ill-formed
+     outright. The generator knows to write `INT64_MIN`, and that is the kind of
+     thing a hand-pasted literal never taught anybody.
 3. **Device tier — opt-in, like §8.6's touch tests.** A board, a real bus, and a
    real `hook.py`: the acceptance test is a device-signed reply that
    `hook.verify_reply` returns `trusted=True` for, plus the same reply with
-   `behavior` flipped being rejected. It must never run as part of a bare
-   `py -m pytest`, and it should be reachable as one command from `scripts/`, in
-   the style of `e2e-approval.cmd`.
+   `behavior` flipped being rejected.
+
+   **This exists now** — `tests/test_esp32_device.py`, reached by
+   `scripts/esp32-approval.cmd`. It is the acceptance test for this whole folder,
+   and the argument for it is that everything else here can be green while the
+   object on the desk is useless: the host tier compiles the firmware's logic
+   without the firmware, tier 2 checks byte strings without a signature, and
+   neither has ever seen the key bound to this chip.
+
+   - **Two interactions, and the second is the one no host test can reach.**
+     Press `ALLOW` on the card; then press *nothing* for twenty seconds, which is
+     §10.10 — no press must mean no reply at all, not a deny and not a "skipped".
+     A `RequestTimeout` is the pass.
+   - **Every tamper is free.** Once one genuinely signed reply exists, the
+     verdict flipped, each of §7's six echoed fields changed in turn, the
+     `key_id` renamed to another allowlist entry and to none, and the signature
+     removed are all in-process assertions. That is why two presses buy nine
+     tests.
+   - **`AI_REMOTE_ESP32_DEVICE=1`, and the gate is not a probe.** The YubiKey
+     tier can ask whether a key is plugged in; there is no read-only way to ask
+     whether this board is answering — the only probe is a request, which raises
+     a card. Worse, §6's queue group means that with the board off and
+     `responder.py serve` up, this suite would pass beautifully against the
+     software key. Hence the env var, and hence asserting `key_id`, which is not
+     a formality here: it is what says who answered.
+   - **What has actually run**: the fail-safe half, against this board, on the
+     bus — a card nobody pressed produced no reply in 20 s. The pressed half
+     needs a finger.
 
 ### 10.12 Build and flash (Windows)
 

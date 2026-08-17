@@ -26,6 +26,13 @@ is not writable in this sandbox.
   touch, and turns **any** failure into a skip reason rather than a collection
   error. The touch tier is gated on `AI_REMOTE_YUBIKEY_TOUCH=1` on purpose: an
   unattended run must never block waiting for a finger.
+- `requires_esp32_device` — the device tier of §10.11, gated on
+  `AI_REMOTE_ESP32_DEVICE=1`. **It is not probed, and that is the difference from
+  the YubiKey markers.** There is no read-only way to ask "is the board there":
+  the only probe is putting a request on `approvals.*`, which raises a card on
+  the glass — and §6's queue group means that if the board is *not* there, some
+  other responder answers and the suite passes for the wrong key. An env var is
+  the honest gate.
 - `run_async(coro)` — drives async bodies through `asyncio.run`. We do not add
   `pytest-asyncio`; it is not on the approved list (§1).
 
@@ -46,6 +53,8 @@ is not writable in this sandbox.
 | `test_yubikey_exec.py` | `tools/yubikey_exec.py` (§8.5), `derive` end to end | `fido2` |
 | `test_responder_yubikey.py` | `approver/responder_yubikey.py` (§8.7), same fakes | `fido2` |
 | `test_yubikey_integration.py` | the real device (§8.6) — three tiers | a YubiKey |
+| `test_esp32_vectors.py` | the **Python half** of §10.11 tier 2: the committed parity vectors are still what today's `protocol.py` and `lib/crypto.py` produce | — |
+| `test_esp32_device.py` | §10.11 tier 3 — the ESP32 responder answering for real, and every tamper on the reply it signed | the board, and a press |
 
 Two conventions worth keeping:
 
@@ -61,3 +70,21 @@ Two conventions worth keeping:
 What genuinely cannot be faked here is a *positive* derived-key sign→verify round
 trip: `fido2` exposes only `derive_public_key`, and the private half exists solely
 inside the authenticator. That one lives in §8.6.
+
+## Two files that are about firmware, and belong here anyway
+
+`test_esp32_vectors.py` and `test_esp32_device.py` test C++ that this suite
+cannot import. They are here rather than in `approver-esp32/host_test/` because
+both are **the Python end of a two-language claim**, and neither end can be
+checked from the other side:
+
+- the parity tier only means something if somebody asserts the committed vectors
+  are current. The C++ half compiles them; only Python can say whether they are
+  still what Python produces (§10.11 tier 2);
+- the device tier verifies a signature made on the ESP32 with `hook.verify_reply`
+  — the hook's own code, against the live `handler-config.json`. Reimplementing
+  that check in the firmware's test suite would be checking the device against
+  itself (§10.11 tier 3).
+
+Both keep the invariant at the top of this file: with no board and no env var
+set, they skip or pass on their own.

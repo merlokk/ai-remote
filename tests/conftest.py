@@ -6,6 +6,8 @@ we probe once at collection time and expose ready-made markers.
 * NATS on 127.0.0.1:4222 (CLAUDE.md §3) -> ``requires_nats``
 * a physical YubiKey with previewSign (CLAUDE.md §8) -> ``requires_yubikey`` /
   ``requires_preview_sign`` / ``requires_yubikey_touch``
+* the ESP32 responder, powered on and registered (CLAUDE.md §10.11 tier 3) ->
+  ``requires_esp32_device``
 
 A plain ``py -m pytest`` therefore stays green on a bare checkout with no hardware.
 """
@@ -77,6 +79,24 @@ requires_yubikey_touch = pytest.mark.skipif(
     reason=f"needs a physical button press; set {TOUCH_ENV}=1 to enable",
 )
 
+#: Set to 1 to allow the device tier of CLAUDE.md §10.11 -- the ESP32 responder
+#: on the desk, answered by hand.
+DEVICE_ENV = "AI_REMOTE_ESP32_DEVICE"
+
+#: The ESP32 tier is opt-in for a reason the YubiKey one only half shares. That
+#: one needs a finger; this one also needs a **board that is powered on,
+#: registered and subscribed** -- and if it is not, the request goes onto
+#: ``approvals.*`` where any other running responder will happily answer it. An
+#: unattended `pytest` that quietly tested the software responder instead would
+#: be worse than one that skipped.
+requires_esp32_device = pytest.mark.skipif(
+    os.environ.get(DEVICE_ENV) != "1",
+    reason=(
+        f"needs the ESP32 responder on the desk and a press on it; "
+        f"set {DEVICE_ENV}=1 to enable (scripts\\esp32-approval.cmd does)"
+    ),
+)
+
 
 def run_async(coro):
     """Drive an async coroutine to completion without pytest-asyncio (not an approved dep)."""
@@ -88,7 +108,9 @@ __all__ = [
     "requires_yubikey",
     "requires_preview_sign",
     "requires_yubikey_touch",
+    "requires_esp32_device",
     "run_async",
     "DEFAULT_SERVERS",
     "TOUCH_ENV",
+    "DEVICE_ENV",
 ]
