@@ -1622,6 +1622,29 @@ And the number this screen exists to be honest about: **its age**, in seconds,
 under everything else. §9.7 is a current value with no stream behind it, so these
 numbers are as true as they are recent and nothing else here would say so.
 
+**One later change, and it came with a measurement worth keeping.** The gauge
+labels and the countdowns shipped at 14 point, which is a size for something you
+lean in to read — wrong for an object looked at from across a room, and the
+repository owner said so. They are 28 now, and the countdowns are right-aligned
+against the bar's own margin rather than placed, because that field's width
+changes with its value: `now` is three characters and `23h59m` is six, and at 28
+point that is sixty pixels of drift.
+
+The percentage went to 48 with them and came back. `sdkconfig.defaults` *enables*
+Montserrat 48 for the clock, but §10.8.2's digits are seven drawn segments and
+never reference the font — so the linker had been dropping it, and the first line
+to name it cost **97,280 bytes of flash**, measured either side. §10.8.2 refused a
+generated font on exactly that ground ("tens of kilobytes of flash"), and paying
+nearly a hundred for one size step would be that decision reversed for a smaller
+reason. So the hierarchy is carried by colour and by the bar instead — the
+percentage is the bright thing in its row, the label and the countdown are faint,
+and the coloured length underneath is what the eye reads the magnitude from. The
+app came back to within 32 bytes of where it started.
+
+The general fact, which is not obvious and will catch somebody else: **a font
+being enabled in `sdkconfig` costs nothing until something references it.** Three
+are enabled here and two were being linked.
+
 #### 10.8.4 Request — the screen the device exists for
 
 `tool_name`, `cwd`, the `tool_input` as the heaviest thing on the panel, a

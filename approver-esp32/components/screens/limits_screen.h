@@ -26,18 +26,48 @@ namespace screens {
 // Three gauges down the middle of a 480×480 panel, the model above them and the
 // session under them. Wide bars rather than tall ones: the number that matters is
 // how far along a window is, and length is what the eye reads that from.
+//
+// **One size for everything that matters, and that is a measurement rather than
+// a preference.** The first version had the labels and the countdowns at 14
+// point, which is a size for something you lean in to read — and this is an
+// object on a desk looked at from across a room. They are 28 now.
+//
+// The percentage went to 48 with them, for half an hour, and then came back.
+// `sdkconfig.defaults` *enables* Montserrat 48 for the clock, but the clock draws
+// its digits as seven segments (§10.8.2) and never references the font — so the
+// linker had been dropping it, and the first thing to name it cost **97,280 bytes
+// of flash**, measured. §10.8.2 already refused a generated font on exactly that
+// ground, and paying it here for one size step would be that decision reversed
+// for a smaller reason.
+//
+// So the hierarchy is carried by **colour and by the bar** instead of by size: the
+// percentage is the bright thing in its row, the label and the countdown are
+// faint, and the coloured length underneath is what the eye actually reads the
+// magnitude from. Nothing new is compiled in, and the app is where it was.
 inline constexpr int32_t kLimitsPad = 28;
 
-inline constexpr int32_t kLimitsModelTop = 42;
-inline constexpr int32_t kLimitsEffortTop = 82;
+inline constexpr int32_t kLimitsModelTop = 30;
+inline constexpr int32_t kLimitsEffortTop = 74;
 
-inline constexpr int32_t kLimitsFirstGaugeTop = 140;
-inline constexpr int32_t kLimitsGaugeStride = 96;
-inline constexpr int32_t kLimitsBarHeight = 22;
-inline constexpr int32_t kLimitsLabelDrop = 30;
+inline constexpr int32_t kLimitsFirstGaugeTop = 116;
+inline constexpr int32_t kLimitsGaugeStride = 104;
 
-inline constexpr int32_t kLimitsCwdTop = 404;
-inline constexpr int32_t kLimitsAgeTop = 436;
+// Within a row: the label, the percentage and the countdown share one line, and
+// the bar goes underneath all three.
+inline constexpr int32_t kLimitsTextTop = 16;
+inline constexpr int32_t kLimitsPercentLeft = 104;
+inline constexpr int32_t kLimitsBarTop = 58;
+inline constexpr int32_t kLimitsBarHeight = 26;
+
+// **The countdown is right-aligned rather than placed**, because it is the one
+// field whose width changes with its value: `now` is three characters and
+// `23h59m` is six, and at 28 point that difference is sixty pixels. A left-placed
+// label would have to be positioned for the longest one and would then float away
+// from the edge for every shorter one.
+inline constexpr int32_t kLimitsCountdownWidth = 220;
+
+inline constexpr int32_t kLimitsCwdTop = 426;
+inline constexpr int32_t kLimitsAgeTop = 450;
 
 // One gauge's widgets, kept together because there are three of them and the only
 // difference between them is the label and which scale colours the bar.

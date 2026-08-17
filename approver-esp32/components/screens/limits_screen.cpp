@@ -109,26 +109,33 @@ esp_err_t LimitsScreen::Create(lv_obj_t *parent) {
     for (const Row &row : rows) {
         // The label is static text and never changes, so it is the one string here
         // that LVGL may keep its own copy of.
-        lv_obj_t *label =
-            lv_label_create(root_);
+        lv_obj_t *label = lv_label_create(root_);
         if (label != nullptr) {
-            lv_obj_set_pos(label, kLimitsPad, row.top);
-            lv_obj_set_style_text_font(label, &lv_font_montserrat_14, LV_PART_MAIN);
+            lv_obj_set_pos(label, kLimitsPad, row.top + kLimitsTextTop);
+            lv_obj_set_style_text_font(label, &lv_font_montserrat_28, LV_PART_MAIN);
             lv_obj_set_style_text_color(label, Faint(), LV_PART_MAIN);
             lv_label_set_text(label, row.label);
         }
         row.row->label = label;
 
         std::snprintf(row.row->percent_text, sizeof row.row->percent_text, "%s", "--");
-        row.row->percent = Text(root_, &lv_font_montserrat_28, Bright(), kLimitsPad + 60,
-                                row.top - 8, row.row->percent_text);
-        row.row->countdown = Text(root_, &lv_font_montserrat_14, Faint(), kWidth - kLimitsPad - 90,
-                                  row.top, row.row->countdown_text);
+        row.row->percent = Text(root_, &lv_font_montserrat_28, Bright(), kLimitsPercentLeft,
+                                row.top + kLimitsTextTop, row.row->percent_text);
 
-        row.row->track =
-            Block(root_, Rule(), kLimitsPad, row.top + kLimitsLabelDrop, kBarWidth, kLimitsBarHeight);
+        // Right-aligned against the same margin the bar ends at, so a countdown
+        // that grows a character grows leftwards instead of walking off the panel.
+        row.row->countdown =
+            Text(root_, &lv_font_montserrat_28, Faint(), kWidth - kLimitsPad - kLimitsCountdownWidth,
+                 row.top + kLimitsTextTop, row.row->countdown_text);
+        if (row.row->countdown != nullptr) {
+            lv_obj_set_width(row.row->countdown, kLimitsCountdownWidth);
+            lv_obj_set_style_text_align(row.row->countdown, LV_TEXT_ALIGN_RIGHT, LV_PART_MAIN);
+        }
+
+        row.row->track = Block(root_, Rule(), kLimitsPad, row.top + kLimitsBarTop, kBarWidth,
+                               kLimitsBarHeight);
         row.row->fill =
-            Block(root_, Green(), kLimitsPad, row.top + kLimitsLabelDrop, 1, kLimitsBarHeight);
+            Block(root_, Green(), kLimitsPad, row.top + kLimitsBarTop, 1, kLimitsBarHeight);
     }
 
     cwd_ = Text(root_, &lv_font_montserrat_14, Faint(), kLimitsPad, kLimitsCwdTop, cwd_text_);
