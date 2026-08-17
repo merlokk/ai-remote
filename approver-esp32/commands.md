@@ -28,9 +28,9 @@ line. Addresses, SSIDs and channels are not secrets and are printed in full.
 ## What the device is
 
 ### `devstatus`
-Everything at once: the board, every chip on it, the clock, the network and the
-bus — `status`, `power`, `buttons`, `imu`, `audio`, `display`, `date`, `wifi`
-and `nats`, one after another under `== name` headers.
+Everything at once: the board, every chip on it, the screen, the clock, the
+network and the bus — `status`, `power`, `buttons`, `imu`, `audio`, `display`,
+`clock`, `date`, `wifi` and `nats`, one after another under `== name` headers.
 
 **Each header is the name of the command that prints that section on its own**,
 so the dump doubles as a map: something odd under `== power`, type `power` to
@@ -161,6 +161,33 @@ found.
 
 ### `display brightness <0..100>`
 Sets the panel only, right now. `config set brightness` is the stored one.
+
+### `clock`
+What the clock screen is showing, and **why** — the one readout whose subject is
+already visible, which is exactly why it earns its place: a screen is the only
+output of this device that cannot be captured from a script, and an icon can show
+a colour without being able to say what made it that colour.
+
+    face       14:12
+    drift      -21,-33 px of +-30,+-40
+    water      phase 107 of 256, 6400 ms per cycle
+    wifi       off - hollow bars, 0 of 3 bar(s) lit
+    bus        red - there is a server and we are not on it
+    battery    cable in, not taking current, 100%
+    updates    147, 0 gave the frame up waiting for the display
+    stack      2968 byte(s) never used, of 4096
+
+`face` is `--:--` when no believable time has arrived yet — the screen shows
+dashes rather than a plausible midnight, and this is where the reason is written
+out. **`drift` and `water` both move on their own**, so two runs a second apart
+are the check that the panel is being looked after: the face wanders around a
+box so no pixel carries an edge for long, and the digits are filled from a
+travelling wave rather than a flat green.
+
+The three icon lines say which of each indicator's states is on screen, in
+words. `updates` next to the count of frames given up waiting for the display is
+the load figure: a number that climbs there means something else is holding
+LVGL.
 
 ### `audio`
 The ES8311 and the I²S channel in front of it: whether the codec answered at

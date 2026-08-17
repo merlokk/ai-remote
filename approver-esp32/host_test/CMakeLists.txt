@@ -66,6 +66,7 @@ endif()
 add_executable(host_test
     test_main.cpp
     test_navigator.cpp
+    test_clock_face.cpp
     test_i2c_bus.cpp
     test_pmic.cpp
     test_rtc.cpp
@@ -89,6 +90,7 @@ add_executable(host_test
 
     # Under test.
     ../components/ui/navigator.cpp
+    ../components/ui/clock_face.cpp
     ../components/i2cbus/i2c_bus.cpp
     ../components/pmic/axp2101.cpp
     ../components/rtc/pcf85063.cpp

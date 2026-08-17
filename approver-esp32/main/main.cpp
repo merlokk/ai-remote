@@ -1,16 +1,22 @@
 // The entry point. `main/` stays thin (CLAUDE.md §10.14.2): the library layer
 // lives in `components/` and the logic goes on top of it — the layer is written
-// and the logic is not, so what this file does today is **compose**, in an order
-// that is written down rather than implied, and draw a placeholder at the end of
-// it because §10.8's screens do not exist yet.
+// and most of the logic is not, so what this file does is **compose**, in an
+// order that is written down rather than implied, and hand the result to the one
+// screen of §10.8 that exists.
 //
 // What it composes: the filesystem, the settings on it, the zone, the board and
 // its chips, the console, the radio, the clock's network half, the bus — then
 // the two settings that have hardware to reach (volume, brightness), then the
-// splash and the boot chime, then LVGL. Every step below says why it is where it
-// is; the one rule none of them breaks is that a failure here is a log line and
-// not a branch (§10.10: a device that cannot mount its storage should still come
-// up far enough to say so).
+// splash and the boot chime, then LVGL and the screens on it. Every step below
+// says why it is where it is; the one rule none of them breaks is that a failure
+// here is a log line and not a branch (§10.10: a device that cannot mount its
+// storage should still come up far enough to say so).
+//
+// **The placeholder that used to be at the end of it is gone**, which is what
+// §10.8 said would happen to it: the clock of §10.8.2 is a real screen and it
+// answers both questions the placeholder existed to answer — the colours are
+// right if the digits are green, and the layout is right if the whole face
+// drifts without leaving the glass.
 
 #include <cinttypes>
 
@@ -26,6 +32,7 @@
 #include "lvgl_display.h"
 #include "nats_link.h"
 #include "rawimage.h"
+#include "screens.h"
 #include "storage.h"
 #include "timesync.h"
 #include "timezone.h"
@@ -53,76 +60,6 @@ constexpr const char *kSplashImage = "splash.bin";
 // it from the start also stops a slow filesystem from being added to the wait:
 // the 460 KB is on the glass while it streams.
 constexpr int64_t kSplashMs = 2000;
-
-// **A placeholder, and it is meant to be deleted.** §10.8 specifies five
-// screens and none of them exists yet; what this draws is the smallest thing
-// that answers the two questions a fresh display driver raises — are the
-// colours and the byte order right, and does a press land where the finger did.
-// A tap moves the dot. When the screens of §10.8 arrive, this goes with them,
-// and `main` goes back to composing rather than drawing.
-void ShowPlaceholder() {
-    display::Lock lock;
-    if (!lock) {
-        return;
-    }
-
-    lv_obj_t *screen = lv_screen_active();
-    // Black, because on an AMOLED an unlit pixel costs no power and no
-    // lifetime — §10.8.1 makes that a design rule, and it may as well start
-    // here.
-    lv_obj_set_style_bg_color(screen, lv_color_black(), LV_PART_MAIN);
-
-    lv_obj_t *title = lv_label_create(screen);
-    lv_label_set_text(title, "approver-esp32");
-    lv_obj_set_style_text_color(title, lv_color_white(), LV_PART_MAIN);
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_28, LV_PART_MAIN);
-    lv_obj_align(title, LV_ALIGN_CENTER, 0, -40);
-
-    lv_obj_t *subtitle = lv_label_create(screen);
-    lv_label_set_text(subtitle, "no screens yet - tap to test touch");
-    lv_obj_set_style_text_color(subtitle, lv_palette_main(LV_PALETTE_GREY), LV_PART_MAIN);
-    lv_obj_align(subtitle, LV_ALIGN_CENTER, 0, 0);
-
-    // Three primaries in a row: if the swap_bytes flag were wrong these would
-    // come out as three different, plausible, wrong colours rather than as
-    // nothing — which is why the check is coloured squares and not a message.
-    static const lv_color_t kSwatches[] = {
-        lv_palette_main(LV_PALETTE_RED),
-        lv_palette_main(LV_PALETTE_GREEN),
-        lv_palette_main(LV_PALETTE_BLUE),
-    };
-    for (int i = 0; i < 3; ++i) {
-        lv_obj_t *swatch = lv_obj_create(screen);
-        lv_obj_set_size(swatch, 60, 60);
-        lv_obj_set_style_bg_color(swatch, kSwatches[i], LV_PART_MAIN);
-        lv_obj_set_style_border_width(swatch, 0, LV_PART_MAIN);
-        lv_obj_remove_flag(swatch, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_align(swatch, LV_ALIGN_CENTER, (i - 1) * 70, 70);
-    }
-
-    lv_obj_t *dot = lv_obj_create(screen);
-    lv_obj_set_size(dot, 24, 24);
-    lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, LV_PART_MAIN);
-    lv_obj_set_style_bg_color(dot, lv_color_white(), LV_PART_MAIN);
-    lv_obj_set_style_border_width(dot, 0, LV_PART_MAIN);
-    lv_obj_add_flag(dot, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_remove_flag(dot, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_remove_flag(dot, LV_OBJ_FLAG_CLICKABLE);
-
-    lv_obj_add_flag(screen, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_user_data(screen, dot);
-    lv_obj_add_event_cb(
-        screen,
-        [](lv_event_t *event) {
-            auto *marker = static_cast<lv_obj_t *>(
-                lv_obj_get_user_data(static_cast<lv_obj_t *>(lv_event_get_current_target(event))));
-            lv_point_t point = {};
-            lv_indev_get_point(lv_indev_active(), &point);
-            lv_obj_remove_flag(marker, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_set_pos(marker, point.x - 12, point.y - 12);
-        },
-        LV_EVENT_PRESSING, nullptr);
-}
 
 }  // namespace
 
@@ -260,7 +197,14 @@ extern "C" void app_main(void) {
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "LVGL not started: %s", esp_err_to_name(err));
         } else {
-            ShowPlaceholder();
+            // The screens (§10.8), and the PMIC is handed to them rather than
+            // reached for — the same shape `timesync` gets the RTC in. A
+            // component that drew a battery by including `board.h` would be a
+            // component that cannot be built without this board (§10.14.2).
+            const esp_err_t screens_err = screens::Init(&board::Pmic());
+            if (screens_err != ESP_OK) {
+                ESP_LOGE(TAG, "screens not started: %s", esp_err_to_name(screens_err));
+            }
         }
     }
 }

@@ -35,11 +35,12 @@ protocol above it is not.** What exists is the whole of the hardware — the
 leased I²C bus and the chips on it, the panel and the touch, the codec, the
 buttons, the settings file on SPIFFS, the Wi-Fi radio with a manager above it,
 the clock and its SNTP half — a console on the USB port with a command per piece
-of it ([`commands.md`](commands.md) is the list), and a socket open to the NATS
-server on the LAN. What does not exist is anything §6 or §7 would recognise: no
-key, no signature, no request card, and no screen but the placeholder `main.cpp`
-draws. The table below is row by row about which is which, and the rows that
-still need the repository owner's sign-off say so.
+of it ([`commands.md`](commands.md) is the list), a socket open to the NATS
+server on the LAN, and **the first of §10.8's five screens: the clock face**,
+which is where the drift and the dimness an AMOLED needs stop being a paragraph
+and start being code. What does not exist is anything §6 or §7 would recognise:
+no key, no signature, no request card. The table below is row by row about which
+is which, and the rows that still need the repository owner's sign-off say so.
 
 | Scope | State |
 |-------|-------|
@@ -56,7 +57,7 @@ still need the repository owner's sign-off say so.
 | SNTP — `components/timesync` (§10.8.2) | **running on hardware**: on this board the radio walked its list, joined at 6.3 s, held an address at 8.4 s and the clock was set from `pool.ntp.org` at **13.1 s** — the boot case and the internet-appears case being the same one, as designed. `date` and `date sync` on the console, the RTC written back each time. `sync_policy.h` includes `<cstdint>` and nothing else, the way the navigator and the Wi-Fi policy do, so the schedule, the flap guard and the backoff run under Unity. What no board has reached is the **six-hour** interval and the backoff — a device has to be up that long to prove them |
 | Named time zones — `components/timezone` (§10.8.2) | **running on hardware**: 72 zones compiled in, `Europe/Kyiv` or plain `EET` rather than a POSIX rule, applied at boot from `config.json`. The clock stays UTC; a zone only changes what is printed and how a typed time is read |
 | AXP2101 — `components/pmic`, brought up from `board::Init()` (§10.1, §10.13) | **configured and reading on hardware**: TS pin silenced, ADC channels, VBUS limit, rail voltages, charge currents — all cross-checked against the vendor's `pmicpower` component — plus `SetAldo2`/`SetAldo3` for the audio and panel rails |
-| The panel and the touch — `components/display` (§10.1, §10.8) | **lit on hardware**: the CO5300 over QSPI with the vendor's init sequence, its reset driven as a PMIC rail through a callback, the CST9220 read under the I²C lease, and LVGL 9.4 on two 480×40 buffers. `display` on the console. No screens yet — §10.8's five are the next thing, and what is on the panel today is a placeholder that says so |
+| The panel and the touch — `components/display` (§10.1, §10.8) | **lit on hardware**: the CO5300 over QSPI with the vendor's init sequence, its reset driven as a PMIC rail through a callback, the CST9220 read under the I²C lease, and LVGL 9.4 on two 480×40 buffers. `display` on the console. The placeholder it used to carry is gone: what is on the glass now is the clock of §10.8.2, two rows below |
 | The navigation state machine — `components/ui` (§10.8.1) | **written and tested on the host**: which screen is up, the request card outranking everything, the bounded pending queue. Its header includes `<cstdint>` and nothing else and its `CMakeLists.txt` has an empty `REQUIRES`, which together are what make it testable without a board |
 | The boot splash — `spiffs_image/splash.bin`, `components/display/rawimage` (§10.8) | **running on hardware**: white katakana, on the glass for two seconds before LVGL owns it. Generated on the host by `tools/make-splash.ps1`, streamed off SPIFFS as raw RGB565 with no decoder |
 | The language and the layering (§10.14) — C++ except where C is forced, no dynamic memory, library layer before logic, the I²C bus leased | **decided, and what is written follows it**: every component below is C++, none of them contains a `new`, a `malloc`, a `std::vector` or a `std::function`, the tasks and their stacks are static, and nothing outside `components/i2cbus` touches `i2c_master_*`. What is still undemonstrated is the half that has no code: `main/` composing the logic rather than drawing a placeholder |
@@ -65,14 +66,15 @@ still need the repository owner's sign-off say so.
 | The LVGL host preview (§10.12.1) | installed and rendering. It was written down here as the only part of this folder that ran; it is now the part that runs with no board, alongside the host tests |
 | Bus reachable from the device at all (§10.3) | **decided**: shared on the home LAN, no TLS, no auth — the router is the trust boundary |
 | Firmware: registration, signing | not started — the bus underneath them is what exists |
-| The five screens — clock, limits, request, settings, Wi-Fi (§10.8) | specified, not started |
+| The five screens — clock, limits, request, settings, Wi-Fi (§10.8) | **one of five running**: the clock face (§10.8.2), on the board. The other four are specified and not started, and until the navigator has somewhere to send a swipe it is not wired to anything |
+| The clock face — `components/ui/clock_face.*` + `components/screens` (§10.8.2) | **running on hardware**: 24-hour seven-segment digits filled by a travelling wave, three indicators to the left of them (radio, bus, battery), the date under them, and the whole face drifting ±30/±40 px because the panel is an AMOLED. `--:--` rather than a plausible midnight when no believable time has arrived. `clock` on the console prints what is on the glass and why — which is how the drift and the water are checked without a camera. The deciding half is `<cstdint>`-only and host-tested (32 tests, 14 of 14 mutations caught); the painting half is LVGL and is the only file in the firmware that draws anything |
 | The Wi-Fi driver — `components/wifi` (§10.9) | **running on hardware**: two modes (access point, client), one network at a time, a latched link state, a disconnection reason turned into the three answers a person can act on, and a scan that works in both modes. It has **no opinions** — which network and when is the manager's, and that split is what makes the manager testable |
 | The internet check — `components/wifimgr/reachability.*` (§10.9) | **running on hardware**: once a minute, while there is a client link, an ICMP echo to one of a few addresses from `config.json` (8.8.8.8, 1.1.1.1, 9.9.9.9 by default). Three states — `unknown` is the honest one — two failed rounds to say offline and one reply to come back. `wifi ping` and `wifi check` on the console. **It never decides anything**: a link with no internet is reported, never a reason to change networks |
 | The Wi-Fi manager — `components/wifimgr` (§10.9) | **running on hardware, and tested on the host**: desired state (off / client / AP) against current, round-robin over the remembered networks with a growing capped backoff, sticky auth failures, and after N fruitless rounds a fallback access point that stays up for two minutes unless somebody attaches to it. `wifi` on the console. `wifi_policy.h` includes `<cstdint>` and nothing else, the way the navigator's does; the radio is lazily brought up, so a device with `wifi.active` false pays nothing for this existing. **It has joined a real network**, walked past one that refuses on the way, and come up on both DHCP and a fixed address — §10.9 has that run, and it is what makes the cycle, the fallback AP and the scan more than a proof against a network that does not exist. What no board has produced yet is a deliberate **auth failure**, which needs a network whose password is wrong on purpose |
 | The Wi-Fi screen (§10.8.6) | specified, not started — the manager underneath it is what exists |
 | Where the configuration lives (§10.15) | **decided**: all of it in JSON on SPIFFS, nothing of ours in NVS — with the cost stated (SPIFFS cannot be encrypted at rest). `spiffs_image/config.json` + `config.init.json` are flashed, and `components/config` is what reads them |
 | The `KEY`-at-boot config restore (§10.15) | specified, not started |
-| Host-tier tests (§10.11) — `host_test/` | **running**: 312 Unity tests over `ui`, `i2cbus`, `pmic`, `rtc`, `imu`, `audio`, `config`, `buttons`, `timezone`, `speaker`, `wifimgr`, `timesync` and `nats`, one command, no board. The drivers are compiled **unmodified** against a fake ESP-IDF (`host_test/fakes/`), which is §10.14.3's owed fake backend arriving in a different shape than that section specified, and which now covers I²S and a filesystem as well as the I²C wire. Built by MSVC rather than by ESP-IDF's `linux` target, which does not work on a Windows host — §10.11 records why |
+| Host-tier tests (§10.11) — `host_test/` | **running**: 344 Unity tests over `ui` (the navigator and the clock face), `i2cbus`, `pmic`, `rtc`, `imu`, `audio`, `config`, `buttons`, `timezone`, `speaker`, `wifimgr`, `timesync` and `nats`, one command, no board. The drivers are compiled **unmodified** against a fake ESP-IDF (`host_test/fakes/`), which is §10.14.3's owed fake backend arriving in a different shape than that section specified, and which now covers I²S and a filesystem as well as the I²C wire. Built by MSVC rather than by ESP-IDF's `linux` target, which does not work on a Windows host — §10.11 records why |
 | Protocol parity vectors (§10.11 tier 2) | not started |
 
 Read §10.3 before anything else: it is the one part of this that changes
@@ -1176,6 +1178,72 @@ answer — which is how a device with a perfect clock came to report `+1 s`.
   *behind* the true time. Systematically positive, and about a second of it is
   arithmetic rather than the crystal.
 
+##### What is written, and the five decisions inside it
+
+The split is §10.9's again, and this is the third component pair to take it —
+which is what makes the first screen in this firmware mostly a host-tested file:
+
+| File | What it is |
+|---|---|
+| `components/ui/clock_face.h/.cpp` | **`ui::ClockFace`** — every decision on this screen, and `<cstdint>` and nothing else. The sixth subject in this firmware to manage that, after the navigator, the Wi-Fi policy, the internet check, the sync schedule and the bus link |
+| `components/screens/clock_screen.h/.cpp` | the pixels: two custom-drawn objects, two labels, and a palette. No decisions |
+| `components/screens/screens.h/.cpp` | the task that reads the world at 10 Hz, runs the face, and applies the answer under a bounded LVGL lock. The counterpart of `wifimgr::Init` and `nats::Init`, and where the other four screens will join |
+
+**What the board has actually done**: come up with the panel at the brightness
+`config.json` asked for, shown `14:12` in green seven-segment digits with the
+water flowing through them, moved from `-21,-33` to `-18,-30` over three and a
+half seconds, reported the radio off as hollow bars, the bus as red — there is a
+`nats.url` and no network — and a full battery on a cable, in 1,128 bytes of a
+4 KB stack with **no** frame given up waiting for the display, and a heap that
+drifted 150 bytes in half a minute.
+
+Five things are decisions rather than plumbing:
+
+- **The digits are drawn as seven segments, not typed.** LVGL's built-in fonts
+  stop at Montserrat 48 and a clock on a 480×480 panel wants three times that;
+  the alternatives were generating a font — tens of kilobytes of flash and
+  `lv_font_conv`, a new host-side tool under root §1 — or shapes. Shapes won on
+  the dependency ledger and then paid a second time: §10.8.2's `--:--` is not a
+  missing glyph in this scheme, it is the middle segment on its own, and an
+  **unlit segment is not drawn at all** rather than shown as a ghost, because a
+  ghost is a permanently lit pixel on a panel that charges for those.
+- **The water is two interfering waves, and the interesting part is that it has
+  a floor.** One travelling wave is a wipe; two at different wavelengths going
+  opposite ways is water. The ramp it drives never reaches either end of the
+  scale — the top because a pure `0x00FF00` is what wears an AMOLED subpixel out
+  and is harsher to look at across a dark room, and the bottom because a trough
+  at zero breaks the digits into floating bands the eye reads as a fault. The
+  first version had no floor and looked exactly like that.
+- **The drift is a walk the model owns, not a modulo of the clock.** `now_ms %
+  period` would be one line shorter and would jump by most of the box once every
+  ~49 days when the millisecond counter wrapped, on a device whose whole job is
+  to sit on a desk being looked at. So the cycle is accumulated from elapsed
+  time, every period divides it exactly — `static_assert`ed — and the two axes
+  are at 3:5 so the path is a lattice of diagonals rather than a line it
+  retraces. The cost is stated: it **repeats** every sixteen minutes, which is
+  the trade taken for having no discontinuity at all.
+- **Each indicator has a state that is not a fault, and that is the whole design
+  of the three of them.** No `nats.url` is a hollow ring rather than a red one;
+  no battery is a shell with a bolt in it and the word `USB` rather than an empty
+  gauge; a radio switched off is hollow bars rather than a warning. §10.9 made
+  the same call about `unknown` being the honest answer, and a screen that spells
+  "nothing was asked of me" the same way as "I am broken" is a screen nobody
+  reads twice. The bus dot's green-with-a-hole — something arrived inside two
+  minutes — uses §10.8.3's staleness threshold rather than a new one.
+- **The load is split so that the water costs what the water costs.** The digits
+  are one draw target and the indicators are another, so a shimmer at 10 Hz
+  repaints 318×146 and not the battery; the PMIC is read once every two seconds
+  and **from the task, never from an LVGL callback** (§10.8.1), with a failed
+  lease leaving the last reading standing rather than blinking the icon out; and
+  the whole face is one object, so the drift is one `lv_obj_set_pos` and nothing
+  below it knows the panel is an AMOLED.
+
+What is **not** here, and is not an omission: the navigator (`ui/navigator.h`) is
+not wired to anything, because four of the five screens it can name do not exist
+and a swipe that reaches a blank screen is worse than a swipe that does nothing.
+`key_id` and the gear of §10.8.2's list are the same story — there is no
+registration to name and nothing to open.
+
 #### 10.8.3 Limits — the `status` document, when there is one
 
 A port of `approver-web`'s "model and limits plaque" onto the panel: the model
@@ -1767,14 +1835,15 @@ Three tiers, and the first one is where nearly everything belongs:
    already here for §10.12.1's LVGL preview, CMake and Ninja ship with
    ESP-IDF. One command, in [`working-with-code.md`](working-with-code.md).
 
-   **What is under it today is the navigator and four of the five chips on the
-   I²C bus, the settings file, the buttons, the zone table, the speaker, the
-   Wi-Fi policy, the internet check, the clock's sync schedule and the bus
-   link** — 312 tests:
+   **What is under it today is the navigator, the clock face and four of the
+   five chips on the I²C bus, the settings file, the buttons, the zone table,
+   the speaker, the Wi-Fi policy, the internet check, the clock's sync schedule
+   and the bus link** — 344 tests:
 
    | Subject | What is pinned |
    |---|---|
    | `components/ui` | every transition of §10.8's table; swipes that must *not* navigate on the settings and Wi-Fi screens; the settings screen being reachable from the clock **and from nowhere else**, and the Wi-Fi screen only from settings; a request preempting all four screens without moving any of them; navigation vanishing entirely while the card is up; the screen underneath surviving both an answer and an expiry; the pending queue refusing a fifth arrival. Its `CMakeLists.txt` has an empty `REQUIRES`, which is not an omission — a navigator that included LVGL would be a navigator that needs a board |
+   | `components/ui` (the clock face) | §10.8.2's rules, and the sixth subject in this firmware that needs no fake. **The time**: an unset clock showing dashes rather than a plausible `00:00`, a year outside the RTC's own 2024..2099 refused at each end, the digits being 24-hour with their leading zeros, and a wall clock out of range showing dashes rather than rendering an hour of 74. **The three indicators**: a connected link never showing *no* bars, because an empty icon reads as "not connected"; the connecting animation never being blank; an access point and a switched-off radio both lighting none; no server configured being a shape rather than a red light; the two-minute traffic window opening on a delivery, closing on time, surviving the ~49-day wrap, **not** opening on the first reading of a counter that was already non-zero, and **not** opening on a counter that went backwards — which is a reconnect (§10.5) rather than a message; traffic never showing through a dropped link; and a battery percentage clamped, with negative meaning "nothing to ask" rather than empty. **The panel's own two**: the drift staying inside its box, reaching all four corners of it, never standing still, and being continuous across the millisecond wrap — the last of which is the only test that catches a cycle read as `now_ms % period`; and the water bounded away from both ends of the scale, travelling with the phase, varying down the face, and free of hard edges. Plus `Wave` interpolating rather than reading its 64-entry table flat, which is here because the mutation pass showed that breaking it was invisible through `Shimmer` |
    | `components/i2cbus` | §10.14.3's three: contention, an acquire that **times out rather than blocks** (asserted as the tick count it asked for, which is why the fake mutex never sleeps), and a recovery that clocks SCL nine times and drops the device handles with the old bus. Plus the device table's per-device clock, its reopen-on-speed-change, and its refusal when full. And **the non-recursive mutex, from both sides**: `AddDevice` called while a lease is held is refused rather than granted — the trap `es8311.h` records — and `Recover`, which used to skip the lease entirely, now waits for it and tears nothing down if it cannot have it |
    | `components/pmic` | the 13-bit battery field against the 14-bit ones — the width that gives a *plausible* wrong voltage when wrong; the TS-pin silencing and the ADC read-modify-write; VBUS needing both status bits; `PowerOff` refusing over USB **and writing nothing**; `Read` being one snapshot rather than a dozen moments; and the two halves of the vendor's rail guard — a rail already at 3.3 V is not rewritten (DCDC1 supplies the C6, so a pointless write is a risk with no upside) and one at the wrong voltage is, with the bits above the field kept |
    | `components/rtc` | BCD both ways; the seven counters in one burst; the OS flag making a *successful* read untrustworthy, and being masked out of the seconds it shares a register with; the clock stopped and restarted around a write — including after a write that failed; and the century this chip does not have, so 2100 and 1999 are refused before the bus is touched while 2099 goes through |
@@ -1846,6 +1915,25 @@ Three tiers, and the first one is where nearly everything belongs:
    A third mutation would not compile, for the reason this section already
    records: `/W4 /WX` makes the code a mutation orphans into an error, so
    short-circuiting a branch has to leave nothing unreachable behind it.
+
+   **The clock face added fourteen, all caught, and one of them only after the
+   test was rewritten.** Thirteen went the ordinary way: the dashes, both ends
+   of the believable-year range, a weak signal lighting no bars, the traffic
+   baseline, the backwards counter, the two-minute window, traffic showing
+   through a dropped link, the cycle read off the absolute millisecond counter,
+   the water's floor, the drift collapsed onto one diagonal, the drift standing
+   still, and a connecting animation showing nothing.
+
+   The fourteenth is the useful one. Reading the sine table **flat** instead of
+   interpolating it survived — and it survived because the smoothness test's
+   threshold was loose enough to admit both: the difference between the two is
+   about three units of intensity out of 255, which is invisible through
+   `Shimmer` and would have been invisible on the glass. §10.11's rule says a
+   survivor is a question about the code, and the answer was that the property
+   needed pinning one level down: `Wave` is public now, and the test counts how
+   many distinct values it takes over its 256 angles — 64 entries read flat
+   cannot produce more than 64, and interpolation produces most of the scale.
+   The claim in the code and the assertion in the test are the same claim now.
 
    **The bus link added eleven, one survivor, and a warning about the ritual
    itself.** Ten were caught — the backoff's growth and its cap taken away
@@ -1928,15 +2016,18 @@ Three tiers, and the first one is where nearly everything belongs:
    the firmware: the sources under test are the ones that ship, and that rule
    is worth more than the tidiness of not having the header.
 
-   Three things the screens add to it, all of them logic rather than pixels:
-   **the navigation state machine** (a request preempts every screen; it cannot
-   be dismissed; what was underneath comes back with its state — §10.8.1), **the
-   Wi-Fi state machine** (backoff bounded, auth failure sticky and distinct from
-   "not found", `forget` returning to `NO_CREDENTIALS` — §10.9), and **the
-   limits screen's arithmetic**: `countdown()` against `render.rs`'s cases, the
-   staleness threshold, and the §9.2 gauge scales pinned exactly as `render.rs`
-   and `statusline.ts` pin them, including the assertion that the two scales
-   cannot drift into each other.
+   Three things the screens add to it, all of them logic rather than pixels, and
+   two of the three are now in the table above: **the navigation state machine**
+   (a request preempts every screen; it cannot be dismissed; what was underneath
+   comes back with its state — §10.8.1) and **the Wi-Fi state machine** (backoff
+   bounded, auth failure sticky and distinct from "not found", `forget` returning
+   to `NO_CREDENTIALS` — §10.9) both are, and the clock face joined them. What is
+   still owed is **the limits screen's arithmetic**: `countdown()` against
+   `render.rs`'s cases, the staleness threshold, and the §9.2 gauge scales pinned
+   exactly as `render.rs` and `statusline.ts` pin them, including the assertion
+   that the two scales cannot drift into each other. Note the one the clock face
+   already shares with that screen: its two-minute traffic window is §10.8.3's
+   staleness threshold, and the two must not drift apart either.
 2. **Cross-language parity vectors**, mirroring what `approver-web` does with
    `protocol.test.ts`: fixtures generated by the Python implementation itself and
    compiled into the host tests, so "does the device still speak §7?" is a
@@ -2002,7 +2093,15 @@ The numbers §10.12 asks for, taken with `idf.py size-components`: the whole
 `nats` component, header-only client included, is **36,438 bytes** (25,773 of
 them flash text, and 10,665 of DIRAM that is mostly the task's 8 KB stack), and
 `espressif__esp_websocket_client` has no line at all — built, never linked. The
-app is **1,616,986 bytes** against a 2.5 MB slot.
+app is **1,630,784 bytes** against a 2.5 MB slot.
+
+And the clock of §10.8.2, because it is the first screen and therefore the first
+data point for what four more of them cost: `libscreens.a` is **10,132 bytes**
+(5,700 of flash and 4,432 of DIRAM, of which 4 KB is the task's stack) and
+`libui.a` — the navigator and the whole of the clock face's arithmetic, sine
+table included — is **1,204 bytes**, all of it flash. That ratio is the §10.14.2
+split showing up in the size report: the half with every decision in it is the
+cheap half.
 
 **These figures are a snapshot and drift with every commit**, which is worth
 saying once rather than re-taking them silently: the three recorded before this
@@ -2073,7 +2172,13 @@ Two rules about believing what it shows:
 ### 10.13 Not in scope, but decided
 
 - **Build it in this order** — after the library layer of §10.14, which comes
-  before all of it. The screens themselves are not equally load-bearing:
+  before all of it. The screens themselves are not equally load-bearing.
+  **The clock was built out of turn**, at the repository owner's request, and it
+  is worth saying so rather than quietly renumbering: it is step 3 below and it
+  arrived before step 1. What that bought was the AMOLED question — the drift and
+  the dimness — answered in code on the panel that has the problem, rather than
+  answered for the first time under the one screen that must not be got wrong.
+  What it did not do is move the order for the rest:
   1. bus + registration + the **request** screen (§10.8.4) — the loop closes here,
      and until it does the rest is decoration;
   2. **Wi-Fi** (§10.9) and its screen — until then, credentials compiled in or set

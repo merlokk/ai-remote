@@ -27,6 +27,7 @@
 #include "lvgl_display.h"
 #include "nats_link.h"
 #include "qmi8658.h"
+#include "screens.h"
 #include "speaker.h"
 #include "storage.h"
 #include "timesync.h"
@@ -2198,9 +2199,114 @@ int CmdAudio(int argc, char **) {
 //
 // It is **state, not settings**: `config` prints what the file says, this
 // prints what the device is doing, and the two answer different questions.
+// The clock screen (CLAUDE.md §10.8.2), and the one command here whose subject
+// the operator can already see. It exists anyway for two reasons: a screen is the
+// only output of this firmware that cannot be captured from a script, so "the
+// drift is moving" and "the water is flowing" would otherwise be claims nobody
+// can check without a camera; and it says *why* an indicator is the colour it is,
+// which the glyph itself cannot.
+//
+// It reads `screens::Get()` — a snapshot the screen task keeps — and never
+// touches a widget: §10.8.1 gives the display to one task, and a console command
+// is not it.
+int CmdClock(int argc, char **) {
+    if (argc != 1) {
+        printf("usage: clock     what the clock screen is showing, and why\n");
+        return 1;
+    }
+
+    const screens::Status status = screens::Get();
+    if (!status.ready) {
+        printf("screen     not running — the panel or LVGL did not come up\n");
+        return 1;
+    }
+    const ui::ClockView &view = status.view;
+
+    if (view.time_valid) {
+        printf("face       %d%d:%d%d\n", view.digit[0], view.digit[1], view.digit[2],
+               view.digit[3]);
+    } else {
+        // §10.8.2: dashes, not a plausible 00:00. Saying so here as well, because
+        // "the screen shows dashes" and "the screen is broken" look the same from
+        // across a room.
+        printf("face       --:--  no believable time yet — 'date set' or a sync\n");
+    }
+
+    // The two numbers that say the AMOLED is being looked after: where the face
+    // is inside its box, and where the water is in its cycle. Both move on their
+    // own, so two runs of this command a second apart are the check.
+    printf("drift      %+d,%+d px of +-%d,+-%d\n", static_cast<int>(view.drift_x),
+           static_cast<int>(view.drift_y), static_cast<int>(ui::ClockFace::kDriftX),
+           static_cast<int>(ui::ClockFace::kDriftY));
+    printf("water      phase %u of 256, %u ms per cycle\n", static_cast<unsigned>(view.phase),
+           static_cast<unsigned>(ui::ClockFace::kPhasePeriodMs));
+
+    const char *wifi = "off";
+    switch (view.wifi) {
+        case ui::WifiIcon::kOff:
+            wifi = "off — hollow bars";
+            break;
+        case ui::WifiIcon::kConnecting:
+            wifi = "connecting — the bars cycle";
+            break;
+        case ui::WifiIcon::kClient:
+            wifi = "client";
+            break;
+        case ui::WifiIcon::kAp:
+            wifi = "access point — hollow bars with a T in them";
+            break;
+    }
+    printf("wifi       %s, %u of %u bar(s) lit\n", wifi, static_cast<unsigned>(view.bars),
+           static_cast<unsigned>(ui::ClockFace::kMaxBars));
+
+    const char *bus = "";
+    switch (view.bus) {
+        case ui::BusIcon::kOff:
+            bus = "hollow — no server configured, which is not a fault";
+            break;
+        case ui::BusIcon::kDown:
+            bus = "red — there is a server and we are not on it";
+            break;
+        case ui::BusIcon::kUp:
+            bus = "green — connected, nothing has arrived lately";
+            break;
+        case ui::BusIcon::kActive:
+            bus = "green with a hole — something arrived in the last 2 min";
+            break;
+    }
+    printf("bus        %s\n", bus);
+
+    const char *battery = "";
+    switch (view.battery) {
+        case ui::BatteryIcon::kAbsent:
+            battery = "no cell on the connector, running off the cable";
+            break;
+        case ui::BatteryIcon::kDischarging:
+            battery = "on the battery";
+            break;
+        case ui::BatteryIcon::kCharging:
+            battery = "charging";
+            break;
+        case ui::BatteryIcon::kExternal:
+            battery = "cable in, not taking current";
+            break;
+    }
+    printf("battery    %s", battery);
+    if (view.battery_known) {
+        printf(", %u%%", static_cast<unsigned>(view.battery_percent));
+    }
+    printf("\n");
+
+    printf("updates    %" PRIu32 ", %" PRIu32 " gave the frame up waiting for the display\n",
+           status.updates, status.lock_misses);
+    printf("stack      %" PRIu32 " byte(s) never used, of %" PRIu32 "\n", status.stack_low_water,
+           screens::kTaskStackBytes);
+    return 0;
+}
+
 int CmdDevStatus(int argc, char **) {
     if (argc != 1) {
-        printf("usage: devstatus     everything at once: the board, the chips, time, wi-fi\n");
+        printf("usage: devstatus     the board, the chips, the screen, time and the network\n");
         return 1;
     }
 
@@ -2216,6 +2322,8 @@ int CmdDevStatus(int argc, char **) {
         {"imu", &CmdImu},         {"audio", &CmdAudio},     {"display", &CmdDisplay},
         // `date` carries the clock **and** where its time came from, which is
         // why there is no separate sync section.
+        // And the screen, after the panel it is drawn on.
+        {"clock", &CmdClock},
         {"date", &CmdDate},       {"wifi", &CmdWifi},
         // And the bus after the network that carries it, which is also the
         // order in which one of them being wrong stops the next from working.
@@ -2237,7 +2345,7 @@ int CmdDevStatus(int argc, char **) {
 const esp_console_cmd_t kCommands[] = {
     {
         .command = "devstatus",
-        .help = "everything at once: the board, every chip, the clock and wi-fi",
+        .help = "everything at once: the board, every chip, the screen, the time and the network",
         .hint = nullptr,
         .func = &CmdDevStatus,
         .argtable = nullptr,
@@ -2249,6 +2357,15 @@ const esp_console_cmd_t kCommands[] = {
         .help = "firmware, IDF and chip versions, running slot, uptime, heap, storage",
         .hint = nullptr,
         .func = &CmdStatus,
+        .argtable = nullptr,
+        .func_w_context = nullptr,
+        .context = nullptr,
+    },
+    {
+        .command = "clock",
+        .help = "what the clock screen shows: the time, the drift, and why each icon is that colour",
+        .hint = nullptr,
+        .func = &CmdClock,
         .argtable = nullptr,
         .func_w_context = nullptr,
         .context = nullptr,
