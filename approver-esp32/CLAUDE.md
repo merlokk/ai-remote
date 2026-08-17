@@ -321,10 +321,19 @@ display/touch drivers. The exact number is the vendor's to state, and it has
 moved: the published examples now live in
 [`02_Example/ESP-IDF-v5.5.3`](https://github.com/waveshareteam/ESP32-C6-Touch-AMOLED-2.16/tree/main/02_Example/ESP-IDF-v5.5.3),
 so **v5.5.3** is what a pin should say, not the v5.5.2 this section carried
-before. Pin it (`idf_component.yml` + a note in the README), the way `uv.lock`
-and `Cargo.lock` pin the rest of the repo. **What is installed on this machine
-is v6.0.2** — §10.12 is where that conflict gets settled, and
-[`working-with-code.md`](working-with-code.md) has the paths.
+before. **What is installed on this machine is v6.0.2** — §10.12 is where that
+conflict got settled, and [`working-with-code.md`](working-with-code.md) has the
+paths.
+
+**And it was settled against a pin, so the manifest deliberately does not carry
+one.** `main/idf_component.yml` says `idf: ">=5.5"` — a floor, not the pin this
+paragraph originally asked for — because §10.12 found that the version-sensitive
+half builds on v6.0.2 and that nothing left in this project has a claim on
+v5.5.3. What v5.5.3 still is: the version the vendor's examples are written
+against, and therefore the one to reach for if a display or touch problem ever
+looks like a framework problem. What holds the *rest* of the versions is
+`dependencies.lock`, committed, and that is where the `uv.lock` comparison
+actually lands.
 
 In-tree, arriving with ESP-IDF itself and needing no new supply chain:
 
@@ -370,7 +379,7 @@ can act on:
 
 | §10.4 said | It is | Why |
 |---|---|---|
-| "CO5300 panel driver" | **`espressif/esp_lcd_sh8601` 2.0.1** | there is no CO5300 component on the registry, and the vendor's own ESP-IDF example drives this board with the SH8601 driver. The two share the QSPI command set, and everything specific to this glass arrives as the init list in `components/display/panel.cpp` — copied from that example, because a panel init sequence is not something to derive from a datasheet and hope |
+| "CO5300 panel driver" | **`espressif/esp_lcd_sh8601` 2.0.1~1** | there is no CO5300 component on the registry, and the vendor's own ESP-IDF example drives this board with the SH8601 driver. The two share the QSPI command set, and everything specific to this glass arrives as the init list in `components/display/panel.cpp` — copied from that example, because a panel init sequence is not something to derive from a datasheet and hope |
 | "CST9220 touch driver" | **`waveshare/esp_lcd_touch_cst9217` 1.0.4** | the part number in the board's documentation is CST9220 and the driver Waveshare publishes for it is `cst9217`. Not a discrepancy to resolve — the driver prints `Chip Type: 0x9220` when it probes this board, so it knows perfectly well what it is talking to. It brings `espressif/esp_lcd_touch` with it, which is the interface `esp_lvgl_port` also speaks |
 
 And one the vendor took differently, where §10.4's choice was kept: Waveshare's
@@ -382,7 +391,24 @@ depends on nothing but LVGL, covers the same ground, and is what §10.4 approved
 
 **LVGL is 9.4.0**, which is not 9.5 — §10.12.1's rule that the host preview and
 the firmware must be the same minor version is now a live constraint rather
-than a note: the simulator ships 9.5.
+than a note: the simulator ships 9.5. Note where that constraint is actually
+held: `main/idf_component.yml` says `^9.3.0`, which a fresh resolve would float
+to 9.5 the moment one is published; what pins 9.4.0 today is `dependencies.lock`.
+That is the `uv.lock` model and it is the intended one, but it means a
+`idf.py update-dependencies` is a decision about the preview as well as about the
+firmware.
+
+**Two transitive components arrive that this table has not named**, and root §1
+asks about exactly those. Both are on the display side and neither is a question
+of weight:
+
+| Transitive | Version | From | What it is |
+|---|---|---|---|
+| `espressif/esp_lcd_touch` | 1.2.1 | `waveshare/esp_lcd_touch_cst9217` | the common touch interface, named in the row above; this is the version it resolved to, and 1,437 bytes of flash next to the driver's own 2,343 |
+| `espressif/cmake_utilities` | 0.5.3 | `espressif/esp_lcd_sh8601` | build-system helpers — CMake functions the panel driver's own `CMakeLists` calls. **No code of it reaches the firmware**: `idf.py size-components` has no line for it, the same way it has none for the WebSocket client, and for a stronger reason — there is nothing in it to link |
+
+The third transitive component is `espressif/esp_websocket_client`, which is a
+different kind of answer and has the section below to itself.
 
 **And the whole display half resolved and built on ESP-IDF v6.0.2**, which is
 the first real evidence in the v5.5.3-versus-v6.0.2 argument of §10.12 — see
@@ -419,7 +445,8 @@ raised here rather than buried:
   `libespressif__esp_websocket_client.a` at all — the archive is built and
   never linked, because no symbol in it is referenced. The whole `nats`
   component, the header-only client instantiated inside it included, is
-  **32,218 bytes** (25,649 of them flash text);
+  **36,438 bytes** — 25,773 of them flash text and most of the rest the task's
+  8 KB stack (§10.5 says what bought that);
 - **it is compiled out, and the way that has to be done is a contradiction
   inside the dependency.** Because the component is always present, its
   CMakeLists puts `-DCONFIG_ESP_WEBSOCKET_CLIENT_ENABLE=1` on the command line
@@ -636,8 +663,11 @@ by `py approver/registration_handler.py --get-token approver-esp32`. Typing that
 on a 2.16″ touchscreen is a bad joke, so registration is driven over **USB**,
 through `esp_console` on the USB Serial/JTAG port:
 
-The four commands this section owes — `register <token>`, `keys`, `forget` and
-`bus <url>` — do not exist yet. **The ones that do are listed, with what each
+Three of the four commands this section owes — `register <token>`, `keys` and
+`forget` — do not exist yet. The fourth, `bus <url>`, does: it is **`nats
+url <url>`**, alongside a status readout and the `sub` / `pub` pair that made
+the bus visible on the wire, and it grew subcommands for the same reason `wifi`
+did. **The ones that exist are listed, with what each
 of them does, in [`commands.md`](commands.md)**, and that file is the reference
 rather than this one: a list of commands in a design document is a list that
 goes stale the first time somebody adds a subcommand and updates the code.
@@ -658,8 +688,8 @@ how §10.15's files are read back off a device without a reflash, and it was the
 first thing to prove the SPIFFS image had actually landed.
 
 **`devstatus` is all of them at once, and it is composed rather than written.**
-It calls `status`, `power`, `buttons`, `imu`, `audio`, `display`, `date` and
-`wifi` in turn instead of printing its own version of each — a second copy of
+It calls `status`, `power`, `buttons`, `imu`, `audio`, `display`, `date`, `wifi`
+and `nats` in turn instead of printing its own version of each — a second copy of
 the `power` readout would drift from the first the day somebody adds a field to
 one of them, which is the drift the four-places rule above exists to prevent.
 
@@ -720,11 +750,14 @@ looks complete is worse than a short one that admits it. That is the rule
 §10.15 states for parsing the config, arrived at from the other direction.
 
 `ls` also has nothing to recurse into — **SPIFFS is flat**, so its output is the
-whole filesystem rather than one level of it, and `2 file(s), 1626 bytes` next
-to `partition 2259 of 10474481 bytes used (0%)` is the filesystem's own overhead
-made visible. The percentage is there because neither absolute answers "is this
-filling up" at a glance against an 11 MB partition — and `(0%)` is the honest
-reading of two config files in it, not a bug.
+whole filesystem rather than one level of it, and it prints two totals rather
+than one: the bytes in the files it listed, and the bytes the partition itself
+reports used. They never match, and that gap is the filesystem's own overhead
+made visible. The percentage is beside them because neither absolute answers "is
+this filling up" at a glance against an 11 MB partition. What is in the image
+today reads as about six per cent, and nearly all of it is `splash.bin` and the
+two sounds rather than anything the device wrote — which is the shape to expect
+rather than a number to check: `spiffs_image/` is where that figure moves.
 
 **`imu` prints a magnitude, and that line is the point of the command.** Six
 plausible-looking numbers say nothing on their own: a range bit that did not
@@ -1391,8 +1424,10 @@ And one in the manager: **the radio is brought up lazily.** The shipped
 `config.json` has `wifi.active` false, and a device configured with the radio
 off should pay nothing for this component existing. The static cost that is
 always paid is 1.5 KB of scan buffer and a 4 KB task stack — `idf.py
-size-components` puts `libwifi.a` at 5,098 bytes and `libwifimgr.a` at 7,379,
-against the framework's ~415 KB of flash for `net80211` + `pp` + `lwip` that
+size-components` puts `libwifi.a` at 6,260 bytes and `libwifimgr.a` at 9,457
+(5,098 and 7,379 when this was first written — §10.12 says why these are a
+snapshot), against the framework's ~415 KB of flash for `net80211` + `pp` +
+`lwip` that
 arrive the first time any of it is linked.
 
 **What laziness is saving is 41 KB of RAM, and off gives it back.** Bring-up is
@@ -1901,9 +1936,19 @@ the version's (§10.4). So **libsodium is the last unmeasured entry on §10.4's
 list**, and nothing left in this project has a claim on v5.5.3.
 
 The numbers §10.12 asks for, taken with `idf.py size-components`: the whole
-`nats` component, header-only client included, is **32,218 bytes** (25,649 of
-them flash text), and `espressif__esp_websocket_client` has no line at all —
-built, never linked. The app is **1,616,744 bytes** against a 2.5 MB slot.
+`nats` component, header-only client included, is **36,438 bytes** (25,773 of
+them flash text, and 10,665 of DIRAM that is mostly the task's 8 KB stack), and
+`espressif__esp_websocket_client` has no line at all — built, never linked. The
+app is **1,616,986 bytes** against a 2.5 MB slot.
+
+**These figures are a snapshot and drift with every commit**, which is worth
+saying once rather than re-taking them silently: the three recorded before this
+pass (`nats` 32,218, `libwifi.a` 5,098, `libwifimgr.a` 7,379) were all short by
+the time anybody read them back, and the one that had barely moved was the app
+total. The point of recording them is the *shape* — a header-only client that
+costs 25 KB of text and no WebSocket transport at all, a radio whose flash cost
+is the framework's and not ours — and a number that disagrees with this
+paragraph by a few per cent is the paragraph being old, not a regression.
 
 The targets this install has support for are `esp32`,
 `esp32c6`, `esp32p4` and `esp32s3`, so `set-target esp32c6` is not the blocker.
@@ -2500,7 +2545,9 @@ decision above, should it ever be taken.
 - **What is committed carries placeholders.** `spiffs_image/config.json` is in
   git and now *is* the real store, which makes the temptation to leave a working
   WPA key in it much stronger than before. `CHANGEME` is what belongs there; a
-  real key committed once is a real key in the history.
+  real key committed once is a real key in the history. **`nats.url` is the one
+  deliberate exception** — a real address, committed, and argued below rather
+  than left to look like an oversight.
 
 #### What is written, and the shape the files now have
 
@@ -2520,6 +2567,29 @@ why: it names somebody else's machine, so an absent one means "do not sync"
 rather than "sync against whatever this firmware was built believing". Empty
 and absent are the same answer, and `time.syncHours: 0` is the third spelling
 of it.
+
+**`nats.url` is the string that goes the other way, and it deserves saying out
+loud because it is committed twice over.** `config.init.json`, `config.json` and
+`config::FillDefaults` all name `nats://192.168.11.70:4222` — this LAN's server,
+in git, and in the binary. That is deliberate on the same reasoning that leaves
+`sntp` empty, reaching the opposite answer: an NTP host is a stranger's machine
+and the bus is the operator's own, so a restored device that connects beats one
+that has to be told over USB where its bus is. What it costs is honest and
+small — a private address is not a secret (§10.3 already put the bus on the LAN),
+but it *is* a fact about one household baked into the defaults, so a second
+device on a different network needs `nats url` and a `config save` rather than
+just a flash. If this project ever ships to a second bus, the compiled-in default
+is the line to empty, and "no server" already means "off" (§10.5) so nothing else
+has to change.
+
+`internet.targets` is the third field that names machines and it lands in neither
+camp, which is what makes the pair above a judgement rather than a rule:
+8.8.8.8 / 1.1.1.1 / 9.9.9.9 are strangers and they *do* have compiled-in
+defaults, because an ICMP echo tells them nothing and there are three of them
+precisely so that none is depended on. The question each of the three answers is
+the same one — what does this device do to somebody else's machine, and what
+breaks if that machine is not there — and it comes out differently for a clock,
+a bus and a ping.
 
 **An access-point block is back, and it is not the one that was deleted.** The
 house firmware's was a device whose *normal* mode was to serve a web UI over
