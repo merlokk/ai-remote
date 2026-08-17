@@ -1,8 +1,16 @@
 // The entry point. `main/` stays thin (CLAUDE.md §10.14.2): the library layer
-// lives in `components/`, the logic on top of it, and neither exists yet.
+// lives in `components/` and the logic goes on top of it — the layer is written
+// and the logic is not, so what this file does today is **compose**, in an order
+// that is written down rather than implied, and draw a placeholder at the end of
+// it because §10.8's screens do not exist yet.
 //
-// The one thing this does today is print which partition it booted from, which
-// is what says the custom table of `partitions.csv` actually took effect.
+// What it composes: the filesystem, the settings on it, the zone, the board and
+// its chips, the console, the radio, the clock's network half, the bus — then
+// the two settings that have hardware to reach (volume, brightness), then the
+// splash and the boot chime, then LVGL. Every step below says why it is where it
+// is; the one rule none of them breaks is that a failure here is a log line and
+// not a branch (§10.10: a device that cannot mount its storage should still come
+// up far enough to say so).
 
 #include <cinttypes>
 
