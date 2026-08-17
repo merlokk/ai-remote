@@ -22,7 +22,11 @@ statusline-config.json
 # absolute path to the PermissionRequest hook's interpreter — nothing another
 # checkout can use. (`.claude/settings.json` is project-wide and IS committed:
 # it wires up the status line, §9.5.)
-.claude/settings.local.json
+#
+# **Unanchored, because a session started inside a subfolder makes that folder
+# the project root** and Claude Code writes a `.claude/` there too — the pattern
+# with a leading path would have covered only this directory's.
+**/.claude/settings.local.json
 
 # IDE
 .idea/
