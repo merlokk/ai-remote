@@ -490,7 +490,7 @@ three, which is why either way stays small.
 
 Sends:
 
-- `CONNECT {"verbose":false,"pedantic":false,"name":"approver-esp32","protocol":1}` — no credentials, per §10.3; `user`/`pass` or `auth_token` only if that bus ever gains auth
+- `CONNECT {…}` — no credentials, per §10.3; `user`/`pass` or `auth_token` only if that bus ever gains auth. **What actually goes on the wire is the library's, not ours, and it is not what this line used to claim** — see below
 - `SUB approvals.* approvers 1` — the queue group is not optional (§6)
 - `SUB status 3` — read-only, **no queue group** (§10.8.3): a broadcast current value is meant to reach every subscriber, and joining a group would mean taking it from the other watchers
 - `SUB <inbox> 2` — one private inbox for the registration reply, `_INBOX.<32 random hex>`
@@ -505,6 +505,31 @@ Everything the request-reply pattern needs is in that `MSG` line: **the
 `reply-to` field is the inbox to `PUB` the decision into.** There is no
 correlation to invent and no state to keep beyond "which reply subject belongs to
 the card on screen".
+
+**The `CONNECT` line above was written from this specification and the wire
+disagrees with it**, which is worth the paragraph because the correction is not
+only pedantic. `debsahu/espidf-nats` builds the handshake itself and sends
+`verbose`, `pedantic`, `lang`, `version`, `protocol`, `headers` and
+`no_responders` — and **no `name` field at all**. The server confirms it: this
+device shows up in `/connz` as `name: null, lang: "espidf", version: "1.4.0"`.
+
+Two things follow, and the second is the one that costs something:
+
+- `"headers":true` and `"no_responders":true` are advertised on every connect,
+  which is the client saying it *can* take those, not this firmware using them.
+  §10.4's rule that unused is not absent applies as written: nothing here sends
+  or reads a header.
+- **the responder is anonymous on the bus.** §10.2 gives it a `key_id` precisely
+  so that it can be told apart, and `/connz` is where an operator looks when two
+  clients are on one subject and only one of them is answering — so "which of
+  these is the device" is a question the bus cannot currently answer, and it will
+  matter the first time the YubiKey responder and this device are both up (§6's
+  "Multiple clients"). It is not fixable from here: `NATS_CLIENT_LANG` and
+  `NATS_CLIENT_VERSION` are unguarded `#define`s in the component's `config.h`
+  rather than `#ifndef`-wrapped like its `NATS_CONF_*` knobs, and there is no
+  name field in the `CONNECT` builder to fill in. So it is a patch upstream or a
+  vendored fork, both of which cost more than the problem does today — recorded
+  here rather than fixed, and the fallback is that the IP identifies it.
 
 Behaviour that is not about the protocol but about this repo's rules. With a
 third-party client these stop being things to implement and become things to
