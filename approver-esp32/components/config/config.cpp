@@ -430,83 +430,12 @@ esp_err_t Serialise(const Data &in, size_t *length) {
 }
 
 esp_err_t WriteAtomically(const char *contents, size_t length) {
-    char temp_path[storage::kMaxPathLength];
-    char final_path[storage::kMaxPathLength];
-    if (!storage::ResolvePath(kTempPath, temp_path, sizeof(temp_path)) ||
-        !storage::ResolvePath(kPath, final_path, sizeof(final_path))) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    FILE *file = fopen(temp_path, "wb");
-    if (file == nullptr) {
-        ESP_LOGE(TAG, "open %s failed: errno %d", temp_path, errno);
-        return ESP_FAIL;
-    }
-    const size_t written = fwrite(contents, 1, length, file);
-    // Both of these can fail on a full filesystem, and a close that failed is a
-    // file that may not be on the medium — so the rename is not attempted.
-    const bool flushed = fflush(file) == 0;
-    const bool closed = fclose(file) == 0;
-    if (written != length || !flushed || !closed) {
-        ESP_LOGE(TAG, "write %s failed: %u of %u bytes, flush %d, close %d, errno %d", temp_path,
-                 static_cast<unsigned>(written), static_cast<unsigned>(length), flushed, closed,
-                 errno);
-        remove(temp_path);
-        return ESP_FAIL;
-    }
-
-    // **SPIFFS will not rename onto an existing name.** It answers EIO (errno 5)
-    // rather than replacing, which is measured on this board, not assumed — so
-    // the old file has to go first, and the window between the two is real: a
-    // power cut there leaves no `config.json` and a complete `config.json.new`.
-    // `RecoverInterruptedWrite` closes that window at the next boot, which is
-    // what keeps §10.15's promise that a write cannot half-happen.
-    remove(final_path);
-    if (rename(temp_path, final_path) != 0) {
-        ESP_LOGE(TAG, "rename %s -> %s failed: errno %d", temp_path, final_path, errno);
-        return ESP_FAIL;
-    }
-    return ESP_OK;
-}
-
-// The other half of the write above. Three states can be on the filesystem at
-// boot, and only one of them is ambiguous:
-//
-//   * no `config.json.new` — nothing was interrupted;
-//   * both files — the crash happened before the old one was removed, so the
-//     temp is a leftover and the config is intact: drop the temp;
-//   * only `config.json.new` — the crash landed in the window between the
-//     remove and the rename. The temp is a *complete* file that never got its
-//     name, so finishing the rename is the recovery, and restoring defaults
-//     would throw away a good config for no reason.
-void RecoverInterruptedWrite() {
-    char temp_path[storage::kMaxPathLength];
-    char final_path[storage::kMaxPathLength];
-    if (!storage::ResolvePath(kTempPath, temp_path, sizeof(temp_path)) ||
-        !storage::ResolvePath(kPath, final_path, sizeof(final_path))) {
-        return;
-    }
-
-    FILE *temp = fopen(temp_path, "rb");
-    if (temp == nullptr) {
-        return;
-    }
-    fclose(temp);
-
-    FILE *final_file = fopen(final_path, "rb");
-    if (final_file != nullptr) {
-        fclose(final_file);
-        ESP_LOGW(TAG, "%s left over from an interrupted write; removed", kTempPath);
-        remove(temp_path);
-        return;
-    }
-
-    if (rename(temp_path, final_path) == 0) {
-        ESP_LOGW(TAG, "%s was interrupted mid-replace; %s recovered from %s", kPath, kPath,
-                 kTempPath);
-    } else {
-        ESP_LOGE(TAG, "%s exists but could not be renamed into place: errno %d", kTempPath, errno);
-    }
+    // **The dance itself moved to `storage`** (§10.15): SPIFFS will not rename
+    // onto an existing name, so the write is temp → remove → rename, and the
+    // window that opens is closed at the next boot. There are two files that need
+    // that now — this one and the registration of §10.7 — and a second copy of it
+    // would be the copy that drifts.
+    return storage::WriteFileAtomically(kPath, kTempPath, contents, length);
 }
 
 }  // namespace
@@ -689,7 +618,7 @@ esp_err_t Init() {
     }
 
     // Before anything is read: finish a write that a power cut interrupted.
-    RecoverInterruptedWrite();
+    storage::RecoverInterruptedWrite(kPath, kTempPath);
 
     const esp_err_t err = Reload();
     if (err == ESP_OK) {

@@ -598,6 +598,59 @@ responder.
 Nothing to forget is not an error: a device running on a chip key has no saved
 seed, and says so by succeeding quietly.
 
+### `register <token>`
+The exchange of §6, over USB because the token is ~50 characters of base64 that
+must be transcribed exactly and a 2.16-inch touchscreen is a bad joke:
+
+```
+register approver-esp32.4+NmtVFJVG8nGwWHGXj8TRbG8b8WntOQonP4W950bEA=
+registering as approver-esp32...
+registered as approver-esp32, handler key Q15MkgcK2zYbfbLfxF2CFN8jyRRluEjWxbHnhRL1Zv0=
+
+check that handler key against what the handler printed at startup. it is
+pinned now: a reply signed by any other key will be refused from here on.
+```
+
+The token is minted on the host — `working-with-code.md` has the command — and
+is **one-time**: a token that has been used, or has expired, is refused.
+
+**Compare the handler key, once.** The handler prints the same string when it
+starts. That comparison is the whole of trust on first use: after it the key is
+pinned, and a reply signed by anything else is refused rather than believed.
+
+What it needs, and it says which is missing rather than failing vaguely: a token
+that is one, a key of its own (`keys`), and a bus connection (`nats`). The token
+is checked first, because a mistyped one is wrong whatever the network is doing.
+
+Every failure leaves the device exactly as it was — a rejected registration
+cannot clobber one that works:
+
+| What it says | What happened |
+|---|---|
+| `that is not a token: it must be '<key id>.<secret>'` | nothing left the device |
+| `that token is for 'x'; this device is 'approver-esp32'` | the handler would refuse it too, several seconds later and over the network |
+| `not connected to the bus - 'nats' says why` | there is nobody to ask |
+| `this device has no key to register: …` | see `keys` |
+| `the handler refused: token unknown` | a **signed** answer from the handler: the token is spent, expired, or was never minted. Mint another |
+| `the answer could not be trusted: signed by a different key than this device already trusts` | somebody answered who is not the handler this device is pinned to. This is not a registration problem |
+| `no answer in 10 seconds - is the registration handler running?` | the bus is up and nothing is listening on `registrations` |
+
+That second-to-last row is the reason the reply is verified before it is read at
+all: `registrations` is an open subject, so anyone on the network can answer, and
+an unsigned "expired" would send you hunting a problem that does not exist.
+
+### `forget now`
+Drops the registration and the pinned handler key. Refuses without the word
+`now`, and says what it will cost first: the handler still lists a key for
+`approver-esp32` that this device can no longer use, so **a new token has to be
+minted** before it can register again.
+
+The signing key is untouched — that is `keys forget now`, which is a different
+thing and costs a different thing. This one costs a token; that one costs the
+identity.
+
+Nothing to forget is not an error, it just says so.
+
 ---
 
 ## The filesystem
@@ -632,27 +685,22 @@ Forces the mode when the probe's answer is wrong.
 
 ---
 
-## Not built yet
+## What the console owes the protocol
 
-These are the commands the approval protocol will need. They are specified but
-do not exist:
+All four of the commands this section used to list as missing exist now.
+`register <token>`, `keys` and `forget now` are above; `bus <url>` is **`nats
+url <url>`**, alongside a status readout, `connect` / `disconnect` / `retry` and
+`sub` / `pub` for looking at the wire — for the reason `wifi` grew subcommands
+rather than staying a bare pair of words.
 
-| Command | Will do |
-|---|---|
-| `register <token>` | the registration exchange with the handler — the reason this console exists |
+`forget` turned into two commands rather than one, because it was specified to
+drop two things that cost different amounts: **`forget now`** drops the
+registration and the pinned handler key, and **`keys forget now`** drops the key
+this device signs with.
 
-`keys` was one of these and exists now, above — with one half of what it was
-specified to print. The device's own key is there; the pinned handler key is
-not, because nothing pins one until `register` exists.
-
-`forget` was specified as "drop the registration and the pinned key". Half of it
-is **`keys forget now`**, which drops the key this device signs with; the other
-half needs a registration to drop, so it arrives with `register`.
-
-`bus <url>` was the fourth of these. It exists as **`nats url <url>`** —
-alongside a status readout, `connect` / `disconnect` / `retry`, and `sub` /
-`pub` for looking at the wire — for the reason `wifi` grew subcommands rather
-than staying a bare pair of words.
+What is still missing is not a command: nothing subscribes to `approvals.*` yet,
+so the only way to raise a card is `request test`. The device can sign and is
+registered; what it does not do is answer.
 
 `wifi <ssid> <password>` was once specified as the headless way to join a
 network. It is `wifi join <ssid> [password]` now: `wifi` grew a status readout

@@ -33,6 +33,7 @@
 #include "lvgl_display.h"
 #include "nats_link.h"
 #include "rawimage.h"
+#include "registrar.h"
 #include "screens.h"
 #include "storage.h"
 #include "timesync.h"
@@ -103,6 +104,12 @@ extern "C" void app_main(void) {
     // 4,112 bytes of it and the framework's default is 3,584.
     // `sdkconfig.defaults` carries that number and where it came from.
     crypto::Init();
+
+    // And what the key is *for*: `registration.json`, if there is one (§10.7). It
+    // reads a file and speaks to nobody, so it belongs here next to the key rather
+    // than out with the radio — and a device that is not registered is not an
+    // error state, it is the state a freshly flashed board is in.
+    registration::Init();
 
     // The zone before the clock: `board::Init` adopts the RTC and logs what it
     // found, and a log line in the wrong zone is a bug report about the RTC.

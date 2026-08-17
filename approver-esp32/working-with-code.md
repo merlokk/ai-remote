@@ -221,11 +221,45 @@ shift it a second time. `date set` without `utc` is the other half — it takes
 local time deliberately, for when you are reading a wall clock rather than
 scripting.
 
-The token comes from the host, minted by the handler:
+## Registering the device (§6, §10.7)
+
+Three things on the host, then one line on the device. **The venv, not `py`** —
+`nats-py` and `cryptography` are not in the launcher's interpreter, and the
+failure is a `ModuleNotFoundError` several frames deep:
 
 ```powershell
-py approver/registration_handler.py --get-token approver-esp32
+docker compose -f nats\docker-compose.yml up -d          # if the bus is not already up
+& .\.venv\Scripts\python.exe approver/registration_handler.py --get-token approver-esp32
+& .\.venv\Scripts\python.exe approver/registration_handler.py     # and leave it serving
 ```
+
+The first prints the token **and the server key**; the second prints the server
+key again as it starts. That string is what the device shows after registering,
+and comparing the two by eye, once, is the whole of trust on first use.
+
+Then, on the device (`commands.md` has the failure cases):
+
+```
+register approver-esp32.<44 characters>
+```
+
+The device needs a **client link** for this — the bus, not just the radio. It
+takes its `nats.url` from `config.json`; `wifi join <ssid> <password>` and
+`wifi mode client` are what get it there, and without a `config save` the network
+lives in RAM only and is gone at the next boot.
+
+**Testing the pin without touching the real handler**: run a second one against a
+throwaway config, which gives it a server key of its own. A device already pinned
+must refuse its perfectly valid `ok:true`:
+
+```powershell
+$cfg = "$env:TEMP\impostor.json"
+& .\.venv\Scripts\python.exe approver/registration_handler.py --config $cfg --get-token approver-esp32
+& .\.venv\Scripts\python.exe approver/registration_handler.py --config $cfg
+```
+
+— and the device should answer `signed by a different key than this device
+already trusts`, with `registration.json` unchanged.
 
 ## Sounds: mp3 in, WAV out (§10.8.1)
 

@@ -82,6 +82,7 @@ add_executable(host_test
     test_timesync.cpp
     test_nats.cpp
     test_signing.cpp
+    test_registration.cpp
 
     # The fake ESP-IDF the drivers are compiled against. `fakes/` shadows the
     # framework's headers on the include path below, so the sources listed
@@ -101,6 +102,9 @@ add_executable(host_test
     ../components/audio/es8311.cpp
     ../components/audio/speaker.cpp
     ../components/config/config.cpp
+    # The atomic write of §10.15, which has no ESP-IDF in it and so is the
+    # sequence that ships rather than a model of one in `fakes/`.
+    ../components/storage/file_ops.cpp
     ../components/timezone/timezone.cpp
     ../components/buttons/buttons.cpp
     # The policy half of the Wi-Fi pair (§10.9). Like the navigator it includes
@@ -121,6 +125,7 @@ add_executable(host_test
     # do, and here that reason is the strongest — this is the one file whose
     # output has to match another language byte for byte.
     ../components/protocol/signing.cpp
+    ../components/protocol/registration.cpp
 
     # cJSON, the real one, out of the managed component `idf.py build` fetched.
     "${CJSON_DIR}/cJSON.c"

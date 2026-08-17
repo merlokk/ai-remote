@@ -26,6 +26,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "linenoise/linenoise.h"
+#include "registrar.h"
+#include "registration.h"
 #include "mbedtls/base64.h"
 #include "lvgl_display.h"
 #include "nats_link.h"
@@ -2086,9 +2088,96 @@ int CmdKeys(int argc, char **argv) {
         printf("            and it changes this device's identity when it happens.\n");
     }
 
-    // The half that does not exist yet, named rather than left as a blank line:
-    // a device with a key and no registration still cannot answer anything.
-    printf("registered no - registration is not implemented yet\n");
+    // **The other half of being able to answer**, and it is a separate fact from
+    // having a key: a device with a key and no registration is one the handler
+    // has never heard of, and its signatures verify against nothing.
+    if (registration::Registered()) {
+        printf("registered yes, as %s\n", registration::KeyId());
+        printf("handler key %s\n", registration::ServerKey());
+        printf("            compare that once with what the registration handler printed when\n");
+        printf("            it started. after that it is pinned and nobody else can answer.\n");
+        const int64_t when = registration::RegisteredTs();
+        if (when > 0) {
+            char stamp[32];
+            const time_t seconds = static_cast<time_t>(when);
+            std::tm local = {};
+            localtime_r(&seconds, &local);
+            strftime(stamp, sizeof(stamp), "%Y-%m-%d %H:%M:%S", &local);
+            printf("registered %s\n", stamp);
+        }
+    } else {
+        printf("registered no - 'register <token>' is what does it\n");
+        printf("handler key none\n");
+    }
+    return 0;
+}
+
+void PrintRegisterUsage() {
+    printf("usage: register <token>   register this device with the handler\n");
+    printf("\n");
+    printf("the token is minted on the host and looks like '%s.<44 characters>'.\n",
+           protocol::kKeyId);
+    printf("it is one-time: a token that has been used, or has expired, is refused.\n");
+}
+
+// §6, over USB, because the alternative is typing 50 characters of base64 on a
+// 2.16-inch touchscreen.
+int CmdRegister(int argc, char **argv) {
+    if (argc != 2 || strcmp(argv[1], "help") == 0) {
+        PrintRegisterUsage();
+        return argc == 2 ? 0 : 1;
+    }
+
+    // **The progress line is a decision, not a greeting.** The exchange takes
+    // seconds, so a console that says nothing looks hung — but printing
+    // "registering as X..." above "that is not a token" is the console announcing
+    // an action it never took, which is the rule §10.7 states for `poweroff`
+    // arriving here.
+    //
+    // `ParseToken` is used as a predicate and nothing more: every sentence the
+    // operator reads still comes from `Register`, so there is no message living
+    // in two places waiting to drift.
+    char parsed[protocol::kKeyIdMax + 1];
+    if (protocol::ParseToken(argv[1], parsed, sizeof(parsed))) {
+        printf("registering as %s...\n", protocol::kKeyId);
+    }
+
+    char detail[192];
+    const esp_err_t err = registration::Register(argv[1], detail, sizeof(detail));
+    printf("%s\n", detail[0] != '\0' ? detail : esp_err_to_name(err));
+
+    if (err == ESP_OK) {
+        // The comparison §10.7 asks for, put in front of the operator at the one
+        // moment they are looking at both strings.
+        printf("\n");
+        printf("check that handler key against what the handler printed at startup. it is\n");
+        printf("pinned now: a reply signed by any other key will be refused from here on.\n");
+    }
+    return err == ESP_OK ? 0 : 1;
+}
+
+// The registration half of §10.7's `forget`. `keys forget now` is the other one,
+// and they are deliberately separate: this costs a token, that costs an identity.
+int CmdForget(int argc, char **argv) {
+    if (argc != 2 || strcmp(argv[1], "now") != 0) {
+        if (!registration::Registered()) {
+            printf("this device is not registered - there is nothing to forget.\n");
+            return 1;
+        }
+        printf("this drops the registration and the pinned handler key. the handler will\n");
+        printf("still list a key for '%s' that this device can no longer use, so a new\n",
+               registration::KeyId());
+        printf("token has to be minted before it can register again.\n");
+        printf("type 'forget now' if that is what you want.\n");
+        return 1;
+    }
+
+    const esp_err_t err = registration::Forget();
+    if (err != ESP_OK) {
+        printf("not forgotten: %s\n", esp_err_to_name(err));
+        return 1;
+    }
+    printf("forgotten. this device is unregistered; its signing key is untouched.\n");
     return 0;
 }
 
@@ -2871,6 +2960,24 @@ const esp_console_cmd_t kCommands[] = {
         .help = "this device's identity: the key it signs with, and whether it has one",
         .hint = "[selftest|forget now]",
         .func = &CmdKeys,
+        .argtable = nullptr,
+        .func_w_context = nullptr,
+        .context = nullptr,
+    },
+    {
+        .command = "register",
+        .help = "register this device with the handler, using a one-time token from the host",
+        .hint = "<token>",
+        .func = &CmdRegister,
+        .argtable = nullptr,
+        .func_w_context = nullptr,
+        .context = nullptr,
+    },
+    {
+        .command = "forget",
+        .help = "drop the registration and the pinned handler key (needs a new token after)",
+        .hint = "now",
+        .func = &CmdForget,
         .argtable = nullptr,
         .func_w_context = nullptr,
         .context = nullptr,

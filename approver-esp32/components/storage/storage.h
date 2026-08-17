@@ -57,6 +57,43 @@ esp_err_t Info(size_t *total_bytes, size_t *used_bytes);
 // null. Nothing here allocates (§10.14.1): the buffer is the caller's.
 esp_err_t ReadFile(const char *path, char *out, size_t capacity, size_t *length);
 
+// **A write that is not allowed to half-happen** (§10.15), and it is here rather
+// than in `components/config` because there are two files that need it now — the
+// settings and the registration of §10.7 — and the SPIFFS dance below is exactly
+// the kind of thing that goes wrong the second time somebody writes it out.
+//
+// Temp file → remove the old → rename. The middle step is not tidiness:
+// **SPIFFS will not rename onto an existing name.** It answers EIO (errno 5)
+// rather than replacing, measured on this board rather than assumed. That leaves
+// a real window in which the final name does not exist and a *complete* temp file
+// is not yet called anything, which is what `RecoverInterruptedWrite` closes at
+// the next boot.
+//
+// `temp_path` is the caller's rather than derived, so the name that appears in a
+// `ls` after a crash is one the caller chose and can recognise.
+esp_err_t WriteFileAtomically(const char *path, const char *temp_path, const char *contents,
+                              size_t length);
+
+// The other half of the write above, and it must run **before** the file is
+// read. Three states can be on the filesystem at boot and only one is ambiguous:
+//
+//   * no temp — nothing was interrupted;
+//   * both files — the crash happened before the old one was removed, so the temp
+//     is a leftover and the real file is intact: drop the temp;
+//   * only the temp — the crash landed in the window. The temp is a *complete*
+//     file that never got its name, so finishing the rename is the recovery.
+//     Restoring defaults here would throw away a good file to fix a naming
+//     problem.
+void RecoverInterruptedWrite(const char *path, const char *temp_path);
+
+// True when the file exists. Cheaper to say than to read, and the question
+// several callers actually have.
+bool Exists(const char *path);
+
+// Deletes it. `ESP_OK` when it is gone afterwards, whether or not it was there to
+// begin with — nothing to forget is not a failure (§10.7's `forget`).
+esp_err_t Remove(const char *path);
+
 struct Entry {
     char name[kMaxNameLength];
     size_t size;

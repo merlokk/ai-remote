@@ -69,7 +69,8 @@ so.
 | Screenshots of the real panel (§10.12.2) | **working**: `screenshot` on the console streams the frame out as base64 — the panel cannot be read back and a frame does not fit in RAM, so it is taken a rendered strip at a time and never assembled — and `tools/screenshot.py` writes the PNG with nothing outside the standard library. Verified by decoding the digits back out of the pixels and matching `clock` |
 | Bus reachable from the device at all (§10.3) | **decided**: shared on the home LAN, no TLS, no auth — the router is the trust boundary |
 | Firmware: the key and the signing bytes (§10.2, §10.6) — `components/crypto`, `components/protocol` | **written, and the key signs on the board**: the boot self-test passes both halves, the identity is derived and survives a reboot, `keys` is on the console, and a signature this board made verifies under `lib/crypto.py`. §7's signing bytes are assembled and host-tested against Python's own output (14 tests, 7 of 7 mutations caught). **On §10.6's fallback, not its design** — no eFuse key is burned, so the seed is in unencrypted NVS and that section's table has the row that says what it costs |
-| Firmware: registration, and the reply going out | not started — and now it is the only thing between the card and a working responder. `screens.cpp`'s `Decided()` is the one function left to fill in: it is handed the whole request and the verdict, and today it writes a log line saying nothing was published. Everything under it exists — a key to sign with and the bytes to sign |
+| Firmware: registration (§6, §10.7) — `components/registration`, `components/protocol` | **done, against the real handler**: `register <token>` on the console runs §6 verbatim — a nonce made after the radio is up, a private inbox, the handler's signature verified **before** a single field of the reply is read, and `registration.json` written only on a verified `ok:true`. On the board: registered, survived a reboot, refused a spent token, and **refused a perfectly valid `ok:true` signed by a handler it is not pinned to** — with the file unchanged every time. 25 host tests |
+| Firmware: the reply going out | not started, and now the only thing between the card and a working responder. `screens.cpp`'s `Decided()` is the one function left to fill in: it is handed the whole request and the verdict, and today it writes a log line saying nothing was published. Everything under it exists — a key, a registration, and the bytes to sign |
 | The five screens — clock, limits, request, settings, Wi-Fi (§10.8) | **two of five running**: the clock face (§10.8.2) and the request card (§10.8.4), both on the board. Limits, settings and Wi-Fi are specified and not started, so a swipe still has nowhere to go |
 | The request card — `components/ui/request_card.*` + `components/screens/request_screen.*` (§10.8.4) | **running on hardware**: §7's fields in a bounded queue of four, the tool and the command as the heaviest thing on the glass, a countdown that is the hook's rather than the device's, `+N waiting`, and a receipt afterwards that distinguishes a verdict from a card nobody answered. **Answered by the buttons** — `BOOT` allows, `PWR` denies and doubles as the way back to the clock — with §10.8.1's queued-touch guard in the shape a press has. Nothing on it is touchable, deliberately. The deciding half is `<cstdint>`-only and host-tested (23 tests, 16 of 16 mutations caught). **No bus behind it**: `request test` on the console is the only way to raise one, because subscribing would take real requests from the responders that can sign |
 | The clock face — `components/ui/clock_face.*` + `components/screens` (§10.8.2) | **running on hardware**: 24-hour seven-segment digits filled by a travelling wave, three indicators to the left of them (radio, bus, battery), the date under them, and the whole face drifting ±30/±40 px because the panel is an AMOLED. `--:--` rather than a plausible midnight when no believable time has arrived. `clock` on the console prints what is on the glass and why — which is how the drift and the water are checked without a camera. The deciding half is `<cstdint>`-only and host-tested (32 tests, 14 of 14 mutations caught); the painting half is LVGL and is the only file in the firmware that draws anything |
@@ -79,7 +80,7 @@ so.
 | The Wi-Fi screen (§10.8.6) | specified, not started — the manager underneath it is what exists |
 | Where the configuration lives (§10.15) | **decided**: all of it in JSON on SPIFFS, nothing of ours in NVS — with the cost stated (SPIFFS cannot be encrypted at rest). `spiffs_image/config.json` + `config.init.json` are flashed, and `components/config` is what reads them |
 | The `KEY`-at-boot config restore (§10.15) | specified, not started |
-| Host-tier tests (§10.11) — `host_test/` | **running**: 381 Unity tests over `ui` (the navigator, the clock face and the request card), `protocol` (§7's signing bytes), `i2cbus`, `pmic`, `rtc`, `imu`, `audio`, `config`, `buttons`, `timezone`, `speaker`, `wifimgr`, `timesync` and `nats`, one command, no board. The drivers are compiled **unmodified** against a fake ESP-IDF (`host_test/fakes/`), which is §10.14.3's owed fake backend arriving in a different shape than that section specified, and which now covers I²S and a filesystem as well as the I²C wire. Built by MSVC rather than by ESP-IDF's `linux` target, which does not work on a Windows host — §10.11 records why |
+| Host-tier tests (§10.11) — `host_test/` | **running**: 406 Unity tests over `ui` (the navigator, the clock face and the request card), `protocol` (§7's signing bytes and §6's registration exchange), `i2cbus`, `pmic`, `rtc`, `imu`, `audio`, `config`, `buttons`, `timezone`, `speaker`, `wifimgr`, `timesync` and `nats`, one command, no board. The drivers are compiled **unmodified** against a fake ESP-IDF (`host_test/fakes/`), which is §10.14.3's owed fake backend arriving in a different shape than that section specified, and which now covers I²S and a filesystem as well as the I²C wire. Built by MSVC rather than by ESP-IDF's `linux` target, which does not work on a Windows host — §10.11 records why |
 | Protocol parity vectors (§10.11 tier 2) | not started |
 
 Read §10.3 before anything else: it is the one part of this that changes
@@ -878,12 +879,9 @@ by `py approver/registration_handler.py --get-token approver-esp32`. Typing that
 on a 2.16″ touchscreen is a bad joke, so registration is driven over **USB**,
 through `esp_console` on the USB Serial/JTAG port:
 
-Two of the four commands this section owes — `register <token>` and `forget` —
-do not exist yet, and `keys` does now: it prints this device's identity, which
-route the key came from, and the two halves of the boot self-test (§10.6).
-`forget` is half done as `keys forget now`, which drops the key; the other half
-needs a registration to drop. The fourth, `bus <url>`, does exist: it is **`nats
-url <url>`**, alongside a status readout and the `sub` / `pub` pair that made
+**All four commands this section owes exist now.** `register <token>` runs the
+exchange below, `keys` prints the identity and the pinned handler key, `forget`
+drops the registration — and `bus <url>` is **`nats url <url>`**, alongside a status readout and the `sub` / `pub` pair that made
 the bus visible on the wire, and it grew subcommands for the same reason `wifi`
 did. **The ones that exist are listed, with what each
 of them does, in [`commands.md`](commands.md)**, and that file is the reference
@@ -1064,6 +1062,71 @@ must not be "simplified":
 4. Only on a verified `ok:true`: write `key_id` and the pinned `server_key` to
    `registration.json` (§10.15). A rejection changes nothing — the same ordering
    all three existing responders use.
+
+##### What is written, and the four decisions inside it
+
+The split is §10.14.2's, and here it is load-bearing rather than tidy:
+`components/protocol` holds the bytes **and the order they are checked in**, with
+cJSON and nothing else; `components/registration` holds the socket, the file and
+the random number.
+
+| File | What it is |
+|---|---|
+| `protocol/registration.h/.cpp` | the request JSON, `registration_reply_signing_bytes`, and `ParseRegistrationReply` — every check above, in order. cJSON only, so all of it is host-tested (§10.11) |
+| `registration/registrar.h/.cpp` | the exchange: the nonce, the inbox, the wait, and `registration.json` |
+
+**What the board has actually done**, against the real handler on the LAN:
+registered, printed a handler key matching the one the handler printed at
+startup, written the file, survived a reboot with it, refused the same token a
+second time (`the handler refused: token unknown` — a *signed* rejection,
+verified against the now-pinned key before it was believed), and refused a
+perfectly valid `ok:true` from a second handler with a key of its own. The file
+was unchanged after every one of those.
+
+Four things are decisions rather than plumbing:
+
+- **The verifier is an argument, so the ordering is not the caller's
+  discipline.** Step 3 above is the whole point of this exchange, and a parse
+  function that handed back the fields and left the checking to whoever called it
+  would make that rule a convention. So `ParseRegistrationReply` takes the
+  signature check as a plain function pointer (§10.14.1 — no `std::function`) and
+  calls it at the one place it belongs: there is no way to get a field out
+  without it having run and said yes. It takes base64 strings rather than bytes
+  because decoding is libsodium's, and that keeps the crypto library out of a
+  component §10.11 wants to compile with a bare host compiler — where the test's
+  verifier **records the message it was handed**, which turns "these are §6's
+  signing bytes" into an assertion.
+- **The pin is checked before the signature, not after.** A valid signature by a
+  key this device does not already trust is not a bad signature; it is somebody
+  taking over the slot, and calling it `kBadSignature` would name the wrong
+  problem to whoever is reading the console. It is its own status with its own
+  sentence.
+- **The nonce is made after the bus is connected**, which is how §10.7's "after
+  Wi-Fi is up" becomes something the code enforces rather than something the
+  order of statements happens to satisfy: a connection implies a client link
+  implies the radio, and the radio is what makes the RNG a true source instead of
+  a PRNG. `Register` refuses without one anyway.
+- **The argument is checked before the world.** A mistyped token is wrong
+  whatever the network is doing and costs nothing to detect, so it is refused
+  before the bus is consulted. That is the other way round from how it was first
+  written, and the board is what showed it: a token with no dot in it was
+  answered with a complaint about the bus.
+
+And two smaller ones. A `ts` beyond 2^53 is **refused** rather than read, because
+cJSON parses every number into a `double` and a rounded timestamp reproduces
+different signing bytes — a signature that stops verifying with nothing to point
+at. And a `registration.json` whose `server_key` is not exactly 44 characters is
+treated as no registration at all: a device that came up pinned to a truncated
+key would refuse every future registration with "signed by a different key",
+which is a sentence that sends somebody hunting an attacker who is not there.
+
+**The atomic write moved to `storage` to make this possible** (§10.15). There are
+two files that must not half-happen now, and a second copy of the SPIFFS
+remove-then-rename dance would be the copy that drifts — so
+`storage::WriteFileAtomically` and `storage::RecoverInterruptedWrite` take a path,
+`config.cpp` calls them, and they live in `storage/file_ops.cpp`, which has no
+ESP-IDF in it and is therefore the sequence the host tests exercise rather than a
+model of one.
 
 **Trust on first use, and the screen is what closes it.** The first registration
 has nothing to compare the handler's key against, so show it: the device displays
@@ -2087,6 +2150,7 @@ Three tiers, and the first one is where nearly everything belongs:
    | `components/ui` (the clock face) | §10.8.2's rules, and the sixth subject in this firmware that needs no fake. **The time**: an unset clock showing dashes rather than a plausible `00:00`, a year outside the RTC's own 2024..2099 refused at each end, the digits being 24-hour with their leading zeros, and a wall clock out of range showing dashes rather than rendering an hour of 74. **The three indicators**: a connected link never showing *no* bars, because an empty icon reads as "not connected"; the connecting animation never being blank; an access point and a switched-off radio both lighting none; no server configured being a shape rather than a red light; the two-minute traffic window opening on a delivery, closing on time, surviving the ~49-day wrap, **not** opening on the first reading of a counter that was already non-zero, and **not** opening on a counter that went backwards — which is a reconnect (§10.5) rather than a message; traffic never showing through a dropped link; and a battery percentage clamped, with negative meaning "nothing to ask" rather than empty. **The panel's own two**: the drift staying inside its box, reaching all four corners of it, never standing still, and being continuous across the millisecond wrap — the last of which is the only test that catches a cycle read as `now_ms % period`; and the water bounded away from both ends of the scale, travelling with the phase, varying down the face, and free of hard edges. Plus `Wave` interpolating rather than reading its 64-entry table flat, which is here because the mutation pass showed that breaking it was invisible through `Shimmer` |
    | `components/ui` (the request card) | §10.8.4's rules, and the ones where a test is worth the most. **What a card is allowed to be**: every refusal is its own case — a queue that is full, a field with no terminator in it (all seven, in one loop, so a field added later cannot skip the check), a request with no reply subject, one with no tool name — because a refused card is §10.10's fail-safe and a *shown* card is a question put to a human. **The queue**: the oldest is the one on screen, the bound is asserted equal to the navigator's, and room freed is room usable. **The press guard**: a press inside the first 300 ms is thrown away, a press that *began* before the card appeared is thrown away by the same comparison, the next card in the queue gets its own guard from scratch, and pressing nothing decides nothing. **The outcomes**: a press hands back the whole request the reply will have to echo; a card that timed out reads as a timeout and not as a deny; a request that waited past its own life is dropped without ever being shown; a missing TTL falls back to one that expires rather than to forever; the countdown floors at zero; and the ~49-day wrap lands inside a card's life. **The receipt**: it fades on its own, it is skipped when another card is waiting, and an arriving request outranks it. Plus the assertion the whole file is built around — **no amount of ticking produces a verdict** |
    | `components/protocol` | §7's signing bytes (§10.2), and the suite with the least room to be approximately right — every other test here protects a behaviour somebody would notice going wrong, this one protects an exact byte string whose failure is invisible from the device's side. So the expectations are **not derived from the header and not typed out of §7's table**: three complete messages generated by `approver/protocol.py` and pasted in, which is tier 2's method arriving early for the one layout that could not wait for it. Plus the shape independently of the content — the two always-empty fields keeping their *positions*, which is what makes the message end in a separator and is the easiest thing to lose while tidying; exactly eight separators whatever the fields hold; and every refusal writing **nothing**, because a half-assembled buffer here is something a caller could sign. And the integers on their own, `INT64_MIN` included: the value with no positive counterpart, which the obvious negate-and-divide loop gets wrong and which is the reason `AppendInt` accumulates downwards |
+   | `components/protocol` (the registration exchange) | §6/§10.7's, and the suite is mostly about **one rule**: the handler's signature is checked before any field of the reply is read. That is testable at all because the verifier comes in as an argument — the one used here *records the message it was handed*, so "these are `registration_reply_signing_bytes`" is an assertion rather than a reading of the code, and every rejection that happens *before* the signature uses a verifier that fails the test if it runs. Then each refusal as its own case, because each has its own sentence on a console: not an object, another protocol version, an `ok` that is a string rather than a bool, no handler key, a **pin mismatch** (which is not a bad signature and must not be spelled as one), a nonce that answers a different request, no timestamp, a `ts` past 2^53 that cJSON would silently round, a field longer than the device will hold, and a signature that is not one. Plus the two that are about agreeing with Python rather than refusing anything: the signing bytes byte for byte, and an absent optional field signing as `""` — because the handler omits `error` on success and the other side signs it as empty |
    | `components/i2cbus` | §10.14.3's three: contention, an acquire that **times out rather than blocks** (asserted as the tick count it asked for, which is why the fake mutex never sleeps), and a recovery that clocks SCL nine times and drops the device handles with the old bus. Plus the device table's per-device clock, its reopen-on-speed-change, and its refusal when full. And **the non-recursive mutex, from both sides**: `AddDevice` called while a lease is held is refused rather than granted — the trap `es8311.h` records — and `Recover`, which used to skip the lease entirely, now waits for it and tears nothing down if it cannot have it |
    | `components/pmic` | the 13-bit battery field against the 14-bit ones — the width that gives a *plausible* wrong voltage when wrong; the TS-pin silencing and the ADC read-modify-write; VBUS needing both status bits; `PowerOff` refusing over USB **and writing nothing**; `Read` being one snapshot rather than a dozen moments; and the two halves of the vendor's rail guard — a rail already at 3.3 V is not rewritten (DCDC1 supplies the C6, so a pointless write is a risk with no upside) and one at the wrong voltage is, with the bits above the field kept |
    | `components/rtc` | BCD both ways; the seven counters in one burst; the OS flag making a *successful* read untrustworthy, and being masked out of the seconds it shares a register with; the clock stopped and restarted around a write — including after a write that failed; and the century this chip does not have, so 2100 and 1999 are refused before the bus is touched while 2099 goes through |
@@ -2211,6 +2275,32 @@ Three tiers, and the first one is where nearly everything belongs:
    string at a 63-character field, which an off-by-one bound refuses just as
    happily as a correct one. Exactly at the bound and exactly one over is the
    only pair that says anything.
+
+   **The registration exchange added nine, all caught, and one of them had to
+   fix the test before it could be run.** The nine: the pin never firing, the
+   fields copied out before the signature is checked, a truthy `ok` taken for a
+   boolean one, the nonce echo not compared, the exact-integer bound on `ts`
+   dropped, an absent optional field treated as a failure, the `ok` flag signed
+   as `1`/`0` rather than `true`/`false`, a token split at the last dot instead
+   of the first, and a field longer than its buffer truncated rather than
+   refused.
+
+   Two would not compile at first, which is `/W4 /WX` doing its job — removing
+   the pin check orphans its parameter — and the fix is the one this section
+   already records: a mutation has to keep consuming what it stops using, so the
+   check stays and its condition is made never to fire.
+
+   **And the `ts` one is the useful run.** The test written for it asserted that
+   2^53+1 is refused *and* that 2^53 is accepted, and it failed on the untouched
+   code — correctly, because the two parse to the **same `double`** and are
+   indistinguishable from that point on. No rule can take one and refuse the
+   other. So the bound became exclusive: below 2^53 every integer is its own
+   value, at it ambiguity starts, and both are refused. Which also settled
+   whether the bound is redundant next to the truncate-and-compare round trip
+   below it — it is not, because the round trip compares the double with itself
+   and cannot see a value that was rounded before it ever arrived. A test that
+   was wrong is what established what the code should do, which is the opposite
+   of this section's usual direction and worth the paragraph.
 
    **The bus link added eleven, one survivor, and a warning about the ritual
    itself.** Ten were caught — the backoff's growth and its cap taken away
@@ -2396,11 +2486,17 @@ And the two components on top of it, which are the §10.14.2 split showing up in
 the size report a second time: `libcrypto.a` — the eFuse route, the fallback, the
 self-test and the base64 — is **2,650 bytes** (2,502 of flash, 148 of DIRAM, of
 which 144 is the key material itself: 32 bytes of public key, 64 of private, and
-the 45-character base64 nobody wants to recompute). `libprotocol.a` has **no line
-at all**, for the WebSocket client's reason rather than libsodium's: §7's signing
-bytes are written, host-tested and referenced by nothing, because `Decided()` is
-still a log line. It is the one entry on this list whose number is a promise that
-the next commit collects.
+the 45-character base64 nobody wants to recompute). `libprotocol.a` had **no line at all**
+when that was written — §7's signing bytes were host-tested and referenced by
+nothing — and §6 collected it: it is **2,861 bytes**, every one of them flash and
+none of them RAM, which is what a component made of nothing but byte layouts
+looks like. Next to it `libregistration.a` is **3,747** (758 of DIRAM, mostly the
+512-byte reply buffer) and `libcrypto.a` 2,732.
+
+Worth reading as a group rather than four numbers: **the whole of §6 and §7's
+identity, exchange and wire format is 9,340 bytes**, against the 134,901 of the
+library that does one primitive underneath them. The protocol was never the
+expensive part.
 
 And the two screens of §10.8.2 and §10.8.4, because they are the first data point
 for what three more of them cost: `libscreens.a` is **30,372 bytes** (10,770 of
