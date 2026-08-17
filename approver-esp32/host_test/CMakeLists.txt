@@ -81,6 +81,7 @@ add_executable(host_test
     test_reachability.cpp
     test_timesync.cpp
     test_nats.cpp
+    test_signing.cpp
 
     # The fake ESP-IDF the drivers are compiled against. `fakes/` shadows the
     # framework's headers on the include path below, so the sources listed
@@ -115,6 +116,11 @@ add_executable(host_test
     # device tier.
     ../components/nats/endpoint.cpp
     ../components/nats/link_policy.cpp
+    # And §7's own half (§10.2): the bytes a decision is signed over. It
+    # includes `<cstdint>` and nothing else for the same reason the four above
+    # do, and here that reason is the strongest — this is the one file whose
+    # output has to match another language byte for byte.
+    ../components/protocol/signing.cpp
 
     # cJSON, the real one, out of the managed component `idf.py build` fetched.
     "${CJSON_DIR}/cJSON.c"
@@ -138,6 +144,7 @@ target_include_directories(host_test PRIVATE
     ../components/wifimgr
     ../components/timesync
     ../components/nats
+    ../components/protocol
     "${CJSON_DIR}"
     "${UNITY_DIR}"
 )

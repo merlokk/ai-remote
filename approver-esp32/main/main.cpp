@@ -23,6 +23,7 @@
 #include "board.h"
 #include "config.h"
 #include "console.h"
+#include "device_key.h"
 #include "esp_app_desc.h"
 #include "esp_log.h"
 #include "esp_ota_ops.h"
@@ -86,6 +87,22 @@ extern "C" void app_main(void) {
     // the second write would be the one that mattered.
     storage::Init();
     config::Init();
+
+    // **The identity, and it is this early because everything above the bus has
+    // to be able to ask about it** (§10.6). It depends on nothing — no
+    // filesystem, no radio, no panel — so the first screen and the first console
+    // prompt both find the answer already there, and a device that cannot sign
+    // says so from its first frame rather than from its first request.
+    //
+    // The failure paths are silent by design (§10.10): a self-test that fails or
+    // an eFuse with no key burned leaves `crypto::Ready()` false, and nothing
+    // above may publish a decision without it. Neither is fatal to the boot —
+    // this device is still a clock.
+    //
+    // **This is also why the main task's stack is 8 KB** — `crypto_sign` uses
+    // 4,112 bytes of it and the framework's default is 3,584.
+    // `sdkconfig.defaults` carries that number and where it came from.
+    crypto::Init();
 
     // The zone before the clock: `board::Init` adopts the RTC and logs what it
     // found, and a log line in the wrong zone is a bug report about the RTC.

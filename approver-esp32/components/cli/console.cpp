@@ -13,6 +13,7 @@
 #include "board.h"
 #include "buttons.h"
 #include "config.h"
+#include "device_key.h"
 #include "esp_app_desc.h"
 #include "esp_chip_info.h"
 #include "esp_console.h"
@@ -1983,6 +1984,114 @@ int CmdNats(int argc, char **argv) {
     return 1;
 }
 
+void PrintKeysUsage() {
+    printf("usage: keys              this device's identity, and whether it can sign\n");
+    printf("       keys selftest     run the signature check again, now\n");
+    printf("       keys forget now   delete the saved key; a new one is made at the next boot\n");
+}
+
+// **What this device is on the bus, and whether it can prove it.** The whole
+// value of the readout is that "connected" and "able to answer" are different
+// facts, and a device that is one and not the other looks identical from
+// outside — the same argument the link indicator makes on the clock.
+//
+// The public key is printed in full because §10.7 has an operator compare it by
+// eye, once, against what the handler prints at startup. The private half is not
+// printed, cannot be printed, and does not exist outside RAM.
+int CmdKeys(int argc, char **argv) {
+    if (argc == 2 && (strcmp(argv[1], "help") == 0 || strcmp(argv[1], "-h") == 0 ||
+                      strcmp(argv[1], "--help") == 0)) {
+        PrintKeysUsage();
+        return 0;
+    }
+
+    if (argc == 2 && strcmp(argv[1], "selftest") == 0) {
+        const bool library = crypto::SelfTest();
+        printf("library    %s\n",
+               library ? "passed - signatures match the host's" : "FAILED - do not trust this build");
+
+        // The second half, and it is a different question: the library being
+        // right says nothing about the key this particular device derived.
+        char proof[crypto::kSignatureB64Size];
+        if (!crypto::Ready()) {
+            printf("this key   no key to check\n");
+            return library ? 0 : 1;
+        }
+        const bool own = crypto::ProveKey(proof, sizeof proof);
+        printf("this key   %s\n", own ? "passed - it signs and its own public key verifies it"
+                                      : "FAILED");
+        if (own) {
+            printf("message    %s\n", crypto::kProofMessage);
+            printf("signature  %s\n", proof);
+            printf("public key %s\n", crypto::PublicKeyBase64());
+        }
+        return (library && own) ? 0 : 1;
+    }
+
+    // **A confirmation word, because this one cannot be undone from here.** The
+    // rule §10.8.5 states for its destructive entries and `poweroff now` follows:
+    // what is lost is a registration, and getting it back means a fresh token
+    // minted on the host.
+    if (argc >= 2 && strcmp(argv[1], "forget") == 0) {
+        if (argc != 3 || strcmp(argv[2], "now") != 0) {
+            printf("this deletes the saved signing key. the next boot makes a new one, so this\n");
+            printf("device becomes a different responder and needs a new registration token.\n");
+            printf("type 'keys forget now' if that is what you want.\n");
+            return 1;
+        }
+        const esp_err_t err = crypto::ForgetStoredSeed();
+        if (err != ESP_OK) {
+            printf("not forgotten: %s\n", esp_err_to_name(err));
+            return 1;
+        }
+        // Deliberately not a reboot: the key already in RAM keeps working, so
+        // nothing breaks mid-session. The change lands at the next boot, and
+        // saying so is better than surprising somebody with one.
+        printf("forgotten. this session still signs with the old key; the next boot makes a new\n");
+        printf("one. nothing was published either way - there is no registration yet.\n");
+        return 0;
+    }
+
+    if (argc != 1) {
+        PrintKeysUsage();
+        return 1;
+    }
+
+    printf("key id     approver-esp32\n");
+    printf("key type   ed25519\n");
+    printf("state      %s\n", crypto::StateText());
+
+    if (crypto::Ready()) {
+        // The block number only means something on the route that has one, so it
+        // is added here rather than baked into the driver's own sentence.
+        if (crypto::EfuseBlock() >= 0) {
+            printf("source     %s (chip key block %d)\n", crypto::SourceText(),
+                   crypto::EfuseBlock());
+        } else {
+            printf("source     %s\n", crypto::SourceText());
+        }
+        printf("public key %s\n", crypto::PublicKeyBase64());
+    } else {
+        printf("source     %s\n", crypto::SourceText());
+        printf("public key none\n");
+    }
+
+    // **The fallback says so, every time it is asked.** A key in flash and a key
+    // that cannot be read at all look identical from outside, and only one of them
+    // is what this device set out to have. Saying it once in a boot log is not
+    // enough; this is the readout somebody looks at.
+    if (crypto::KeyIsInFlash()) {
+        printf("            this is the fallback: the key is saved on the device and a flash\n");
+        printf("            dump gives it away. burning a key into the chip is what fixes it,\n");
+        printf("            and it changes this device's identity when it happens.\n");
+    }
+
+    // The half that does not exist yet, named rather than left as a blank line:
+    // a device with a key and no registration still cannot answer anything.
+    printf("registered no - registration is not implemented yet\n");
+    return 0;
+}
+
 int CmdTerm(int argc, char **argv) {
     if (argc > 2) {
         printf("usage: term          ask the terminal again, and follow its answer\n");
@@ -2621,6 +2730,10 @@ int CmdDevStatus(int argc, char **) {
         // And the bus after the network that carries it, which is also the
         // order in which one of them being wrong stops the next from working.
         {"nats", &CmdNats},
+        // And the identity last, because it is the question the two above lead
+        // to: a socket that is open and a key that cannot sign are the same
+        // silence from the other end.
+        {"keys", &CmdKeys},
     };
 
     bool first = true;
@@ -2754,6 +2867,15 @@ const esp_console_cmd_t kCommands[] = {
         .context = nullptr,
     },
     {
+        .command = "keys",
+        .help = "this device's identity: the key it signs with, and whether it has one",
+        .hint = "[selftest|forget now]",
+        .func = &CmdKeys,
+        .argtable = nullptr,
+        .func_w_context = nullptr,
+        .context = nullptr,
+    },
+    {
         .command = "term",
         .help = "turn line editing and up-arrow history on ('term smart'), or ask the terminal",
         .hint = "[smart|dumb]",
@@ -2826,6 +2948,16 @@ esp_err_t Init() {
     repl_config.prompt = "approver>";
     repl_config.max_cmdline_length = 256;
     repl_config.max_history_len = kHistoryLength;
+
+    // **Room for a signature, because one command runs one.** `keys selftest`
+    // reaches `crypto_sign`, which needs 4,112 bytes of stack on its own; the
+    // REPL's default 4 KB is less than that, and the first version of that
+    // command panicked here with a stack protection fault rather than printing
+    // an answer. The console is not where a *decision* gets signed — that
+    // belongs to a task of its own — but a self-test the operator can run is
+    // worth the 8 KB this costs, and the number is `crypto::kSignStackBytes`
+    // plus what the deepest ordinary command already uses.
+    repl_config.task_stack_size = crypto::kSignStackBytes + 4096;
 
     const esp_console_dev_usb_serial_jtag_config_t dev_config =
         ESP_CONSOLE_DEV_USB_SERIAL_JTAG_CONFIG_DEFAULT();

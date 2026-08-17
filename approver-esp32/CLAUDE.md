@@ -68,7 +68,8 @@ so.
 | The LVGL host preview (§10.12.1) | installed and rendering. It was written down here as the only part of this folder that ran; it is now the part that runs with no board, alongside the host tests |
 | Screenshots of the real panel (§10.12.2) | **working**: `screenshot` on the console streams the frame out as base64 — the panel cannot be read back and a frame does not fit in RAM, so it is taken a rendered strip at a time and never assembled — and `tools/screenshot.py` writes the PNG with nothing outside the standard library. Verified by decoding the digits back out of the pixels and matching `clock` |
 | Bus reachable from the device at all (§10.3) | **decided**: shared on the home LAN, no TLS, no auth — the router is the trust boundary |
-| Firmware: registration, signing | not started — and now it is the only thing between the card and a working responder. `screens.cpp`'s `Decided()` is the one function §10.6 and §7 have to fill in: it is handed the whole request and the verdict, and today it writes a log line saying nothing was published |
+| Firmware: the key and the signing bytes (§10.2, §10.6) — `components/crypto`, `components/protocol` | **written, and the key signs on the board**: the boot self-test passes both halves, the identity is derived and survives a reboot, `keys` is on the console, and a signature this board made verifies under `lib/crypto.py`. §7's signing bytes are assembled and host-tested against Python's own output (14 tests, 7 of 7 mutations caught). **On §10.6's fallback, not its design** — no eFuse key is burned, so the seed is in unencrypted NVS and that section's table has the row that says what it costs |
+| Firmware: registration, and the reply going out | not started — and now it is the only thing between the card and a working responder. `screens.cpp`'s `Decided()` is the one function left to fill in: it is handed the whole request and the verdict, and today it writes a log line saying nothing was published. Everything under it exists — a key to sign with and the bytes to sign |
 | The five screens — clock, limits, request, settings, Wi-Fi (§10.8) | **two of five running**: the clock face (§10.8.2) and the request card (§10.8.4), both on the board. Limits, settings and Wi-Fi are specified and not started, so a swipe still has nowhere to go |
 | The request card — `components/ui/request_card.*` + `components/screens/request_screen.*` (§10.8.4) | **running on hardware**: §7's fields in a bounded queue of four, the tool and the command as the heaviest thing on the glass, a countdown that is the hook's rather than the device's, `+N waiting`, and a receipt afterwards that distinguishes a verdict from a card nobody answered. **Answered by the buttons** — `BOOT` allows, `PWR` denies and doubles as the way back to the clock — with §10.8.1's queued-touch guard in the shape a press has. Nothing on it is touchable, deliberately. The deciding half is `<cstdint>`-only and host-tested (23 tests, 16 of 16 mutations caught). **No bus behind it**: `request test` on the console is the only way to raise one, because subscribing would take real requests from the responders that can sign |
 | The clock face — `components/ui/clock_face.*` + `components/screens` (§10.8.2) | **running on hardware**: 24-hour seven-segment digits filled by a travelling wave, three indicators to the left of them (radio, bus, battery), the date under them, and the whole face drifting ±30/±40 px because the panel is an AMOLED. `--:--` rather than a plausible midnight when no believable time has arrived. `clock` on the console prints what is on the glass and why — which is how the drift and the water are checked without a camera. The deciding half is `<cstdint>`-only and host-tested (32 tests, 14 of 14 mutations caught); the painting half is LVGL and is the only file in the firmware that draws anything |
@@ -78,7 +79,7 @@ so.
 | The Wi-Fi screen (§10.8.6) | specified, not started — the manager underneath it is what exists |
 | Where the configuration lives (§10.15) | **decided**: all of it in JSON on SPIFFS, nothing of ours in NVS — with the cost stated (SPIFFS cannot be encrypted at rest). `spiffs_image/config.json` + `config.init.json` are flashed, and `components/config` is what reads them |
 | The `KEY`-at-boot config restore (§10.15) | specified, not started |
-| Host-tier tests (§10.11) — `host_test/` | **running**: 367 Unity tests over `ui` (the navigator, the clock face and the request card), `i2cbus`, `pmic`, `rtc`, `imu`, `audio`, `config`, `buttons`, `timezone`, `speaker`, `wifimgr`, `timesync` and `nats`, one command, no board. The drivers are compiled **unmodified** against a fake ESP-IDF (`host_test/fakes/`), which is §10.14.3's owed fake backend arriving in a different shape than that section specified, and which now covers I²S and a filesystem as well as the I²C wire. Built by MSVC rather than by ESP-IDF's `linux` target, which does not work on a Windows host — §10.11 records why |
+| Host-tier tests (§10.11) — `host_test/` | **running**: 381 Unity tests over `ui` (the navigator, the clock face and the request card), `protocol` (§7's signing bytes), `i2cbus`, `pmic`, `rtc`, `imu`, `audio`, `config`, `buttons`, `timezone`, `speaker`, `wifimgr`, `timesync` and `nats`, one command, no board. The drivers are compiled **unmodified** against a fake ESP-IDF (`host_test/fakes/`), which is §10.14.3's owed fake backend arriving in a different shape than that section specified, and which now covers I²S and a filesystem as well as the I²C wire. Built by MSVC rather than by ESP-IDF's `linux` target, which does not work on a Windows host — §10.11 records why |
 | Protocol parity vectors (§10.11 tier 2) | not started |
 
 Read §10.3 before anything else: it is the one part of this that changes
@@ -223,6 +224,33 @@ behavior "\n" "" "\n" str(ts) "\n" ""
   clock. The same rule for `v`.
 - `key_id` is not in the signing bytes; it selects the key **and the scheme** on
   the verifying side (§7). Nothing the device sends can choose an algorithm.
+
+**This is written now, and it is `components/protocol/signing.cpp`** — one file,
+`<cstdint>` and nothing else, host-tested against three messages
+`approver/protocol.py` generated. Two things about the shape it took that this
+section argued for and that were not obvious until there was code:
+
+- **the two always-empty fields are not parameters.** `updated_input_sha256` and
+  `reason` can only ever be empty for this device, and a field that can hold one
+  value should not be an argument somebody could pass a different one to. They
+  are positions between separators, and the tests assert their positions rather
+  than their content — which is what catches somebody "tidying" an empty write
+  away, and what makes the message end in a separator with nothing after it.
+- **`str(ts)` is a digit loop rather than a format string, and it builds the
+  number from the negative side.** The obvious version negates a negative and
+  divides, which is undefined for `INT64_MIN` — there is no positive counterpart
+  of it — and on a device that echoes somebody else's `ts` straight back into a
+  signature, "it works for every value we have seen" is not the standard. It is
+  also the structural form of this section's "never through a `double`": there is
+  no float in the path to reach for.
+
+And one rule the file keeps that this section did not think to ask for: **a
+refusal writes nothing at all.** A missing field, a field over its bound, a
+behaviour §7 has no word for, a buffer one byte short — each returns zero and
+leaves the caller's buffer untouched, because a half-assembled message is the one
+thing here that somebody could sign by ignoring a return value. `endpoint.h`
+states the same rule about a bad URL, where the stakes are a connection rather
+than a verdict.
 
 **One responder at a time.** `approvals.*` with the `approvers` queue group means
 each request reaches exactly one subscriber, arbitrarily. A device sitting on the
@@ -728,12 +756,60 @@ NVS** with flash encryption enabled. Strictly worse (the key is in flash,
 protected by a key that is also on the chip) but still not a plaintext file, and
 honest as a first milestone as long as this doc says which one shipped.
 
+#### Which one shipped: the fallback, and it is not even the encrypted version
+
+**Both routes are written and the fallback is what is running**, at the
+repository owner's decision, because burning an eFuse key is a one-way operation
+on the only board there is and the eFuse route can be switched to later at no
+cost in code. `components/crypto/device_key.h` is where the two live; the
+firmware tries the fuse first at every boot and falls back, so **the day a key is
+burned the device picks it up with no new firmware.**
+
+What the fallback actually does, and the two places it is worse than the
+paragraph above:
+
+- **the seed is 32 random bytes in NVS**, generated once, in the `approver`
+  namespace. §10.15 says nothing of ours goes in NVS and this is now its one
+  exception, argued there: a seed is not a setting — it must not be restored by
+  §10.15's button, must not appear in `cat config.json`, and must not be edited
+  by hand.
+- **it is not encrypted, because nothing here can be.** NVS encryption needs
+  flash encryption, which needs the same one-way eFuse operation this decision
+  postponed, so `esptool read_flash` gives up the signing key. That is the honest
+  statement of it: this device's private key is currently no better protected than
+  its Wi-Fi password, and the property §10.6 was written to buy is the one thing
+  not yet bought.
+
+Three decisions inside it that are not obvious:
+
+- **the randomness is real, without waiting for the radio.** §10.7's rule — the
+  RNG is only a true source with the RF subsystem up — applies to a *seed* far
+  more than to a nonce, and `crypto::Init` runs long before Wi-Fi. So the SAR-ADC
+  entropy source is switched on around the one 32-byte read that needs it, which
+  is what `bootloader_random_enable` documents for exactly this case. It also
+  fixes where in the boot this can run: before anything touches the ADC or the
+  radio, which `main.cpp` states where it calls it.
+- **a seed that cannot be stored is refused, not used.** A device whose identity
+  changed on every boot would register successfully and then be rejected forever
+  afterwards — and the operator would be debugging the handler. `kNoSeed` is a
+  device that says it cannot sign, which is §10.10's end of the trade.
+- **the fuse wins, and it takes the identity with it.** A board running on a
+  stored seed that then has a key burned into it is a *different responder* and
+  needs a new token (§6). The firmware deletes the stale seed when that happens
+  and says so, because the whole cost of the fallback is a private key sitting in
+  flash and there is no reason to keep paying it once the fuse works.
+
 | Responder | Where the private key lives | Can the host forge a decision? |
 |-----------|------------------------------|-------------------------------|
 | `responder.py` | `responder-config.json` on disk | yes, trivially |
 | `responder_yubikey.py` | inside the YubiKey | no |
 | `approver-web` | non-extractable `CryptoKey` in IndexedDB | no |
-| **this** | RAM only, derived from an eFuse key per boot | no — and there is no file to steal |
+| **this**, as designed | RAM only, derived from an eFuse key per boot | no — and there is no file to steal |
+| **this**, as shipped | a seed in **unencrypted** NVS, the key derived from it per boot | **yes**, given a flash dump — the row this section exists to eliminate, and the one `espefuse.py burn-key` closes |
+
+That last row is why `keys` prints the source every time it is asked rather than
+mentioning it once in a boot log: a key in flash and a key that cannot be read at
+all are the same device from the outside.
 
 **A boot self-test, because a miscompiled crypto library is silent.** ESP-IDF's
 libsodium has a Kconfig switch for using mbedTLS's SHA-512 underneath, and that
@@ -774,6 +850,27 @@ stack arriving a second time and from a different direction. It is also the
 second argument, after §10.8.1's, for the signature never running inside an LVGL
 callback.
 
+**And the self-test as written is two checks rather than one**, because the
+section above only asked for half of the question. `library` is what §10.6
+specifies: a fixed key signs a fixed message and the bytes are compared against
+`lib/crypto.py`'s — in both directions, since a library that signs correctly and
+verifies nothing would pass a one-way test, plus a signature with one flipped bit
+that it has to *reject*. `this key` is the other half, and nothing above asked
+for it: the library being right says nothing about the key **this** device
+derived, and a keypair whose public and private halves do not correspond signs
+perfectly happily and verifies against nothing at all. It signs a labelled
+constant with the real key and checks it against the real public key.
+
+Two things about that second check. It prints the message, the signature and the
+public key, so the check can be **finished on the host** — pasting them into
+`lib/crypto.py`'s verify is what actually proved this board's derived key against
+the Python side, and `working-with-code.md` has the line. And it is deliberately
+**not a signing oracle**: the message is a constant with no argument, and it
+begins with a letter where §7's signing bytes begin with the version digits and a
+`\n`, so nothing it prints can be rearranged into a verdict. §10.10's "the only
+path to allow is a human press" survives it existing, which is the reason the
+console is allowed to have it.
+
 ### 10.7 Registration on the device (§6, without a keyboard)
 
 The token is `<key_id>.<b64 32 bytes>` — around 50 characters, minted on the host
@@ -781,8 +878,11 @@ by `py approver/registration_handler.py --get-token approver-esp32`. Typing that
 on a 2.16″ touchscreen is a bad joke, so registration is driven over **USB**,
 through `esp_console` on the USB Serial/JTAG port:
 
-Three of the four commands this section owes — `register <token>`, `keys` and
-`forget` — do not exist yet. The fourth, `bus <url>`, does: it is **`nats
+Two of the four commands this section owes — `register <token>` and `forget` —
+do not exist yet, and `keys` does now: it prints this device's identity, which
+route the key came from, and the two halves of the boot self-test (§10.6).
+`forget` is half done as `keys forget now`, which drops the key; the other half
+needs a registration to drop. The fourth, `bus <url>`, does exist: it is **`nats
 url <url>`**, alongside a status readout and the `sub` / `pub` pair that made
 the bus visible on the wire, and it grew subcommands for the same reason `wifi`
 did. **The ones that exist are listed, with what each
@@ -1986,6 +2086,7 @@ Three tiers, and the first one is where nearly everything belongs:
    | `components/ui` | every transition of §10.8's table; swipes that must *not* navigate on the settings and Wi-Fi screens; the settings screen being reachable from the clock **and from nowhere else**, and the Wi-Fi screen only from settings; a request preempting all four screens without moving any of them; navigation vanishing entirely while the card is up; the screen underneath surviving both an answer and an expiry; the pending queue refusing a fifth arrival. Its `CMakeLists.txt` has an empty `REQUIRES`, which is not an omission — a navigator that included LVGL would be a navigator that needs a board |
    | `components/ui` (the clock face) | §10.8.2's rules, and the sixth subject in this firmware that needs no fake. **The time**: an unset clock showing dashes rather than a plausible `00:00`, a year outside the RTC's own 2024..2099 refused at each end, the digits being 24-hour with their leading zeros, and a wall clock out of range showing dashes rather than rendering an hour of 74. **The three indicators**: a connected link never showing *no* bars, because an empty icon reads as "not connected"; the connecting animation never being blank; an access point and a switched-off radio both lighting none; no server configured being a shape rather than a red light; the two-minute traffic window opening on a delivery, closing on time, surviving the ~49-day wrap, **not** opening on the first reading of a counter that was already non-zero, and **not** opening on a counter that went backwards — which is a reconnect (§10.5) rather than a message; traffic never showing through a dropped link; and a battery percentage clamped, with negative meaning "nothing to ask" rather than empty. **The panel's own two**: the drift staying inside its box, reaching all four corners of it, never standing still, and being continuous across the millisecond wrap — the last of which is the only test that catches a cycle read as `now_ms % period`; and the water bounded away from both ends of the scale, travelling with the phase, varying down the face, and free of hard edges. Plus `Wave` interpolating rather than reading its 64-entry table flat, which is here because the mutation pass showed that breaking it was invisible through `Shimmer` |
    | `components/ui` (the request card) | §10.8.4's rules, and the ones where a test is worth the most. **What a card is allowed to be**: every refusal is its own case — a queue that is full, a field with no terminator in it (all seven, in one loop, so a field added later cannot skip the check), a request with no reply subject, one with no tool name — because a refused card is §10.10's fail-safe and a *shown* card is a question put to a human. **The queue**: the oldest is the one on screen, the bound is asserted equal to the navigator's, and room freed is room usable. **The press guard**: a press inside the first 300 ms is thrown away, a press that *began* before the card appeared is thrown away by the same comparison, the next card in the queue gets its own guard from scratch, and pressing nothing decides nothing. **The outcomes**: a press hands back the whole request the reply will have to echo; a card that timed out reads as a timeout and not as a deny; a request that waited past its own life is dropped without ever being shown; a missing TTL falls back to one that expires rather than to forever; the countdown floors at zero; and the ~49-day wrap lands inside a card's life. **The receipt**: it fades on its own, it is skipped when another card is waiting, and an arriving request outranks it. Plus the assertion the whole file is built around — **no amount of ticking produces a verdict** |
+   | `components/protocol` | §7's signing bytes (§10.2), and the suite with the least room to be approximately right — every other test here protects a behaviour somebody would notice going wrong, this one protects an exact byte string whose failure is invisible from the device's side. So the expectations are **not derived from the header and not typed out of §7's table**: three complete messages generated by `approver/protocol.py` and pasted in, which is tier 2's method arriving early for the one layout that could not wait for it. Plus the shape independently of the content — the two always-empty fields keeping their *positions*, which is what makes the message end in a separator and is the easiest thing to lose while tidying; exactly eight separators whatever the fields hold; and every refusal writing **nothing**, because a half-assembled buffer here is something a caller could sign. And the integers on their own, `INT64_MIN` included: the value with no positive counterpart, which the obvious negate-and-divide loop gets wrong and which is the reason `AppendInt` accumulates downwards |
    | `components/i2cbus` | §10.14.3's three: contention, an acquire that **times out rather than blocks** (asserted as the tick count it asked for, which is why the fake mutex never sleeps), and a recovery that clocks SCL nine times and drops the device handles with the old bus. Plus the device table's per-device clock, its reopen-on-speed-change, and its refusal when full. And **the non-recursive mutex, from both sides**: `AddDevice` called while a lease is held is refused rather than granted — the trap `es8311.h` records — and `Recover`, which used to skip the lease entirely, now waits for it and tears nothing down if it cannot have it |
    | `components/pmic` | the 13-bit battery field against the 14-bit ones — the width that gives a *plausible* wrong voltage when wrong; the TS-pin silencing and the ADC read-modify-write; VBUS needing both status bits; `PowerOff` refusing over USB **and writing nothing**; `Read` being one snapshot rather than a dozen moments; and the two halves of the vendor's rail guard — a rail already at 3.3 V is not rewritten (DCDC1 supplies the C6, so a pointless write is a risk with no upside) and one at the wrong voltage is, with the bits above the field kept |
    | `components/rtc` | BCD both ways; the seven counters in one burst; the OS flag making a *successful* read untrustworthy, and being masked out of the seconds it shares a register with; the clock stopped and restarted around a write — including after a write that failed; and the century this chip does not have, so 2100 and 1999 are refused before the bus is touched while 2099 goes through |
@@ -2098,6 +2199,19 @@ Three tiers, and the first one is where nearly everything belongs:
    so the failure now names the rule that broke. A suite that dies without saying
    which test it was is a suite that costs an hour the next time.
 
+   **The signing bytes added seven, all caught, and no survivors** — which is
+   unusual enough here to be worth a sentence about why. Every rule in that
+   file is a rule about an exact byte, so each mutation has a test whose whole
+   job is that byte: the empty `updated_input_sha256` dropped, the trailing
+   separator dropped, `AppendInt` negating first instead of accumulating
+   downwards (caught only by `INT64_MIN`), the behaviour allowlist bypassed, a
+   too-small buffer truncated into rather than refused, a missing field read as
+   an empty one, and the length bound off by one. The last of those is the one
+   that needed the *test* fixing first: it originally pushed a 255-character
+   string at a 63-character field, which an off-by-one bound refuses just as
+   happily as a correct one. Exactly at the bound and exactly one over is the
+   only pair that says anything.
+
    **The bus link added eleven, one survivor, and a warning about the ritual
    itself.** Ten were caught — the backoff's growth and its cap taken away
    separately, an instant retry after a drop, the teardown that a lost network
@@ -2197,6 +2311,14 @@ Three tiers, and the first one is where nearly everything belongs:
    question a test answers. Never hand-typed from this document — the generating
    command is in [`working-with-code.md`](working-with-code.md).
 
+   **Two of these exist already, ahead of the tier**, because the code they
+   check could not sensibly be written without them: three `signing_bytes`
+   messages in `test_signing.cpp`, and the Ed25519 key pair with a known
+   signature that §10.6's boot self-test consumes. Both were generated by the
+   Python side and pasted in. What is missing is the *tier* rather than the
+   idea — a fixture file rather than string literals in two places, and
+   `registration_reply_signing_bytes`, which arrives with §10.7.
+
    Include a `registration_reply_signing_bytes` vector and an Ed25519 key pair
    with a known signature — the latter is what the boot self-test of §10.6
    consumes, so the vector has one job on the host and one on the device.
@@ -2264,12 +2386,21 @@ them flash text, and 10,665 of DIRAM that is mostly the task's 8 KB stack), and
 `espressif__esp_websocket_client` has no line at all — built, never linked. The
 app is **1,646,640 bytes** against a 2.5 MB slot.
 
-`espressif__libsodium` is in that second category today and will not stay
-there, so its number was taken while a probe held it down: **134,225 bytes**
-(133,022 of flash, 1,203 of DIRAM) for §10.6's four calls, which is what the
-signature will cost when it arrives and takes the app to **1,780,864**. Measured
-under `CONFIG_LIBSODIUM_USE_MBEDTLS_SHA=y`; `n` is 145,005, and §10.6 says why
-that is the more interesting half of the comparison.
+**`espressif__libsodium` has left that second category**, which is what §10.6
+arriving means: **134,901 bytes** (133,694 of flash, 1,207 of DIRAM) with the key
+custody linked against it, and the app at **1,788,928** of the 2.5 MB slot.
+Measured under `CONFIG_LIBSODIUM_USE_MBEDTLS_SHA=y`; `n` costs about 10 KB more,
+and §10.6 says why that is the more interesting half of the comparison.
+
+And the two components on top of it, which are the §10.14.2 split showing up in
+the size report a second time: `libcrypto.a` — the eFuse route, the fallback, the
+self-test and the base64 — is **2,650 bytes** (2,502 of flash, 148 of DIRAM, of
+which 144 is the key material itself: 32 bytes of public key, 64 of private, and
+the 45-character base64 nobody wants to recompute). `libprotocol.a` has **no line
+at all**, for the WebSocket client's reason rather than libsodium's: §7's signing
+bytes are written, host-tested and referenced by nothing, because `Decided()` is
+still a log line. It is the one entry on this list whose number is a promise that
+the next commit collects.
 
 And the two screens of §10.8.2 and §10.8.4, because they are the first data point
 for what three more of them cost: `libscreens.a` is **30,372 bytes** (10,770 of
@@ -2887,18 +3018,34 @@ depend on is intact; what is exposed is the same class of thing that a stolen
 device exposes anyway, and §10.13 already accepted that boundary when it decided
 there is no authentication on the device.
 
-#### The `nvs` partitions, now that nothing of ours is in them
+#### The `nvs` partitions, and the one namespace of ours that is in them
 
 `nvs` stays in `partitions.csv` and is still initialised at boot: `esp_wifi`
-requires `nvs_flash_init` for its own calibration and PHY data. It simply holds
-no namespace of ours. `nvs_keys` stays **reserved and empty** — 4 KB, and
-deleting it would shift every offset after it, which is a reflash of a device
-that has already been registered. The one thing that could still put a namespace
-there is §10.6's *fallback* key custody — the branch where the signing seed is
-generated once and stored rather than derived from an eFuse — and that branch
-would be the reason to populate `nvs_keys` rather than leave it empty. It is
-there for that, and for the FATFS/NVS encryption
-decision above, should it ever be taken.
+requires `nvs_flash_init` for its own calibration and PHY data. `nvs_keys` stays
+**reserved and empty** — 4 KB, and deleting it would shift every offset after it,
+which is a reflash of a device that has already been registered.
+
+**And the thing this section said "could still" put a namespace there has
+happened**, which is why the heading changed: §10.6's fallback shipped, so there
+is now exactly one namespace of ours in `nvs` — `approver`, holding a single
+32-byte blob, the Ed25519 seed. The rule this breaks was "nothing of ours in
+NVS", and the exception is argued rather than quietly taken:
+
+- **it is not a setting, and every property of `config.json` is wrong for it.**
+  §10.15's button must not restore it, `cat config.json` must not print it, and
+  nobody should be able to edit it by hand. A separate store is the cheapest way
+  to get all three, and it is the same argument that keeps `registration.json`
+  out of `config.json` — the split is by lifetime, and a key's lifetime is not a
+  setting's.
+- **`nvs_keys` is still empty, and that is the disappointing half.** The whole
+  point of putting a key in NVS rather than in a file was that NVS *can* be
+  encrypted — but only with flash encryption burned, which is the one-way
+  operation §10.12 has nobody performing yet. So the seed sits in plaintext, and
+  until that changes it is exactly as readable as the WPA password two paragraphs
+  up. §10.6's table has the row that says so.
+- **so `nvs_keys` is now reserved for something specific rather than for
+  something hypothetical**: populating it is what makes this namespace encrypted,
+  and that is one decision — with the FATFS question above — rather than three.
 
 #### The button
 

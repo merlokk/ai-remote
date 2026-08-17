@@ -50,6 +50,18 @@ CONFIG_LV_FONT_MONTSERRAT_14=y
 CONFIG_LV_FONT_MONTSERRAT_28=y
 CONFIG_LV_FONT_MONTSERRAT_48=y
 
+# **8 KB for the main task, because the signature does not fit in 3,584.**
+# `crypto::Init` derives the device key and runs the self-test from `app_main`,
+# and `crypto_sign` uses 4,112 bytes of stack — measured as a high-water mark,
+# after the first version of that code panicked here with a stack protection
+# fault. The framework's default is 3,584, which was never going to be enough.
+#
+# It costs nothing after boot: ESP-IDF deletes the main task when `app_main`
+# returns, and its stack goes back to the heap with it. Any *other* task that
+# signs has to be sized against `crypto::kSignStackBytes` instead, which is what
+# that constant is for.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+
 # --- libsodium (§10.4, §10.6) -----------------------------------------------
 # **The SHA-512 underneath Ed25519, and this line is a measurement rather than
 # a preference.** §10.6 names this exact switch as a seam that has historically

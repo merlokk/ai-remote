@@ -262,11 +262,13 @@ approver-esp32\host_test\run.cmd config     # one suite
 approver-esp32\host_test\run.cmd i2c pmic   # several
 ```
 
-A suite name is matched as a substring, and the names are `navigator`, `i2c`,
-`pmic`, `rtc`, `imu`, `es8311`, `config`, `buttons`, `timezone`, `speaker`,
-`wifi`, `reach`, `timesync` and `nats`. Two of them answer to a second name
-because the obvious one is ambiguous: `sync` also selects `timesync`, and `bus`
-also selects `nats` — while `wifi` selects the policy **and** the internet check,
+A suite name is matched as a substring, and the names are `navigator`, `clock`,
+`request`, `signing`, `i2c`, `pmic`, `rtc`, `imu`, `es8311`, `config`,
+`buttons`, `timezone`, `speaker`, `wifi`, `reach`, `timesync` and `nats`.
+Several answer to a second name because the obvious one is ambiguous: `sync`
+also selects `timesync`, `bus` also selects `nats`, `face` also selects the
+clock face, `card` also selects the request card, and `protocol` also selects
+the signing bytes — while `wifi` selects the policy **and** the internet check,
 since they are two halves of one component. `test_main.cpp` is the list, and
 adding a suite means adding a line there.
 
@@ -277,7 +279,7 @@ stops being run.
 The tail of a good run:
 
 ```
-312 Tests 0 Failures 0 Ignored
+381 Tests 0 Failures 0 Ignored
 OK
 ```
 
@@ -464,6 +466,55 @@ print("pub", base64.b64encode(pub).decode())
 print("sig", base64.b64encode(sig).decode())
 '@
 ```
+
+## The device's key (§10.6)
+
+**Checking a signature the board made**, which is the host half of
+`keys selftest` — run that on the device, then paste its three strings in:
+
+```powershell
+& E:\projects\ai-remote\.venv\Scripts\python.exe -c @'
+import sys; sys.path.insert(0, r"E:\projects\ai-remote")
+from lib import crypto
+pub = "dFEabltdxgbWgh3CE5XL7ul7oMAAtc248oYeAKfJyzA="
+sig = "Ryhn2qqYvXjeG6YZKi48sra1zXXcaQcIlcEv08uiyR6p78S++Y355v+AJ2lQYoEgssKdXEJNGBJ2XtTcmuuCBg=="
+print(crypto.verify(pub, b"approver-esp32 key check v1", sig, "ed25519"))
+'@
+```
+
+`True` means this board's derived key and `lib/crypto.py` agree. **The venv, not
+`py`** — `cryptography` is not in the launcher's interpreter.
+
+**Which route the key came from** is `keys`, and the reading of it is in
+[`commands.md`](commands.md). What decides it is the chip:
+
+```powershell
+espefuse.py -p COM4 summary          # read-only, and the KEY_PURPOSE_n lines are the answer
+```
+
+All six reading `USER R/W (0x0)` means no key is burned and the firmware is on
+§10.6's fallback — the seed is in NVS, and `esptool read_flash` would give it up.
+
+**Burning one is permanent**, so it is written here rather than done by the
+firmware, which has no business altering its own fuses:
+
+```powershell
+# 32 random bytes, on the host, never committed
+& E:\projects\ai-remote\.venv\Scripts\python.exe -c "import os,sys; sys.stdout.buffer.write(os.urandom(32))" > hmac.bin
+espefuse.py -p COM4 burn-key BLOCK_KEY0 hmac.bin HMAC_UP
+```
+
+Three things to know before running it, none of them recoverable afterwards:
+
+- **the block cannot be rewritten and the purpose cannot be cleared.** One key
+  block of six is spent, and `HMAC_UP` is what makes it unreadable by software —
+  which is the point, and also why a lost `hmac.bin` cannot be recovered from the
+  chip. Deleting `hmac.bin` afterwards is the correct move, not a mistake;
+- **the device's identity changes**, because the seed then comes from the fuse
+  instead of from NVS. The registration goes with it and needs a fresh token
+  (§6). The firmware notices, drops the stale seed and says so in the log;
+- **keep a board that has not been through it.** §10.12 says the same about
+  flash encryption and secure boot, for the same reason.
 
 ## The LVGL preview (§10.12.1)
 

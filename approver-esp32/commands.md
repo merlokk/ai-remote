@@ -512,6 +512,94 @@ is refused rather than truncated.
 
 ---
 
+## The key
+
+### `keys`
+This device's identity on the bus, and whether it can prove it:
+
+```
+key id     approver-esp32
+key type   ed25519
+state      ready
+source     a saved key, readable from a flash dump
+public key dFEabltdxgbWgh3CE5XL7ul7oMAAtc248oYeAKfJyzA=
+            this is the fallback: the key is saved on the device and a flash
+            dump gives it away. burning a key into the chip is what fixes it,
+            and it changes this device's identity when it happens.
+registered no - registration is not implemented yet
+```
+
+**`source` is the line to read**, because there are two ways this device can
+have a key and only one of them is the design:
+
+| `source` | What it means |
+|---|---|
+| `derived from a chip key, nothing stored (chip key block N)` | the intended one. The key is recomputed at every boot from a key in an eFuse block the software cannot read; nothing holding it is written anywhere, and a flash dump gives up the public half only |
+| `a saved key, readable from a flash dump` | **what is running today.** No chip key is burned, so a seed was generated once and kept on the device. `esptool read_flash` gives up the signing key |
+
+The device does not choose between them at runtime: a chip key wins whenever
+one is burned. Burning one later needs no new firmware — and it **changes this
+device's identity**, so the registration goes with it.
+
+`state` has three ways of not being `ready`, and each needs something different:
+
+| `state` | What to do about it |
+|---|---|
+| `ready` | nothing |
+| `self-test failed - the signature would not be trusted` | a build problem, not a board problem. Do not use this firmware to approve anything |
+| `the chip refused to use its key` | a key block is burned but not for this purpose, or the hardware is faulty |
+| `no key, and none could be saved - it cannot sign` | the seed could not be written. A device whose key changed every boot would register once and be rejected afterwards, so it refuses instead |
+
+Anything but `ready` means this device will never publish a decision — no
+reply, the hook times out, and Claude Code asks in its own terminal. That is
+the intended failure, not a fault to work around.
+
+**`public key` is the string to compare by eye**, once, against what the
+registration handler prints at startup. It is the public half; printing it
+gives nothing away.
+
+### `keys selftest`
+Two checks, and they answer different questions:
+
+```
+library    passed - signatures match the host's
+this key   passed - it signs and its own public key verifies it
+message    approver-esp32 key check v1
+signature  Ryhn2qqYvXjeG6YZKi48sra1zXXcaQcIlcEv08uiyR6p78S++Y355v+AJ2lQ…
+public key dFEabltdxgbWgh3CE5XL7ul7oMAAtc248oYeAKfJyzA=
+```
+
+- **`library`** is what runs at boot before the key is derived at all: a fixed
+  key signs a fixed message, and the result is compared against bytes the Python
+  side produced — in both directions, a signature this device made and a
+  signature it has to accept, plus one with a flipped bit that it must reject.
+- **`this key`** is the other half. The library being right says nothing about
+  the key *this* device derived, and a keypair whose halves do not match signs
+  perfectly happily and verifies against nothing.
+
+The three strings underneath are there so the check can be finished on the host:
+paste them into `lib/crypto.py`'s verify and it should say `True`.
+`working-with-code.md` has that line.
+
+It is **not** a way to get arbitrary bytes signed. The message is a constant with
+no argument, and it deliberately begins with a letter — the bytes a decision is
+signed over always begin with the protocol version and a newline, so nothing this
+prints can be rearranged into a verdict.
+
+### `keys forget now`
+Deletes the saved key. Refuses without the word `now`, for the reason the
+destructive settings entries do: what is lost is a registration, and getting it
+back means a fresh token minted on the host.
+
+The current session keeps signing with the key it already has — nothing breaks
+mid-session. The next boot makes a new one, and this device is then a different
+responder.
+
+Nothing to forget is not an error: a device running on a chip key has no saved
+seed, and says so by succeeding quietly.
+
+---
+
 ## The filesystem
 
 ### `ls`
@@ -552,8 +640,14 @@ do not exist:
 | Command | Will do |
 |---|---|
 | `register <token>` | the registration exchange with the handler — the reason this console exists |
-| `keys` | print this device's public key and the pinned handler key |
-| `forget` | drop the registration and the pinned key |
+
+`keys` was one of these and exists now, above — with one half of what it was
+specified to print. The device's own key is there; the pinned handler key is
+not, because nothing pins one until `register` exists.
+
+`forget` was specified as "drop the registration and the pinned key". Half of it
+is **`keys forget now`**, which drops the key this device signs with; the other
+half needs a registration to drop, so it arrives with `register`.
 
 `bus <url>` was the fourth of these. It exists as **`nats url <url>`** —
 alongside a status readout, `connect` / `disconnect` / `retry`, and `sub` /
