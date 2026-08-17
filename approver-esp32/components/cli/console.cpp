@@ -772,6 +772,14 @@ int CmdImu(int argc, char **argv) {
 // A number field, its bounds, and where it lives. Strings are handled below;
 // the Wi-Fi networks are not settable from here — they are a list of pairs and
 // belong to the screen of §10.8.6, not to a one-line console setter.
+//
+// **One copy of the list**, because §10.7's four-places rule bites hardest here:
+// the setter's own "unknown field" line and the usage block below both have to
+// name the same fields, and two hand-kept enumerations of the same nine words is
+// the drift that rule exists to prevent.
+constexpr const char *kSettableFields =
+    "volume, brightness, dim, blank, nats, tz, sntp, sync, wifi";
+
 int SetConfigField(const char *key, const char *value) {
     config::Data &c = config::Get();
 
@@ -939,11 +947,24 @@ int SetConfigField(const char *key, const char *value) {
         return 1;
     }
 
-    printf("unknown field '%s'. settable: volume, brightness, dim, blank, nats, tz, sntp, sync, "
-           "wifi\n",
-           key);
+    printf("unknown field '%s'. settable: %s\n", key, kSettableFields);
     printf("the Wi-Fi networks are a list of ssid/password pairs and are not set from here\n");
     return 1;
+}
+
+// One function, reached both by an explicit `config help` and by anything this
+// command does not recognise — §10.7's rule, and the reason it is a rule: finding
+// out what a command takes should not require typing something wrong first, and
+// two copies of a usage block drift.
+void PrintConfigUsage() {
+    printf("usage: config                        the settings, as the file has them\n");
+    printf("       config reload                 re-read the file, discarding edits\n");
+    printf("       config save                   write the current settings back\n");
+    printf("       config restore                the factory defaults over them\n");
+    printf("       config set <field> <value>    %s\n", kSettableFields);
+    printf("       config zones [filter]         the time zones known by name\n");
+    printf("the networks and the ping targets are lists — 'wifi join', 'wifi check'\n");
+    printf("'set' changes memory only; 'save' is what writes %s\n", config::kPath);
 }
 
 int CmdConfig(int argc, char **argv) {
@@ -951,7 +972,15 @@ int CmdConfig(int argc, char **argv) {
         return SetConfigField(argv[2], argv[3]);
     }
 
-    if (argc >= 2 && strcmp(argv[1], "zones") == 0) {
+    if (argc == 2 && (strcmp(argv[1], "help") == 0 || strcmp(argv[1], "-h") == 0 ||
+                      strcmp(argv[1], "--help") == 0)) {
+        PrintConfigUsage();
+        return 0;
+    }
+
+    // At most one filter: `config zones a b` used to list the whole table and
+    // silently drop the second word, which reads as "no zone matched neither".
+    if (argc >= 2 && argc <= 3 && strcmp(argv[1], "zones") == 0) {
         // The table, optionally filtered — `config zones Europe` is how an
         // operator finds the spelling without scrolling past Australia.
         const char *filter = argc == 3 ? argv[2] : nullptr;
@@ -971,9 +1000,15 @@ int CmdConfig(int argc, char **argv) {
     }
 
     if (argc > 2) {
-        printf("usage: config [reload|save|restore]\n");
-        printf("       config set <field> <value>\n");
-        printf("       config zones [filter]\n");
+        // A recognised verb with the wrong number of words is a different
+        // mistake from an unrecognised one, and saying so is the difference
+        // between "I mistyped the count" and "I mistyped the word".
+        if (strcmp(argv[1], "set") == 0) {
+            printf("set takes a field and a value, got %d word(s)\n", argc - 2);
+        } else {
+            printf("no such thing as 'config %s' with %d argument(s)\n", argv[1], argc - 2);
+        }
+        PrintConfigUsage();
         return 1;
     }
 
@@ -989,8 +1024,13 @@ int CmdConfig(int argc, char **argv) {
             // boot. It puts the defaults back over the settings and leaves the
             // registration alone — the whole reason those are two files.
             err = config::Restore();
+        } else if (strcmp(what, "set") == 0) {
+            printf("set takes a field and a value\n");
+            PrintConfigUsage();
+            return 1;
         } else {
-            printf("expected reload, save or restore; got '%s'\n", what);
+            printf("no such thing as 'config %s'\n", what);
+            PrintConfigUsage();
             return 1;
         }
         if (err != ESP_OK) {
@@ -2242,8 +2282,8 @@ const esp_console_cmd_t kCommands[] = {
     },
     {
         .command = "config",
-        .help = "print the parsed settings, or reload / save / restore them",
-        .hint = "[reload|save|restore]",
+        .help = "the settings file: print it, set a field, reload / save / restore it",
+        .hint = "[reload|save|restore|set|zones] — 'config help' for the forms",
         .func = &CmdConfig,
         .argtable = nullptr,
         .func_w_context = nullptr,

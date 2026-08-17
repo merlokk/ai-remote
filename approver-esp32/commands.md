@@ -192,6 +192,11 @@ fallback access point, the internet check, the NATS URL, the time zone and
 SNTP server, display timeouts and the volume. Passwords show as *set* or *not
 set*, never in full.
 
+`config help` prints the forms, the way `wifi help` and `nats help` do, and it is
+also what anything unrecognised prints. The settable field names live in exactly
+one string in the source, so the usage block and the setter's own "unknown field"
+line cannot drift apart.
+
 ### `config reload`
 Re-reads the file, discarding anything changed since. Deliberately does **not**
 restore defaults on a bad file: a reload is somebody asking what the file says,

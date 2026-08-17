@@ -26,10 +26,15 @@ which splits the install in two and leaves a manifest naming both halves —
 | **The activation script** | `C:\Espressif\tools\Microsoft.v6.0.2.PowerShell_profile.ps1` |
 | Its undo | `C:\Espressif\tools\Microsoft.v6.0.2.PowerShell_deactivate.ps1` |
 
-Installed version: **v6.0.2**. §10.4 pins v5.5.3, and the paragraph in §10.12
-says what to do about that — a decision to take at the first real build, not
-something to work around here. Targets this install carries: `esp32`, `esp32c6`,
-`esp32p4`, `esp32s3` — so `set-target esp32c6` works.
+Installed version: **v6.0.2**, and this is the one it builds against. §10.4
+names v5.5.3 as the version Waveshare's examples are written against; §10.12
+settled that argument in favour of what is installed, because the
+version-sensitive half — panel, touch, LVGL — resolves and builds here, and
+`main/idf_component.yml` asks for `idf: ">=5.5"` rather than a pin. So there is
+nothing to work around: v5.5.3 is the version to reach for only if a display or
+touch fault ever starts looking like a framework fault. Targets this install
+carries: `esp32`, `esp32c6`, `esp32p4`, `esp32s3` — so `set-target esp32c6`
+works.
 
 ## The one line that runs `idf.py`
 
@@ -258,15 +263,21 @@ approver-esp32\host_test\run.cmd i2c pmic   # several
 ```
 
 A suite name is matched as a substring, and the names are `navigator`, `i2c`,
-`pmic`, `rtc`, `imu`, `es8311`, `config`, `buttons`, `timezone` and `speaker`.
+`pmic`, `rtc`, `imu`, `es8311`, `config`, `buttons`, `timezone`, `speaker`,
+`wifi`, `reach`, `timesync` and `nats`. Two of them answer to a second name
+because the obvious one is ambiguous: `sync` also selects `timesync`, and `bus`
+also selects `nats` — while `wifi` selects the policy **and** the internet check,
+since they are two halves of one component. `test_main.cpp` is the list, and
+adding a suite means adding a line there.
+
 Run everything before committing; filter while debugging, because scrolling
-past a hundred lines of `PASS` to find the one that matters is how a suite
+past three hundred lines of `PASS` to find the one that matters is how a suite
 stops being run.
 
 The tail of a good run:
 
 ```
-209 Tests 0 Failures 0 Ignored
+312 Tests 0 Failures 0 Ignored
 OK
 ```
 
@@ -284,10 +295,10 @@ preview below, CMake and Ninja from ESP-IDF. Two paths it needs:
 **Mutation-check anything worth trusting.** The habit this suite is built on:
 break the rule the test claims to protect, run it, watch the right test fail,
 put it back. It takes a minute and it is the difference between a test and a
-line that always passes. Twenty invariants have been through it so far; §10.11
-lists them — including one that *survived*, which turned out to be the most
-useful run of all: a mutation nothing catches is a question about the code, not
-a gap in the tests.
+line that always passes. Forty-odd invariants have been through it; §10.11 lists
+them by name, grouped by the pass that produced them — including the ones that
+*survived*, which turn out to be the most useful runs of all: a mutation nothing
+catches is a question about the code, not a gap in the tests.
 
 The cheap way to do a batch of them: copy the driver aside, `git checkout --`
 it back to the last commit, run the suite, and check that **exactly** the
@@ -315,10 +326,16 @@ refuses rather than truncating, which the host's own temp directory
 (`C:\Users\…\AppData\Local\Temp\…`) blows straight past. Widening the buffer in
 the fake would have hidden a constraint the device really has.
 
-**The drivers are compiled unmodified.** `host_test/fakes/` shadows ESP-IDF's
-headers on the include path, so `i2c_bus.cpp`, `axp2101.cpp`, `pcf85063.cpp`,
-`qmi8658.cpp` and `es8311.cpp` are the files that ship. Two consequences worth
-knowing before they bite:
+**The sources under test are the ones that ship.** `host_test/fakes/` shadows
+ESP-IDF's headers on the include path, so the drivers that talk to hardware —
+`i2c_bus.cpp`, `axp2101.cpp`, `pcf85063.cpp`, `qmi8658.cpp`, `es8311.cpp`,
+`speaker.cpp`, `buttons.cpp`, `config.cpp` — compile unmodified against a fake
+platform. The pure-logic files (`navigator.cpp`, `timezone.cpp`, `wifi_policy.cpp`,
+`reachability.cpp`, `sync_policy.cpp`, `endpoint.cpp`, `link_policy.cpp`) need no
+fake at all, which is the point of the split in §10.14.2 rather than a
+convenience. `host_test/CMakeLists.txt` is the current list.
+
+Two consequences of the shadowing, worth knowing before they bite:
 
 - **The fakes have to match ESP-IDF's struct field order.** The drivers fill
   those configs with designated initialisers, so a field out of place is a

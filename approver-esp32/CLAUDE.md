@@ -1739,9 +1739,12 @@ Three tiers, and the first one is where nearly everything belongs:
    headers rather than the interface that section originally specified.
 
    **Every one of these was mutation-checked rather than trusted**: break the
-   rule, watch the test that covers it fail, put it back. **Twenty so far**,
-   and the number is the length of this list rather than a running tally
-   somebody has to keep honest — the card-outranks-navigation rule, the lease
+   rule, watch the test that covers it fail, put it back. **Twenty by the end of
+   the pass described here**, and the number is the length of the list that
+   follows rather than a running total for the suite — the three passes recorded
+   further down (the clock's schedule, the Wi-Fi policy, the bus link) add
+   twenty-six more, and nobody should be keeping a tally honest across four
+   paragraphs. The twenty: the card-outranks-navigation rule, the lease
    timeout, `Recover`'s handle drop, the battery field width, `PowerOff`'s
    refusal, the RTC's OS flag, and `config`'s three: the boot-time recovery,
    the restore-on-bad-file, and the atomic write; plus `Init` adopting a held
