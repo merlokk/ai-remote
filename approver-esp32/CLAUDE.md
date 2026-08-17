@@ -28,25 +28,30 @@ between them they carry what this file deliberately does not:
   device answers and what each one does. Design documents describe why; that
   one describes what you can type.
 
-## Status: a skeleton that builds, and a plan above it
+## Status: a working responder, with three screens still to build
 
-**The library layer of §10.14.2 is written and running on the board; the
-protocol above it is not.** What exists is the whole of the hardware — the
-leased I²C bus and the chips on it, the panel and the touch, the codec, the
-buttons, the settings file on SPIFFS, the Wi-Fi radio with a manager above it,
-the clock and its SNTP half — a console on the USB port with a command per piece
-of it ([`commands.md`](commands.md) is the list), a socket open to the NATS
-server on the LAN, and **two of §10.8's five screens: the clock face and the
-request card over it** — the second of which is the screen this device exists for,
-answered by two buttons on the case. What does not exist is anything §6 or §7
-would recognise: no key, no signature, and therefore no reply. A press decides and
-nothing leaves, which the card says out loud. The table below is row by row about
-which is which, and the rows that still need the repository owner's sign-off say
-so.
+**The loop is closed.** A permission request published by `hook.py` reaches this
+device on `approvals.*`, appears on the glass with the command whole, and a press
+on the case is signed with a key bound to the chip and published into the
+request's own reply subject — where `hook.verify_reply` calls it `trusted` and
+Claude Code acts on it. Press nothing and nothing is sent, the hook times out, and
+the question goes back to its own terminal (§10.10). Both halves are checked on
+the board against the real handler and the real hook.
+
+Under it: the whole of the hardware — the leased I²C bus and the chips on it, the
+panel and the touch, the codec, the buttons, the settings file on SPIFFS, the
+Wi-Fi radio with a manager above it, the clock and its SNTP half — a console on
+the USB port with a command per piece of it ([`commands.md`](commands.md) is the
+list), the bus, an Ed25519 identity (§10.6) and a registration (§10.7).
+
+What is **not** done, and the table below is row by row about it: three of §10.8's
+five screens, so a swipe still has nowhere to go; and §10.6's key custody shipped
+as its *fallback* — the seed is in unencrypted NVS rather than behind an eFuse,
+which is a decision with a cost that section states in a table of its own.
 
 | Scope | State |
 |-------|-------|
-| The design below — the protocol roles (§10.2), key custody (§10.6), registration (§10.7), the screens (§10.8) | **written, unimplemented**. The dependency set and the tests used to be counted here and have rows of their own now, because neither is paper any more |
+| The design below — the protocol roles (§10.2), key custody (§10.6), registration (§10.7), the screens (§10.8) | **mostly implemented now**, and the rows below say which parts. What is left as design-only is three screens (§10.8.3, §10.8.5, §10.8.6) and the eFuse half of §10.6 |
 | The project skeleton — `CMakeLists.txt`, `main/main.cpp`, `sdkconfig.defaults`, `partitions.csv` (§10.12) | **generated and building** on ESP-IDF v6.0.2; two 2.5 MB OTA slots, ~10.9 MB `storage`, `nvs_keys` reserved |
 | The pin map — `components/boards/board.h` (§10.1) | **written**, from Waveshare's own pinout sheet in `docs/`; logged at boot. Every driver below is *handed* its pins from here rather than including this file, which is §10.14.3's rule and what keeps the drivers testable on the host |
 | SPIFFS mounted + the console — `components/storage`, `components/cli` (§10.7, §10.15) | **running on hardware**: flashed over COM4, and the console answers on the USB Serial/JTAG port — [`commands.md`](commands.md) is what it knows, and `devstatus` is all of it at once |
@@ -70,9 +75,9 @@ so.
 | Bus reachable from the device at all (§10.3) | **decided**: shared on the home LAN, no TLS, no auth — the router is the trust boundary |
 | Firmware: the key and the signing bytes (§10.2, §10.6) — `components/crypto`, `components/protocol` | **written, and the key signs on the board**: the boot self-test passes both halves, the identity is derived and survives a reboot, `keys` is on the console, and a signature this board made verifies under `lib/crypto.py`. §7's signing bytes are assembled and host-tested against Python's own output (14 tests, 7 of 7 mutations caught). **On §10.6's fallback, not its design** — no eFuse key is burned, so the seed is in unencrypted NVS and that section's table has the row that says what it costs |
 | Firmware: registration (§6, §10.7) — `components/registration`, `components/protocol` | **done, against the real handler**: `register <token>` on the console runs §6 verbatim — a nonce made after the radio is up, a private inbox, the handler's signature verified **before** a single field of the reply is read, and `registration.json` written only on a verified `ok:true`. On the board: registered, survived a reboot, refused a spent token, and **refused a perfectly valid `ok:true` signed by a handler it is not pinned to** — with the file unchanged every time. 25 host tests |
-| Firmware: the reply going out | not started, and now the only thing between the card and a working responder. `screens.cpp`'s `Decided()` is the one function left to fill in: it is handed the whole request and the verdict, and today it writes a log line saying nothing was published. Everything under it exists — a key, a registration, and the bytes to sign |
+| Firmware: the loop (§7) — `components/responder`, `components/protocol` | **closed**: `approvals.*` in the queue group `approvers`, parsed, on the glass, and a press signed and published into the request's own reply subject. It subscribes only when it has a key, a registration **and** a connection, so a device that cannot answer never takes a request from a responder that can. On the board: a request built by `hook.build_request` arrived and showed the command whole. 19 host tests over the wire format |
 | The five screens — clock, limits, request, settings, Wi-Fi (§10.8) | **two of five running**: the clock face (§10.8.2) and the request card (§10.8.4), both on the board. Limits, settings and Wi-Fi are specified and not started, so a swipe still has nowhere to go |
-| The request card — `components/ui/request_card.*` + `components/screens/request_screen.*` (§10.8.4) | **running on hardware**: §7's fields in a bounded queue of four, the tool and the command as the heaviest thing on the glass, a countdown that is the hook's rather than the device's, `+N waiting`, and a receipt afterwards that distinguishes a verdict from a card nobody answered. **Answered by the buttons** — `BOOT` allows, `PWR` denies and doubles as the way back to the clock — with §10.8.1's queued-touch guard in the shape a press has. Nothing on it is touchable, deliberately. The deciding half is `<cstdint>`-only and host-tested (23 tests, 16 of 16 mutations caught). **No bus behind it**: `request test` on the console is the only way to raise one, because subscribing would take real requests from the responders that can sign |
+| The request card — `components/ui/request_card.*` + `components/screens/request_screen.*` (§10.8.4) | **running on hardware**: §7's fields in a bounded queue of four, the tool and the command as the heaviest thing on the glass, a countdown that is the hook's rather than the device's, `+N waiting`, and a receipt afterwards that distinguishes a verdict from a card nobody answered. **Answered by the buttons** — `BOOT` allows, `PWR` denies and doubles as the way back to the clock — with §10.8.1's queued-touch guard in the shape a press has. Nothing on it is touchable, deliberately. The deciding half is `<cstdint>`-only and host-tested (23 tests, 16 of 16 mutations caught). **And now a bus behind it**: `components/responder` subscribes when it can actually answer, and `request test` is still there for when it cannot |
 | The clock face — `components/ui/clock_face.*` + `components/screens` (§10.8.2) | **running on hardware**: 24-hour seven-segment digits filled by a travelling wave, three indicators to the left of them (radio, bus, battery), the date under them, and the whole face drifting ±30/±40 px because the panel is an AMOLED. `--:--` rather than a plausible midnight when no believable time has arrived. `clock` on the console prints what is on the glass and why — which is how the drift and the water are checked without a camera. The deciding half is `<cstdint>`-only and host-tested (32 tests, 14 of 14 mutations caught); the painting half is LVGL and is the only file in the firmware that draws anything |
 | The Wi-Fi driver — `components/wifi` (§10.9) | **running on hardware**: two modes (access point, client), one network at a time, a latched link state, a disconnection reason turned into the three answers a person can act on, and a scan that works in both modes. It has **no opinions** — which network and when is the manager's, and that split is what makes the manager testable |
 | The internet check — `components/wifimgr/reachability.*` (§10.9) | **running on hardware**: once a minute, while there is a client link, an ICMP echo to one of a few addresses from `config.json` (8.8.8.8, 1.1.1.1, 9.9.9.9 by default). Three states — `unknown` is the honest one — two failed rounds to say offline and one reply to come back. `wifi ping` and `wifi check` on the console. **It never decides anything**: a link with no internet is reported, never a reason to change networks |
@@ -80,7 +85,7 @@ so.
 | The Wi-Fi screen (§10.8.6) | specified, not started — the manager underneath it is what exists |
 | Where the configuration lives (§10.15) | **decided**: all of it in JSON on SPIFFS, nothing of ours in NVS — with the cost stated (SPIFFS cannot be encrypted at rest). `spiffs_image/config.json` + `config.init.json` are flashed, and `components/config` is what reads them |
 | The `KEY`-at-boot config restore (§10.15) | specified, not started |
-| Host-tier tests (§10.11) — `host_test/` | **running**: 406 Unity tests over `ui` (the navigator, the clock face and the request card), `protocol` (§7's signing bytes and §6's registration exchange), `i2cbus`, `pmic`, `rtc`, `imu`, `audio`, `config`, `buttons`, `timezone`, `speaker`, `wifimgr`, `timesync` and `nats`, one command, no board. The drivers are compiled **unmodified** against a fake ESP-IDF (`host_test/fakes/`), which is §10.14.3's owed fake backend arriving in a different shape than that section specified, and which now covers I²S and a filesystem as well as the I²C wire. Built by MSVC rather than by ESP-IDF's `linux` target, which does not work on a Windows host — §10.11 records why |
+| Host-tier tests (§10.11) — `host_test/` | **running**: 425 Unity tests over `ui` (the navigator, the clock face and the request card), `protocol` (§7's signing bytes, its wire format, and §6's registration exchange), `i2cbus`, `pmic`, `rtc`, `imu`, `audio`, `config`, `buttons`, `timezone`, `speaker`, `wifimgr`, `timesync` and `nats`, one command, no board. The drivers are compiled **unmodified** against a fake ESP-IDF (`host_test/fakes/`), which is §10.14.3's owed fake backend arriving in a different shape than that section specified, and which now covers I²S and a filesystem as well as the I²C wire. Built by MSVC rather than by ESP-IDF's `linux` target, which does not work on a Windows host — §10.11 records why |
 | Protocol parity vectors (§10.11 tier 2) | not started |
 
 Read §10.3 before anything else: it is the one part of this that changes
@@ -1222,10 +1227,26 @@ where it becomes a code rule rather than an observation.
   to tap. Ignore presses for the first ~300 ms of any newly presented card, and
   discard any touch whose press began before it appeared. A console prompt and a
   browser tab get this guard for free; a desk object does not.
-- **The alert.** There is a codec and a speaker here: one short synthesised chirp
-  on a new request, no asset. `approver-web`'s "The new-request alert" applies —
-  ramp the envelope or it clicks, and never chirp for a card that was already
-  there.
+- **The alert.** There is a codec and a speaker here: one short sound on a new
+  request. `approver-web`'s "The new-request alert" applies — never chirp for a
+  card that was already there.
+
+  **Written, and it needed a task of its own.** This section originally said "no
+  asset" and `screens.h` originally said the chirp was the caller's job; both are
+  now the other way round, for one reason: `Speaker::PlayWav` blocks for the
+  length of the file, and `alert.wav` is about three and a half seconds. There is
+  no task in this firmware that can afford that — the screen task would miss the
+  press it exists to see, the bus task would stop reading the socket, and the
+  responder task would hold up the signature. That was an argument against playing
+  it *on any of those tasks*, not against playing it. So it has 4 KB and a
+  semaphore, and the worst a stalled chirp can do is delay the next chirp.
+
+  It lives in `screens::Inject` rather than in whoever raised the card, which is
+  the reversal that matters: a card going up is a property of the card, so a
+  request off the bus and a `request test` make the same noise and neither caller
+  has to remember. The semaphore is **binary**, so four cards arriving together
+  are one sound rather than four — which is this section's "never chirp for a card
+  that was already there", from the other end.
 
 #### 10.8.2 Clock — the home screen
 
@@ -1590,15 +1611,21 @@ Six things are decisions rather than plumbing:
   **timeout**, in amber, not as a deny in red: the hook has already fallen back
   to its own prompt, and an operator told "denied" would believe they had
   answered something they never saw.
-- **There is no bus behind it, and that is a decision rather than a gap.**
-  Subscribing to `approvals.*` in the `approvers` queue group would take real
-  requests away from the responders that can sign one (§6's "Multiple clients",
-  §10.2) and answer them with nothing. So the only caller of `screens::Inject` is
-  `request test` on the console, and `screens.cpp`'s `Decided()` is the single
-  function §10.6 and §7 have to fill in — it is handed the whole request and the
-  verdict, and today it writes a log line. **The receipt says so on the glass**:
-  `decided, not sent - no key yet`, because a screen that implied a reply had left
-  would be the one lie here that matters.
+- **There is a bus behind it now, and the shape of how it got there is the
+  point.** This section used to say the opposite — that subscribing would take
+  real requests away from responders that can sign one — and the condition that
+  made it true is now a condition in the code: `components/responder` subscribes
+  only when it has a key, a registration **and** a connection, so a device that
+  cannot answer is never on the subject. `request test` is still there for when it
+  is not.
+
+  What did **not** change is anything in this component. `screens.cpp` gained a
+  hook where `Decided()` used to log, and it still has no key, no subject and no
+  signature in it — which is what §10.14.2 asks for and what makes "delete the
+  responder and the card still works" true. The receipt line moved outside for the
+  same reason: only the thing that publishes knows whether anything did, so
+  `SetReceiptNote` is set from there and reads `allow sent, sig <8 characters>`
+  instead of `decided, not sent - no key yet`.
 
 Two things only the board could have said, both fixed, and both found by putting
 a screenshot (§10.12.2) next to `request`:
@@ -1615,6 +1642,65 @@ And one number that came from measuring rather than reasoning: a `ui::Request` i
 2.3 KB of §7 fields, and two of them as locals in the button poll took the screen
 task's free stack from 2,944 bytes to **1,088**. They are static now — which
 §10.14.1 would have asked for anyway; the measurement is what made it urgent.
+
+##### The loop, closed — `components/responder`
+
+`approvals.*` in, a signed decision out, and everything under it already worked
+on its own. What this component is, is *when*:
+
+| File | What it is |
+|---|---|
+| `protocol/approval.h/.cpp` | the JSON either side of the signature: what a request is, and what a reply has to echo. cJSON only, host-tested (§10.11) |
+| `responder/responder.h/.cpp` | the subscription, the queue between the press and the signature, and the counters `request` prints |
+
+**What the board has actually done**: taken a request built by `hook.build_request`
+off the bus, shown the command whole, and — on a press — signed it and published
+into the request's own reply subject, with `tools/test_request.py` reporting
+`TRUSTED — Claude Code would allow this` from `hook.verify_reply` against the real
+allowlist. And the other end of the same rule: a request nobody answered produced
+no reply at all, and the hook fell back to its own prompt (§10.10).
+
+Four things are decisions rather than plumbing:
+
+- **It subscribes only when it could actually answer.** §6's queue group means
+  each request reaches exactly one responder, so a device on the subject without
+  a key or a registration would take requests away from the YubiKey responder and
+  answer them with silence — which is worse than not being there, because the
+  operator sees a request that simply never gets decided. Key, registration and
+  connection, or it is not subscribed, and `request` names which of the three is
+  missing. A reconnect drops the subscription with the client, so "subscribed" is
+  tracked against the connection it was made on rather than believed.
+- **Nothing is signed on the task that saw the press.** The screen task has 4 KB
+  of stack in total and `crypto_sign` wants 4,112 bytes of it — but the real
+  reason is §10.8.1's: a screen task that stalls cannot see the next press. So a
+  decision is copied into one of two static slots and this component's own task
+  does the work. Two slots because a press is a human and signing is ten
+  milliseconds; over capacity is a drop, counted, and §10.10's fail-safe.
+- **A decision that missed its moment is dropped rather than sent.** If the socket
+  went and came back between the press and the publish, the inbox the reply would
+  go into no longer exists, and publishing into it is worse than silence — it
+  looks like an answer to a question nobody is waiting for. The connection
+  generation is recorded at the press and checked at the publish.
+- **The verdict reaches this component through a hook, not a call.** `screens`
+  knows nothing about keys, subjects or the bus, and the dependency runs one way:
+  the responder registers itself as where a verdict goes. Deleting it leaves a
+  device that shows cards and lets them time out, which is the test §10.8.3 states
+  for the limits screen applied here.
+
+**And one bug the board found that no host test could have.** The counters and
+the receipt were written *after* `nats::Flush`, and on the first real exchange the
+reply reached the hook — verified, trusted, acted on — while `request` still said
+`sent 0` and the glass still said nothing had left, **for minutes**. `Flush` waits
+on a mutex the library holds across its own socket reads, so it stalls far longer
+than the two seconds it is asked for, and everything after it stalled with it.
+
+The fix is the ordering, and §4 had already drawn the line: published means the
+bytes are gone, and for a decision that *is* the delivery — the hook is inside a
+request-reply and has the answer the moment the server does. So the counters and
+the receipt are true as soon as `Publish` returns, and the flush is confirmation
+afterwards, worth a log line if it does not come. A readout that lags the thing it
+describes is worse than no readout: it was the reason a working loop looked broken
+for half an hour.
 
 #### 10.8.5 Settings
 
@@ -2151,6 +2237,7 @@ Three tiers, and the first one is where nearly everything belongs:
    | `components/ui` (the request card) | §10.8.4's rules, and the ones where a test is worth the most. **What a card is allowed to be**: every refusal is its own case — a queue that is full, a field with no terminator in it (all seven, in one loop, so a field added later cannot skip the check), a request with no reply subject, one with no tool name — because a refused card is §10.10's fail-safe and a *shown* card is a question put to a human. **The queue**: the oldest is the one on screen, the bound is asserted equal to the navigator's, and room freed is room usable. **The press guard**: a press inside the first 300 ms is thrown away, a press that *began* before the card appeared is thrown away by the same comparison, the next card in the queue gets its own guard from scratch, and pressing nothing decides nothing. **The outcomes**: a press hands back the whole request the reply will have to echo; a card that timed out reads as a timeout and not as a deny; a request that waited past its own life is dropped without ever being shown; a missing TTL falls back to one that expires rather than to forever; the countdown floors at zero; and the ~49-day wrap lands inside a card's life. **The receipt**: it fades on its own, it is skipped when another card is waiting, and an arriving request outranks it. Plus the assertion the whole file is built around — **no amount of ticking produces a verdict** |
    | `components/protocol` | §7's signing bytes (§10.2), and the suite with the least room to be approximately right — every other test here protects a behaviour somebody would notice going wrong, this one protects an exact byte string whose failure is invisible from the device's side. So the expectations are **not derived from the header and not typed out of §7's table**: three complete messages generated by `approver/protocol.py` and pasted in, which is tier 2's method arriving early for the one layout that could not wait for it. Plus the shape independently of the content — the two always-empty fields keeping their *positions*, which is what makes the message end in a separator and is the easiest thing to lose while tidying; exactly eight separators whatever the fields hold; and every refusal writing **nothing**, because a half-assembled buffer here is something a caller could sign. And the integers on their own, `INT64_MIN` included: the value with no positive counterpart, which the obvious negate-and-divide loop gets wrong and which is the reason `AppendInt` accumulates downwards |
    | `components/protocol` (the registration exchange) | §6/§10.7's, and the suite is mostly about **one rule**: the handler's signature is checked before any field of the reply is read. That is testable at all because the verifier comes in as an argument — the one used here *records the message it was handed*, so "these are `registration_reply_signing_bytes`" is an assertion rather than a reading of the code, and every rejection that happens *before* the signature uses a verifier that fails the test if it runs. Then each refusal as its own case, because each has its own sentence on a console: not an object, another protocol version, an `ok` that is a string rather than a bool, no handler key, a **pin mismatch** (which is not a bad signature and must not be spelled as one), a nonce that answers a different request, no timestamp, a `ts` past 2^53 that cJSON would silently round, a field longer than the device will hold, and a signature that is not one. Plus the two that are about agreeing with Python rather than refusing anything: the signing bytes byte for byte, and an absent optional field signing as `""` — because the handler omits `error` on success and the other side signs it as empty |
+   | `components/protocol` (the wire format) | §7's JSON, and the fixture is **`hook.py`'s own output** rather than something written to match the parser — a request invented here would pass for a parser that agrees with this file and with nothing else. The parse: every field where §7 says, `tool_input` rendered **whole** rather than reached into (§10.8.4 forbids showing part of what is being asked for), and no TTL arriving so the card's own default is what expires one. Then every refusal as its own case, because this is the one subject anybody on the LAN can publish to: not an object, another version, a missing field one at a time, a field longer than the card holds, a `tool_input` too big to show whole — the refusal with a stated cost — a `ts` that cannot be echoed exactly, and no reply subject at all. Each of them asserted to leave the caller's card **untouched**, because the card in that struct belongs to a request somebody is still reading. The reply: the six fields `hook.py::verify_reply` compares one by one, an empty `reason`, and **no `updated_input`** — whose absence is what keeps `updated_input_sha256` empty in the signed bytes |
    | `components/i2cbus` | §10.14.3's three: contention, an acquire that **times out rather than blocks** (asserted as the tick count it asked for, which is why the fake mutex never sleeps), and a recovery that clocks SCL nine times and drops the device handles with the old bus. Plus the device table's per-device clock, its reopen-on-speed-change, and its refusal when full. And **the non-recursive mutex, from both sides**: `AddDevice` called while a lease is held is refused rather than granted — the trap `es8311.h` records — and `Recover`, which used to skip the lease entirely, now waits for it and tears nothing down if it cannot have it |
    | `components/pmic` | the 13-bit battery field against the 14-bit ones — the width that gives a *plausible* wrong voltage when wrong; the TS-pin silencing and the ADC read-modify-write; VBUS needing both status bits; `PowerOff` refusing over USB **and writing nothing**; `Read` being one snapshot rather than a dozen moments; and the two halves of the vendor's rail guard — a rail already at 3.3 V is not rewritten (DCDC1 supplies the C6, so a pointless write is a risk with no upside) and one at the wrong voltage is, with the bits above the field kept |
    | `components/rtc` | BCD both ways; the seven counters in one burst; the OS flag making a *successful* read untrustworthy, and being masked out of the seconds it shares a register with; the clock stopped and restarted around a write — including after a write that failed; and the century this chip does not have, so 2100 and 1999 are refused before the bus is touched while 2099 goes through |
@@ -2275,6 +2362,15 @@ Three tiers, and the first one is where nearly everything belongs:
    string at a 63-character field, which an off-by-one bound refuses just as
    happily as a correct one. Exactly at the bound and exactly one over is the
    only pair that says anything.
+
+   **The wire format added nine, all caught, and none of them interesting** —
+   which is itself worth one line: a request with nowhere to answer shown anyway,
+   any version accepted, a missing field read as empty, the tool input rendered
+   with whitespace, a `ts` too large to echo accepted, the reply's nonce not
+   echoed, any behaviour reaching the wire, an `updated_input` added, and the card
+   written into before the message was known to be good. Nine rules, nine tests,
+   no survivors and no surprises. A file that is nothing but field layouts is the
+   one place where that is the expected outcome rather than a suspicious one.
 
    **The registration exchange added nine, all caught, and one of them had to
    fix the test before it could be run.** The nine: the pin never firing, the
@@ -2488,15 +2584,19 @@ self-test and the base64 — is **2,650 bytes** (2,502 of flash, 148 of DIRAM, o
 which 144 is the key material itself: 32 bytes of public key, 64 of private, and
 the 45-character base64 nobody wants to recompute). `libprotocol.a` had **no line at all**
 when that was written — §7's signing bytes were host-tested and referenced by
-nothing — and §6 collected it: it is **2,861 bytes**, every one of them flash and
-none of them RAM, which is what a component made of nothing but byte layouts
-looks like. Next to it `libregistration.a` is **3,747** (758 of DIRAM, mostly the
-512-byte reply buffer) and `libcrypto.a` 2,732.
+nothing — and §6 and §7 collected it: it is **7,600 bytes**, every one of them
+flash and **none of them RAM**, which is what a component made of nothing but
+field layouts looks like. Next to it `libregistration.a` is 3,747, `libcrypto.a`
+2,732, and `libresponder.a` **25,091** — of which 20,180 is DIRAM, and almost all
+of that is two things the design asked for out loud: a 12 KB task stack sized to
+hold a signature, and two 2.3 KB slots for decisions waiting to be signed.
 
-Worth reading as a group rather than four numbers: **the whole of §6 and §7's
-identity, exchange and wire format is 9,340 bytes**, against the 134,901 of the
-library that does one primitive underneath them. The protocol was never the
-expensive part.
+Worth reading as a group rather than as five numbers. **Everything that decides —
+the identity, the exchange, the wire format — is 14,079 bytes of flash and 148 of
+RAM.** What costs is *holding* things: the responder's stack and slots, and
+`libscreens.a`'s 23,942 of DIRAM for the card queue. And underneath all of it,
+134,901 for the library that does one primitive. The protocol was never the
+expensive part; the buffers §10.8.4 refuses to truncate are.
 
 And the two screens of §10.8.2 and §10.8.4, because they are the first data point
 for what three more of them cost: `libscreens.a` is **30,372 bytes** (10,770 of
@@ -2649,9 +2749,10 @@ back out of the segment boxes of the PNG, at a drift of `+10,-8`.
   arrived before step 1. What that bought was the AMOLED question — the drift and
   the dimness — answered in code on the panel that has the problem, rather than
   answered for the first time under the one screen that must not be got wrong.
-  The **request screen** then followed, so step 1 is now two thirds done: the bus
-  is open and the card is on the glass, and what is missing between them is the
-  key. What none of it moved is the order for the rest:
+  The **request screen** then followed, and step 1 is now **done**: the bus is
+  open, the card is on the glass, the device is registered and a press is signed
+  and published — `hook.verify_reply` says `trusted` for what comes off it. What
+  none of that moved is the order for the rest, and step 2 is what is next:
   1. bus + registration + the **request** screen (§10.8.4) — the loop closes here,
      and until it does the rest is decoration;
   2. **Wi-Fi** (§10.9) and its screen — until then, credentials compiled in or set

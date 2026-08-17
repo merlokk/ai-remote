@@ -11,6 +11,10 @@
 # checked through a function pointer handed in from outside — which is what lets
 # the ordering rule of §10.7 be tested without libsodium, and what stops that
 # ordering from being the caller's discipline. `registration.h` argues it.
-idf_component_register(SRCS "signing.cpp" "registration.cpp"
+# `ui` is on this line for one struct: `ui::Request` is §7's field list verbatim,
+# and the alternative was a second copy of it here plus a conversion between them
+# — two places for a field to be forgotten. It costs nothing, because
+# `components/ui` includes `<cstdint>` and nothing else.
+idf_component_register(SRCS "signing.cpp" "registration.cpp" "approval.cpp"
                     INCLUDE_DIRS "."
-                    REQUIRES espressif__cjson)
+                    REQUIRES ui espressif__cjson)

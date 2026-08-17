@@ -261,6 +261,36 @@ $cfg = "$env:TEMP\impostor.json"
 — and the device should answer `signed by a different key than this device
 already trusts`, with `registration.json` unchanged.
 
+## Putting one request through the whole loop (§7)
+
+`tools/test_request.py` is the probe: it sends exactly what `hook.py` would send
+and judges the answer with `hook.verify_reply` against the real allowlist, so the
+verdict it prints is the verdict Claude Code would act on.
+
+```powershell
+& .\.venv\Scripts\python.exe tools/test_request.py --command "echo hello" --timeout 75
+```
+
+**Mind the quoting**: `--command "two words"` needs the quotes *inside* the
+argument list when it is started from `Start-Process`, or PowerShell splits it and
+argparse refuses the tail.
+
+Then press **BOOT** on the board to allow or **PWR** to deny — there is no console
+command for either, and there will not be. A good run ends in
+
+```
+  behavior  : allow
+  key_id    : approver-esp32
+  verdict   : TRUSTED - Claude Code would allow this
+```
+
+Press nothing and you get the other half, which is just as much a test:
+`no answer: nobody decided in time (the hook would fall back to its own prompt)`.
+
+The device's side of the same exchange is `request` on the console
+([`commands.md`](commands.md)) — `answering` says whether it is on the subject at
+all, and `wire` / `sent` say what went through it.
+
 ## Sounds: mp3 in, WAV out (§10.8.1)
 
 The firmware has **no decoder** and does not want one (`components/audio/speaker.h`

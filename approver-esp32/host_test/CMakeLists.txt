@@ -83,6 +83,7 @@ add_executable(host_test
     test_nats.cpp
     test_signing.cpp
     test_registration.cpp
+    test_approval.cpp
 
     # The fake ESP-IDF the drivers are compiled against. `fakes/` shadows the
     # framework's headers on the include path below, so the sources listed
@@ -126,6 +127,7 @@ add_executable(host_test
     # output has to match another language byte for byte.
     ../components/protocol/signing.cpp
     ../components/protocol/registration.cpp
+    ../components/protocol/approval.cpp
 
     # cJSON, the real one, out of the managed component `idf.py build` fetched.
     "${CJSON_DIR}/cJSON.c"

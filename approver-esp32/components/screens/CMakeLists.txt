@@ -9,4 +9,4 @@
 # was put in the wrong component.
 idf_component_register(SRCS "clock_screen.cpp" "request_screen.cpp" "screens.cpp"
                     INCLUDE_DIRS "."
-                    REQUIRES ui display pmic buttons wifimgr nats lvgl__lvgl)
+                    REQUIRES ui display pmic buttons audio wifimgr nats lvgl__lvgl)

@@ -230,10 +230,14 @@ The permission card (§10.8.4) — what is on it, and the tally.
     cwd        E:\projects\ai-remote
     input      {"command": "rm -rf build"}
     waiting    1 more
-    last       timed out - nobody answered, and nothing was sent - Bash
-    tally      0 allowed, 0 denied, 1 timed out
+    last       allowed - Bash
+    tally      1 allowed, 0 denied, 1 timed out
     guards     0 refused, 0 press(es) ignored
-    signing    no key on this device yet - a press decides and nothing is sent
+    answering  yes - listening on approvals.* in the group approvers
+    wire       4 arrived, 3 shown, 1 dropped
+    sent       1 repl(ies): 1 allow, 0 deny
+    unanswered 0 press(es) that never reached the bus
+    stack      6024 byte(s) never used, of 12288
 
 `input` is a **preview** and says how many bytes it is not showing. The screen is
 where a command is read in full: a console line that looked complete would be the
@@ -244,18 +248,41 @@ truncation §10.8.4 forbids, arriving through the back door.
 was full, a field did not fit, or there was nowhere to answer into), and `ignored`
 is a press that began before the card appeared or inside its first 300 ms.
 
-`signing` is the honest line: **there is no key on this device yet**, so a press
-decides and nothing leaves. The card says the same thing.
+**`answering` is the line to read first**, because a device showing requests and a
+device answering them look identical from the glass. It is `yes` only when all
+three are true — there is a key (`keys`), there is a registration (`register`) and
+there is a bus connection (`nats`) — and when it is `no` it names which one is
+missing, because each has its own command to go and look at.
+
+That is not caution, it is how the subject works: each request reaches exactly
+**one** responder in the group, so a device that cannot sign would take requests
+away from one that can and answer them with silence. Not being there is the better
+failure.
+
+`wire` is what came off the subject: how many arrived, how many became a card, and
+how many were dropped — a payload that would not parse, a field longer than this
+device will show, a request with nowhere to answer into, or a card queue that was
+full. Every drop is a log line as well.
+
+`unanswered` counts the thing worth watching: **presses a human made that nobody
+heard.** Reaching the bus can fail after the button — the signature, the publish, a
+socket that went and came back between the press and the reply, or more decisions
+at once than there were slots. It is the fail-safe working, and it is still the
+number that says somebody answered something Claude Code never learned about.
 
 ### `request test [seconds]`
 ### `request test <tool> <text …>`
 Puts a synthetic card up — 30 s by default, or the seconds you name, or a tool and
 arguments of your own. It plays the alert and prints which button does what.
 
-**This is the only way to raise a card today, and that is deliberate.** The device
-does not subscribe to the approval subject: it would take real requests away from
-the responders that can actually sign one and answer them with nothing. When the
-device has a key, the bus becomes a second caller and this command stays as it is.
+**It is no longer the only way to raise a card** — the bus is the other one — and
+it stays because it works when the bus does not: no network, no registration, or
+simply nothing asking. A card from here is indistinguishable to everything above
+it, deliberately, which is what makes it worth testing with.
+
+The one difference is where the answer goes: a card raised here carries no reply
+subject a hook is waiting on, so answering it signs and publishes into a subject
+nobody is reading. `sent` goes up and no one hears it.
 
 The card is answered **on the board**: `BOOT` allows, `PWR` denies. There is no
 console command for either, and there will not be — the only path to an allow is a
@@ -698,9 +725,10 @@ drop two things that cost different amounts: **`forget now`** drops the
 registration and the pinned handler key, and **`keys forget now`** drops the key
 this device signs with.
 
-What is still missing is not a command: nothing subscribes to `approvals.*` yet,
-so the only way to raise a card is `request test`. The device can sign and is
-registered; what it does not do is answer.
+Nothing is missing any more: the device subscribes to `approvals.*`, shows what
+arrives, and signs and publishes what a human presses. `request` is where you look
+to see whether it is doing that, and which of the three preconditions is missing
+if it is not.
 
 `wifi <ssid> <password>` was once specified as the headless way to join a
 network. It is `wifi join <ssid> [password]` now: `wifi` grew a status readout

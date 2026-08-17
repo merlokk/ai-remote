@@ -1,3 +1,3 @@
 idf_component_register(SRCS "console.cpp"
                     INCLUDE_DIRS "."
-                    REQUIRES console storage config crypto protocol registration timezone timesync boards pmic rtc buttons imu audio display screens ui wifi wifimgr nats app_update esp_app_format esp_timer mbedtls)
+                    REQUIRES console storage config crypto protocol registration responder timezone timesync boards pmic rtc buttons imu audio display screens ui wifi wifimgr nats app_update esp_app_format esp_timer mbedtls)

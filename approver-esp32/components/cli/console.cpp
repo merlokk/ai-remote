@@ -26,8 +26,10 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "linenoise/linenoise.h"
+#include "approval.h"
 #include "registrar.h"
 #include "registration.h"
+#include "responder.h"
 #include "mbedtls/base64.h"
 #include "lvgl_display.h"
 #include "nats_link.h"
@@ -2718,7 +2720,41 @@ int CmdRequest(int argc, char **argv) {
         // somebody, `ignored` is a press that began before the card did.
         printf("guards     %u refused, %u press(es) ignored\n",
                static_cast<unsigned>(card.refused), static_cast<unsigned>(card.ignored));
-        printf("signing    no key on this device yet - a press decides and nothing is sent\n");
+        // **What is behind the card**, and it is the half `card` cannot answer: a
+        // device showing requests and a device answering them look the same from
+        // the glass. The blocker is named because each of the three has its own
+        // command to go and look at.
+        const responder::Status wire = responder::Get();
+        if (!wire.ready) {
+            printf("answering  the responder did not start\n");
+            return 0;
+        }
+        if (wire.subscribed) {
+            printf("answering  yes - listening on %s in the group %s\n",
+                   protocol::kApprovalsSubject, protocol::kApproversQueue);
+        } else {
+            printf("answering  no - %s\n", responder::BlockerText(wire.blocked_by));
+            printf("           'request test' still works; nothing arrives on its own\n");
+        }
+        printf("wire       %" PRIu32 " arrived, %" PRIu32 " shown, %" PRIu32 " dropped\n",
+               wire.received, wire.queued, wire.refused);
+        printf("sent       %" PRIu32 " repl(ies): %" PRIu32 " allow, %" PRIu32 " deny\n",
+               wire.replied, wire.allowed, wire.denied);
+
+        // **Every one of these is a human press nobody heard**, which is why they
+        // get their own line and are printed even at zero: §10.10's fail-safe is
+        // correct behaviour and still worth counting.
+        const uint32_t lost =
+            wire.sign_failed + wire.publish_failed + wire.stale_dropped + wire.overflowed;
+        printf("unanswered %" PRIu32 " press(es) that never reached the bus", lost);
+        if (lost > 0) {
+            printf(" - %" PRIu32 " could not sign, %" PRIu32 " could not send, %" PRIu32
+                   " too late, %" PRIu32 " no room",
+                   wire.sign_failed, wire.publish_failed, wire.stale_dropped, wire.overflowed);
+        }
+        printf("\n");
+        printf("stack      %" PRIu32 " byte(s) never used, of %" PRIu32 "\n", wire.stack_low_water,
+               responder::kTaskStackBytes);
         return 0;
     }
 

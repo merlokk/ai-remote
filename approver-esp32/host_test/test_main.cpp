@@ -38,6 +38,7 @@ void RegisterTimesyncTests(void);
 void RegisterNatsTests(void);
 void RegisterSigningTests(void);
 void RegisterRegistrationTests(void);
+void RegisterApprovalTests(void);
 
 void setUp(void) { fake::Reset(); }
 
@@ -86,6 +87,7 @@ int main(int argc, char **argv) {
     if (Wanted("nats") || Wanted("bus")) RegisterNatsTests();
     if (Wanted("signing") || Wanted("protocol")) RegisterSigningTests();
     if (Wanted("registration") || Wanted("protocol")) RegisterRegistrationTests();
+    if (Wanted("approval") || Wanted("protocol")) RegisterApprovalTests();
 
     return UNITY_END();
 }

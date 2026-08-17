@@ -32,6 +32,7 @@
 #include "buttons.h"
 #include "clock_face.h"
 #include "esp_err.h"
+#include "speaker.h"
 #include "request_card.h"
 
 namespace screens {
@@ -143,12 +144,19 @@ struct CardStatus {
     uint16_t ignored = 0;
 };
 
-// Builds the screens on LVGL's active screen and starts the task. LVGL has to be
+// Builds the screens on LVGL's active screen and starts the tasks. LVGL has to be
 // up already — `main` starts it — and a null `battery` is allowed: the icon then
 // says what it always says when there is nothing to ask. A null `keys.buttons`
 // is allowed too, and means the card cannot be answered — which is a device that
 // still shows a request and still lets it time out (§10.10).
-esp_err_t Init(pmic::Axp2101 *battery, const Keys &keys);
+//
+// `alert` may be null as well, and then a card arrives silently. Passed in rather
+// than reached for, like the PMIC: this component has never heard of `board.h`.
+esp_err_t Init(pmic::Axp2101 *battery, const Keys &keys, audio::Speaker *alert);
+
+// The file played when a card goes up. In the SPIFFS image (§10.15), not compiled
+// in — `speaker.h` argues why the firmware has no decoder.
+inline constexpr const char *kAlertSound = "alert.wav";
 bool Ready();
 
 Status Get();
@@ -159,18 +167,51 @@ Status Get();
 // field that did not fit, or no reply subject — and the caller's job is then
 // §10.10's: drop it, one log line, **no reply**.
 //
-// **The chirp of §10.8.1 is the caller's, not this function's**, and that is not
-// laziness: `Speaker::PlayWav` blocks for the length of the file, and a screen
-// task that stalls for a second cannot see the press it exists to see. So the
-// card goes up here and whoever put it there makes the noise.
+// **The chirp of §10.8.1 happens here now**, and the sentence this replaces said
+// it could not: `Speaker::PlayWav` blocks for the length of the file, and a
+// screen task that stalls for three seconds cannot see the press it exists to
+// see. That was an argument against playing it *on this task*, not against
+// playing it — so there is a small task of its own for it, woken by this
+// function, and the card going up is one rule in one place rather than something
+// each caller has to remember.
 //
-// There is deliberately **no bus behind this yet.** Subscribing to `approvals.*`
-// in the `approvers` queue group would take real requests away from the
-// responders that can actually sign (§6's "Multiple clients", §10.2), and answer
-// them with nothing. Until §10.6 gives this device a key, the only thing that may
-// call this is the console.
+// It is only ever a **new** card, which is §10.8.1's other half: this returns
+// false for one the queue refused, and the semaphore behind it is binary, so four
+// arriving at once are one noise rather than four.
+//
+// **Two callers now**: `request test` on the console, and `components/responder`
+// with what arrived on `approvals.*`. This function cannot tell them apart and
+// must not — a synthetic card and a real one are the same question put to the
+// same human, and a screen that treated them differently would be a screen whose
+// test does not test the thing.
 bool Inject(const ui::Request &request);
 
 CardStatus Card();
+
+// --- Where a verdict goes (§7, §10.8.4) ----------------------------------
+
+// Called on the screen task the moment a press decides a card, with the whole
+// request the reply has to echo.
+//
+// **It must not sign or publish anything itself.** This runs on the task that
+// polls the buttons and drives LVGL; `crypto_sign` needs 4 KB of stack and this
+// task has 4 KB in total, and a task that stalls cannot see the next press
+// (§10.8.1). The handler's job is to copy and hand off — `components/responder`
+// is what does the signing, on a task sized for it.
+using DecisionHandler = void (*)(const ui::Request &request, ui::Verdict verdict, void *user);
+
+// A hook rather than a call, so that this component keeps knowing nothing about
+// keys, subjects or the bus (§10.14.2) — and so that `responder` can depend on
+// `screens` without `screens` depending back. With none set, a decision is a log
+// line and the receipt says nothing was sent.
+void OnDecision(DecisionHandler handler, void *user);
+
+// The line under a receipt for a card somebody answered. Set by whoever handles
+// the decision, because only they know whether it left the device: `Decided()`
+// cannot say "sent" for a publish it did not make.
+//
+// Copied, and bounded — a caller that goes out of scope must not leave the screen
+// pointing at freed text.
+void SetReceiptNote(const char *note);
 
 }  // namespace screens

@@ -34,6 +34,7 @@
 #include "nats_link.h"
 #include "rawimage.h"
 #include "registrar.h"
+#include "responder.h"
 #include "screens.h"
 #include "storage.h"
 #include "timesync.h"
@@ -236,10 +237,29 @@ extern "C" void app_main(void) {
             keys.allow = board::button::kBootIndex;
             keys.deny = board::button::kPwrIndex;
 
-            const esp_err_t screens_err = screens::Init(&board::Pmic(), keys);
+            // The speaker is handed over here for the same reason the PMIC is: the
+            // screens have never heard of `board.h`, and this is the one file
+            // that knows both which codec is on the bus and what a card is.
+            const esp_err_t screens_err =
+                screens::Init(&board::Pmic(), keys, &board::Sound());
             if (screens_err != ESP_OK) {
                 ESP_LOGE(TAG, "screens not started: %s", esp_err_to_name(screens_err));
             }
         }
+    }
+
+    // **Last, and only once there is a screen to put a request on** (§7,
+    // §10.8.4). It subscribes to nothing yet — it wants a key, a registration and
+    // a bus first, and `request` on the console says which of the three is
+    // missing. A device with none of them is still a clock.
+    //
+    // It goes after the screens rather than beside the bus because it registers
+    // itself as where a verdict goes: starting it first would leave a window in
+    // which a card could be answered into nothing. And it is the last line of
+    // `app_main` for the reason §10.14.1 gives about the main task's 8 KB stack —
+    // everything is composed by now, and this returns immediately.
+    const esp_err_t responder_err = responder::Init();
+    if (responder_err != ESP_OK) {
+        ESP_LOGE(TAG, "responder not started: %s", esp_err_to_name(responder_err));
     }
 }

@@ -54,10 +54,45 @@ Keys g_keys;
 // anyway — the measurement is just what made it urgent.
 ui::Request g_answered;
 
-// Until §10.6 exists there is no key on this device, so a press decides and
-// nothing leaves. The receipt says exactly that rather than "sent", because that
-// is the one lie on this screen that would matter (§10.10).
-constexpr const char *kNoSigner = "decided, not sent - no key yet";
+// **What the receipt says under an answered card**, and it is set from outside
+// because only the thing that publishes knows whether anything did. The default
+// is the honest one for a device with nothing behind the screen: `main` wires the
+// responder up, and until it does, a press decides and nothing leaves.
+//
+// §10.10's "failure is visible", in the smallest place it appears: a receipt that
+// implied a reply had gone is the one lie on this screen that would matter.
+constexpr size_t kNoteSize = 48;
+char g_note[kNoteSize] = "decided, not sent - nothing is listening";
+
+// Who to tell. Null until somebody asks for it, which is the state a device with
+// no responder is in — and it is not an error, it is `request test` with nobody
+// behind it.
+DecisionHandler g_handler = nullptr;
+void *g_handler_user = nullptr;
+
+// **The chirp of §10.8.1, on a task of its own.** `PlayWav` blocks for the length
+// of the file — `alert.wav` is about three and a half seconds — and there is no
+// task in this firmware that can afford that: the screen task would miss the
+// press it exists to see, the bus task would stop reading the socket, and the
+// responder task would hold up the signature. So it gets 4 KB and a semaphore,
+// and the worst a stalled chirp can do is delay the next chirp.
+//
+// **Binary on purpose**: four cards arriving together are one noise. §10.8.1 asks
+// for one short sound on a new request, not a queue of them.
+audio::Speaker *g_alert = nullptr;
+StackType_t g_alert_stack[4096 / sizeof(StackType_t)];
+StaticTask_t g_alert_tcb;
+StaticSemaphore_t g_alert_signal_storage;
+SemaphoreHandle_t g_alert_signal = nullptr;
+
+void AlertTask(void *) {
+    for (;;) {
+        xSemaphoreTake(g_alert_signal, portMAX_DELAY);
+        if (g_alert != nullptr && g_alert->Ready()) {
+            g_alert->PlayWav(kAlertSound);
+        }
+    }
+}
 
 // The snapshot the console reads, and a lock around it. Short critical sections
 // only, and **never held across the display lock**: the two would then have an
@@ -130,13 +165,23 @@ void Gather(ui::ClockInputs *in, bool *battery_valid, pmic::Status *battery) {
     }
 }
 
-// One decision, and today it goes into the log because there is nowhere else for
-// it to go. **This is the seam §10.6 and §7 take over**: sign the request with
-// the eFuse-derived key, publish into `request.reply`, flush. Nothing about the
-// screen changes when that happens, which is the point of it being one function.
+// One decision, handed to whoever registered for it. **This is the seam §10.6 and
+// §7 took over**, and the shape of it is the point: nothing about this screen
+// changed when they did — no key, no subject and no signature appears in this
+// file, and a device with no responder still shows cards and still lets them
+// time out.
+//
+// The log line stays regardless of who is listening, because "somebody pressed
+// allow" is a fact worth having in a boot log whether or not it reached a bus.
 void Decided(const ui::Request &request, ui::Verdict verdict) {
-    ESP_LOGW(TAG, "%s %s in %s - nothing published: this device has no key yet",
-             verdict == ui::Verdict::kAllow ? "ALLOW" : "DENY", request.tool_name, request.cwd);
+    const char *word = verdict == ui::Verdict::kAllow ? "ALLOW" : "DENY";
+    if (g_handler == nullptr) {
+        ESP_LOGW(TAG, "%s %s in %s - nothing published: no responder is wired up", word,
+                 request.tool_name, request.cwd);
+        return;
+    }
+    ESP_LOGI(TAG, "%s %s in %s", word, request.tool_name, request.cwd);
+    g_handler(request, verdict, g_handler_user);
 }
 
 // The buttons, once per tick. **Edges only** — a level would mean a finger resting
@@ -251,7 +296,7 @@ void Task(void *) {
             g_clock.Apply(view);
             // The card last, so it is the last thing invalidated — and it sits on
             // top of a clock that has no idea it is there (§10.8.1).
-            g_request_screen.Apply(g_card, now_ms, kNoSigner);
+            g_request_screen.Apply(g_card, now_ms, g_note);
             applied = true;
         }
 
@@ -264,7 +309,7 @@ void Task(void *) {
 
 }  // namespace
 
-esp_err_t Init(pmic::Axp2101 *battery, const Keys &keys) {
+esp_err_t Init(pmic::Axp2101 *battery, const Keys &keys, audio::Speaker *alert) {
     if (g_handle != nullptr) {
         return ESP_OK;
     }
@@ -278,6 +323,7 @@ esp_err_t Init(pmic::Axp2101 *battery, const Keys &keys) {
 
     g_battery = battery;
     g_keys = keys;
+    g_alert = alert;
 
     if (g_lock == nullptr) {
         g_lock = xSemaphoreCreateMutexStatic(&g_lock_storage);
@@ -313,6 +359,22 @@ esp_err_t Init(pmic::Axp2101 *battery, const Keys &keys) {
         }
     }
 
+    // The chirp's task, before the screen task: a card cannot go up until the
+    // latter is running, so there is no window in which one arrives and finds
+    // nowhere to ring. A device with no codec still gets both — `AlertTask` looks
+    // at the speaker each time rather than at boot, so a codec that came up late
+    // or not at all is one silent card rather than a branch here.
+    if (g_alert_signal == nullptr) {
+        g_alert_signal = xSemaphoreCreateBinaryStatic(&g_alert_signal_storage);
+        if (g_alert_signal == nullptr) {
+            return ESP_ERR_NO_MEM;
+        }
+        // Below the screen task: a noise is never more urgent than the press it
+        // is announcing.
+        xTaskCreateStatic(AlertTask, "card-alert", sizeof(g_alert_stack) / sizeof(g_alert_stack[0]),
+                          nullptr, kTaskPriority - 1, g_alert_stack, &g_alert_tcb);
+    }
+
     g_handle = xTaskCreateStatic(Task, "screens", sizeof(g_stack) / sizeof(g_stack[0]), nullptr,
                                  kTaskPriority, g_stack, &g_task);
     if (g_handle == nullptr) {
@@ -343,6 +405,13 @@ bool Inject(const ui::Request &request) {
         g_nav.RequestArrived();
     }
     xSemaphoreGive(g_lock);
+
+    // **Only a card that is actually going up makes a noise** (§10.8.1: never
+    // chirp for one that was already there). A refusal is silent, which is also
+    // the honest thing: nothing appeared.
+    if (accepted && g_alert_signal != nullptr) {
+        xSemaphoreGive(g_alert_signal);
+    }
 
     if (!accepted) {
         // §10.10: one log line, no reply. Which of the refusals it was shows up
@@ -406,6 +475,24 @@ Status Get() {
     copy = g_status;
     xSemaphoreGive(g_lock);
     return copy;
+}
+
+void OnDecision(DecisionHandler handler, void *user) {
+    // No lock: this is called once from `main` before anything can press a
+    // button, and a hook that could be swapped while a decision was in flight
+    // would be a design with a race in it rather than a missing critical section.
+    g_handler = handler;
+    g_handler_user = user;
+}
+
+void SetReceiptNote(const char *note) {
+    if (note == nullptr) {
+        return;
+    }
+    // Copied rather than pointed at, and truncated rather than refused — this is
+    // the one string on this screen where a short version still says the true
+    // thing, and the alternative to truncating is a receipt with nothing on it.
+    std::snprintf(g_note, sizeof g_note, "%s", note);
 }
 
 }  // namespace screens
