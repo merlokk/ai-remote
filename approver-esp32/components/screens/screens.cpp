@@ -1,6 +1,7 @@
 #include "screens.h"
 
 #include <cinttypes>
+#include <cstdio>
 #include <cstring>
 #include <ctime>
 
@@ -14,6 +15,9 @@
 #include "lvgl.h"
 #include "lvgl_display.h"
 #include "nats_link.h"
+#include "navigator.h"
+#include "request_card.h"
+#include "request_screen.h"
 #include "wifi_manager.h"
 
 namespace screens {
@@ -29,7 +33,31 @@ TaskHandle_t g_handle = nullptr;
 
 ClockScreen g_clock;
 ui::ClockFace g_face;
+RequestScreen g_request_screen;
+ui::RequestCard g_card;
+
+// **The navigator is kept in step with the card rather than owning the queue.**
+// §10.8.1 gives it the rule that navigation vanishes while a card is up, and it
+// deliberately does not hold the requests themselves ("a navigator that stored
+// `tool_name` would be a navigator with the protocol in it"). So the card queue
+// is where they live and this is told when one arrives, is answered or expires —
+// the count in each is the same count, stepped in one place.
+ui::Navigator g_nav;
+
 pmic::Axp2101 *g_battery = nullptr;
+Keys g_keys;
+
+// **Where a decided request is handed back, and it is not the stack.** A
+// `ui::Request` is 2.3 KB of §7 fields; two of them as locals in the button poll
+// took this task's free stack from 2,944 bytes to 1,088, which is not a margin.
+// Static, used only by the screen task, and §10.14.1 would have asked for this
+// anyway — the measurement is just what made it urgent.
+ui::Request g_answered;
+
+// Until §10.6 exists there is no key on this device, so a press decides and
+// nothing leaves. The receipt says exactly that rather than "sent", because that
+// is the one lie on this screen that would matter (§10.10).
+constexpr const char *kNoSigner = "decided, not sent - no key yet";
 
 // The snapshot the console reads, and a lock around it. Short critical sections
 // only, and **never held across the display lock**: the two would then have an
@@ -102,6 +130,68 @@ void Gather(ui::ClockInputs *in, bool *battery_valid, pmic::Status *battery) {
     }
 }
 
+// One decision, and today it goes into the log because there is nowhere else for
+// it to go. **This is the seam §10.6 and §7 take over**: sign the request with
+// the eFuse-derived key, publish into `request.reply`, flush. Nothing about the
+// screen changes when that happens, which is the point of it being one function.
+void Decided(const ui::Request &request, ui::Verdict verdict) {
+    ESP_LOGW(TAG, "%s %s in %s - nothing published: this device has no key yet",
+             verdict == ui::Verdict::kAllow ? "ALLOW" : "DENY", request.tool_name, request.cwd);
+}
+
+// The buttons, once per tick. **Edges only** — a level would mean a finger resting
+// on the allow button re-approving every card that arrived under it, and
+// §10.8.1's rule about a press that began before the card exists to stop exactly
+// that. The model is given the same `now_ms` the edge was seen at, which is what
+// it compares against the moment the card was presented.
+void PollKeys(uint32_t now_ms) {
+    if (g_keys.buttons == nullptr || !g_keys.buttons->Ready()) {
+        return;
+    }
+
+    const bool card_up = g_card.State() == ui::CardState::kCard;
+
+    if (g_keys.buttons->Poll(g_keys.allow) == buttons::Event::kPressed) {
+        if (g_card.Press(ui::Verdict::kAllow, now_ms, &g_answered)) {
+            g_nav.RequestAnswered();
+            Decided(g_answered, ui::Verdict::kAllow);
+        }
+    }
+
+    if (g_keys.buttons->Poll(g_keys.deny) == buttons::Event::kPressed) {
+        if (card_up) {
+            // **While a card is up this button is a verdict and nothing else.**
+            // §10.8.1: navigation is gone, not deferred — and a press the guard
+            // throws away must not fall through to navigating either, or the guard
+            // becomes a way to leave the screen instead of a way to protect it.
+            if (g_card.Press(ui::Verdict::kDeny, now_ms, &g_answered)) {
+                g_nav.RequestAnswered();
+                Decided(g_answered, ui::Verdict::kDeny);
+            }
+        } else {
+            // Otherwise it is the way home. Today the clock is the only screen
+            // there is, so this is a no-op that is already right — wired now
+            // rather than when the other four arrive, because the rule is about
+            // the button and not about the screens.
+            g_nav.Navigate(ui::Nav::kBack);
+        }
+    }
+}
+
+void Publish(const ui::ClockView &view, bool applied) {
+    if (xSemaphoreTake(g_lock, pdMS_TO_TICKS(20)) != pdTRUE) {
+        return;
+    }
+    g_status.ready = true;
+    g_status.view = view;
+    g_status.updates++;
+    if (!applied) {
+        g_status.lock_misses++;
+    }
+    g_status.stack_low_water = uxTaskGetStackHighWaterMark(nullptr);
+    xSemaphoreGive(g_lock);
+}
+
 void Task(void *) {
     ui::ClockInputs in;
     pmic::Status battery = {};
@@ -109,6 +199,28 @@ void Task(void *) {
     uint32_t tick = 0;
 
     for (;;) {
+        const uint32_t now_ms = static_cast<uint32_t>(esp_timer_get_time() / 1000);
+
+        // **The card first, and the buttons before anything that can block.** A
+        // press is the one input on this device with a deadline behind it, and
+        // everything below — an I2C read, a `strftime`, an LVGL lock — can take
+        // milliseconds a finger will not wait for.
+        const uint16_t expired_before = g_card.TimedOut();
+        const bool card_changed = g_card.Tick(now_ms);
+        for (uint16_t i = expired_before; i < g_card.TimedOut(); ++i) {
+            g_nav.RequestExpired();
+        }
+        PollKeys(now_ms);
+
+        // Most ticks are a button poll and nothing else. A card that just changed
+        // is drawn immediately rather than at the next face pass: an arrival, a
+        // press and an expiry are all things the operator is looking at.
+        if ((tick % kFaceEveryTicks) != 0 && !card_changed) {
+            ++tick;
+            vTaskDelay(pdMS_TO_TICKS(kTickMs));
+            continue;
+        }
+
         // **A lease it could not get leaves the last reading standing**, which is
         // §10.14.3's own answer for the clock: a charge that is a few seconds old
         // beats an icon that blinks out because the touch controller was busy.
@@ -137,19 +249,13 @@ void Task(void *) {
         if (display::Lock lock(kLockTimeoutMs); lock) {
             g_clock.SetDate(date);
             g_clock.Apply(view);
+            // The card last, so it is the last thing invalidated — and it sits on
+            // top of a clock that has no idea it is there (§10.8.1).
+            g_request_screen.Apply(g_card, now_ms, kNoSigner);
             applied = true;
         }
 
-        if (xSemaphoreTake(g_lock, pdMS_TO_TICKS(20)) == pdTRUE) {
-            g_status.ready = true;
-            g_status.view = view;
-            g_status.updates++;
-            if (!applied) {
-                g_status.lock_misses++;
-            }
-            g_status.stack_low_water = uxTaskGetStackHighWaterMark(nullptr);
-            xSemaphoreGive(g_lock);
-        }
+        Publish(view, applied);
 
         ++tick;
         vTaskDelay(pdMS_TO_TICKS(kTickMs));
@@ -158,7 +264,7 @@ void Task(void *) {
 
 }  // namespace
 
-esp_err_t Init(pmic::Axp2101 *battery) {
+esp_err_t Init(pmic::Axp2101 *battery, const Keys &keys) {
     if (g_handle != nullptr) {
         return ESP_OK;
     }
@@ -171,6 +277,7 @@ esp_err_t Init(pmic::Axp2101 *battery) {
     }
 
     g_battery = battery;
+    g_keys = keys;
 
     if (g_lock == nullptr) {
         g_lock = xSemaphoreCreateMutexStatic(&g_lock_storage);
@@ -196,6 +303,14 @@ esp_err_t Init(pmic::Axp2101 *battery) {
             ESP_LOGE(TAG, "clock not built: %s", esp_err_to_name(err));
             return err;
         }
+
+        // After the clock, so it is the later sibling and therefore the one LVGL
+        // draws on top (§10.8.1: the card outranks everything).
+        const esp_err_t card = g_request_screen.Create(screen);
+        if (card != ESP_OK) {
+            ESP_LOGE(TAG, "request card not built: %s", esp_err_to_name(card));
+            return card;
+        }
     }
 
     g_handle = xTaskCreateStatic(Task, "screens", sizeof(g_stack) / sizeof(g_stack[0]), nullptr,
@@ -210,6 +325,73 @@ esp_err_t Init(pmic::Axp2101 *battery) {
 }
 
 bool Ready() { return g_handle != nullptr; }
+
+bool Inject(const ui::Request &request) {
+    if (g_handle == nullptr) {
+        return false;
+    }
+    const uint32_t now_ms = static_cast<uint32_t>(esp_timer_get_time() / 1000);
+
+    // **Under the snapshot lock and not the display lock.** The queue is read by
+    // the task on every tick and the screen catches up on its own next pass, at
+    // most 20 ms away — which is what keeps this call from waiting behind a frame.
+    if (xSemaphoreTake(g_lock, pdMS_TO_TICKS(100)) != pdTRUE) {
+        return false;
+    }
+    const bool accepted = g_card.Arrived(request, now_ms);
+    if (accepted) {
+        g_nav.RequestArrived();
+    }
+    xSemaphoreGive(g_lock);
+
+    if (!accepted) {
+        // §10.10: one log line, no reply. Which of the refusals it was shows up
+        // in the counters, and `request` on the console prints them.
+        ESP_LOGW(TAG, "request refused: full, oversized, or nothing to answer into");
+    }
+    return accepted;
+}
+
+CardStatus Card() {
+    CardStatus out;
+    if (g_handle == nullptr || g_lock == nullptr) {
+        return out;
+    }
+    if (xSemaphoreTake(g_lock, pdMS_TO_TICKS(50)) != pdTRUE) {
+        return out;
+    }
+
+    const uint32_t now_ms = static_cast<uint32_t>(esp_timer_get_time() / 1000);
+    out.ready = true;
+    out.state = g_card.State();
+    out.pending = g_card.Pending();
+    out.waiting = g_card.Waiting();
+    out.remaining_ms = g_card.RemainingMs(now_ms);
+    if (const ui::Request *front = g_card.Front(); front != nullptr) {
+        std::snprintf(out.tool, sizeof(out.tool), "%s", front->tool_name);
+        std::snprintf(out.cwd, sizeof(out.cwd), "%s", front->cwd);
+        // **Copied rather than `snprintf`ed, because the truncation is the
+        // point** and `-Wformat-truncation` is right to object to a format that
+        // silently loses 2 KB. Cutting it here explicitly, next to the length that
+        // says how much was cut, is the honest spelling of it.
+        const size_t length = std::strlen(front->tool_input);
+        const size_t room = sizeof(out.input_preview) - 1;
+        const size_t take = length < room ? length : room;
+        std::memcpy(out.input_preview, front->tool_input, take);
+        out.input_preview[take] = '\0';
+        out.input_length = static_cast<uint16_t>(length);
+    }
+    out.last_outcome = g_card.LastOutcome();
+    std::snprintf(out.last_tool, sizeof(out.last_tool), "%s", g_card.LastTool());
+    out.allowed = g_card.Allowed();
+    out.denied = g_card.Denied();
+    out.timed_out = g_card.TimedOut();
+    out.refused = g_card.Refused();
+    out.ignored = g_card.Ignored();
+
+    xSemaphoreGive(g_lock);
+    return out;
+}
 
 Status Get() {
     Status copy;

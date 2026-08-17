@@ -1,4 +1,5 @@
-# The five screens of CLAUDE.md §10.8 — one of them so far, the clock.
+# The five screens of CLAUDE.md §10.8 — two of them so far: the clock, and the
+# request card that goes over it.
 #
 # This is the one component in the firmware that is allowed to include both LVGL
 # and the things that report on the world, and that is exactly why the deciding
@@ -6,6 +7,6 @@
 # is empty so that the host tests can compile it (§10.11). An entry appearing
 # below is fine; a decision appearing in a file below is the sign that something
 # was put in the wrong component.
-idf_component_register(SRCS "clock_screen.cpp" "screens.cpp"
+idf_component_register(SRCS "clock_screen.cpp" "request_screen.cpp" "screens.cpp"
                     INCLUDE_DIRS "."
-                    REQUIRES ui display pmic wifimgr nats lvgl__lvgl)
+                    REQUIRES ui display pmic buttons wifimgr nats lvgl__lvgl)

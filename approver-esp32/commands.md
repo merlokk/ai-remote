@@ -28,9 +28,10 @@ line. Addresses, SSIDs and channels are not secrets and are printed in full.
 ## What the device is
 
 ### `devstatus`
-Everything at once: the board, every chip on it, the screen, the clock, the
+Everything at once: the board, every chip on it, the screens, the clock, the
 network and the bus — `status`, `power`, `buttons`, `imu`, `audio`, `display`,
-`clock`, `date`, `wifi` and `nats`, one after another under `== name` headers.
+`clock`, `request`, `date`, `wifi` and `nats`, one after another under `== name`
+headers.
 
 **Each header is the name of the command that prints that section on its own**,
 so the dump doubles as a map: something odd under `== power`, type `power` to
@@ -221,6 +222,48 @@ work around, and worth knowing before decoding it by hand.
 
 Taking one is a single command on the host — [`working-with-code.md`](working-with-code.md)
 has it.
+
+### `request`
+The permission card (§10.8.4) — what is on it, and the tally.
+
+    card       Bash, 116 s left
+    cwd        E:\projects\ai-remote
+    input      {"command": "rm -rf build"}
+    waiting    1 more
+    last       timed out - nobody answered, and nothing was sent - Bash
+    tally      0 allowed, 0 denied, 1 timed out
+    guards     0 refused, 0 press(es) ignored
+    signing    no key on this device yet - a press decides and nothing is sent
+
+`input` is a **preview** and says how many bytes it is not showing. The screen is
+where a command is read in full: a console line that looked complete would be the
+truncation §10.8.4 forbids, arriving through the back door.
+
+`guards` counts two things that are the design working rather than faults —
+`refused` is a request this device would not put in front of a human (the queue
+was full, a field did not fit, or there was nowhere to answer into), and `ignored`
+is a press that began before the card appeared or inside its first 300 ms.
+
+`signing` is the honest line: **there is no key on this device yet**, so a press
+decides and nothing leaves. The card says the same thing.
+
+### `request test [seconds]`
+### `request test <tool> <text …>`
+Puts a synthetic card up — 30 s by default, or the seconds you name, or a tool and
+arguments of your own. It plays the alert and prints which button does what.
+
+**This is the only way to raise a card today, and that is deliberate.** The device
+does not subscribe to the approval subject: it would take real requests away from
+the responders that can actually sign one and answer them with nothing. When the
+device has a key, the bus becomes a second caller and this command stays as it is.
+
+The card is answered **on the board**: `BOOT` allows, `PWR` denies. There is no
+console command for either, and there will not be — the only path to an allow is a
+human press on a card that is on the screen.
+
+Two things about `PWR` worth knowing. With no card up it is the way back to the
+clock. And holding it for six seconds powers the board off, which is the power
+chip's own behaviour and happens whatever the firmware thinks.
 
 ### `audio`
 The ES8311 and the I²S channel in front of it: whether the codec answered at

@@ -197,11 +197,22 @@ extern "C" void app_main(void) {
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "LVGL not started: %s", esp_err_to_name(err));
         } else {
-            // The screens (§10.8), and the PMIC is handed to them rather than
-            // reached for — the same shape `timesync` gets the RTC in. A
+            // The screens (§10.8), and the hardware is handed to them rather
+            // than reached for — the same shape `timesync` gets the RTC in. A
             // component that drew a battery by including `board.h` would be a
             // component that cannot be built without this board (§10.14.2).
-            const esp_err_t screens_err = screens::Init(&board::Pmic());
+            //
+            // **This is where the two buttons get their meaning** (§10.8.4):
+            // `BOOT` says allow, `PWR` says deny — and `PWR` doubles as the way
+            // back to the clock when there is nothing to say no to. The indices
+            // are `board.h`'s, and `main` is the one file that knows both which
+            // button is which and what a verdict is.
+            screens::Keys keys;
+            keys.buttons = &board::Buttons();
+            keys.allow = board::button::kBootIndex;
+            keys.deny = board::button::kPwrIndex;
+
+            const esp_err_t screens_err = screens::Init(&board::Pmic(), keys);
             if (screens_err != ESP_OK) {
                 ESP_LOGE(TAG, "screens not started: %s", esp_err_to_name(screens_err));
             }

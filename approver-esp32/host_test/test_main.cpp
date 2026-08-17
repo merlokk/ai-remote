@@ -22,6 +22,7 @@
 
 void RegisterNavigatorTests(void);
 void RegisterClockFaceTests(void);
+void RegisterRequestCardTests(void);
 void RegisterI2cBusTests(void);
 void RegisterPmicTests(void);
 void RegisterRtcTests(void);
@@ -67,6 +68,7 @@ int main(int argc, char **argv) {
 
     if (Wanted("navigator")) RegisterNavigatorTests();
     if (Wanted("clock") || Wanted("face")) RegisterClockFaceTests();
+    if (Wanted("request") || Wanted("card")) RegisterRequestCardTests();
     if (Wanted("i2c")) RegisterI2cBusTests();
     if (Wanted("pmic")) RegisterPmicTests();
     if (Wanted("rtc")) RegisterRtcTests();

@@ -29,15 +29,24 @@
 #include <cstdint>
 
 #include "axp2101.h"
+#include "buttons.h"
 #include "clock_face.h"
 #include "esp_err.h"
+#include "request_card.h"
 
 namespace screens {
 
-// How often the world is re-read and the water moved. Ten frames a second is
-// what makes a travelling gradient read as flowing rather than as stepping, and
-// it is affordable because only the digits are repainted at that rate.
-inline constexpr uint32_t kTickMs = 100;
+// **The tick is the buttons' rate, not the screen's.** It was 100 ms while the
+// clock was the only thing here; a deliberate press is 50-200 ms long, and a poll
+// that slow can miss one entirely — which on the screen this device exists for is
+// a press somebody made and the card did not take. `buttons.h` asks callers not
+// to go far above 10 ms, so 20 it is: fifty GPIO reads a second, which is free.
+inline constexpr uint32_t kTickMs = 20;
+
+// The face is still repainted ten times a second — that is what makes the water
+// of §10.8.2 read as flowing rather than stepping, and it is affordable because
+// only the digits are redrawn at that rate.
+inline constexpr uint32_t kFaceEveryTicks = 5;
 
 // Below LVGL's own task (`display::kLvglTaskPriority`), because this one's job
 // is to hand it work rather than to compete with it.
@@ -52,7 +61,12 @@ inline constexpr uint32_t kLockTimeoutMs = 100;
 // The battery is read every this-many ticks rather than every tick: it is a
 // dozen I²C registers under a lease, and a charge percentage that is two seconds
 // stale is a charge percentage.
-inline constexpr uint32_t kBatteryEveryTicks = 20;
+inline constexpr uint32_t kBatteryEveryTicks = 100;
+
+// A card's countdown is repainted whenever its whole-second value changes, so the
+// card is applied on every face pass rather than every tick — one repaint a
+// second, plus the ones a press or an arrival cause.
+static_assert(kTickMs * kFaceEveryTicks == 100, "the face rate is what §10.8.2 argues for");
 
 // What is on the glass, taken at one instant — what `clock` on the console
 // prints. **A snapshot rather than a look at LVGL**: the console must not touch a
@@ -78,12 +92,85 @@ struct Status {
     uint32_t stack_low_water = 0;
 };
 
+// Which physical button means what (§10.8.4). **Indices rather than pins**, and
+// filled in by `main`: this component has never heard of `board.h`, and which
+// button is where is exactly the kind of fact §10.14.2 keeps out of it.
+//
+// The mapping is the operator's, not this file's: `BOOT` says yes, `PWR` says no
+// — and `PWR` doubles as "back to the clock" when there is nothing to say no to.
+//
+// **One thing about `PWR` that is hardware and not ours** (§10.1): it is wired to
+// the AXP2101's PWRON pin, and holding it for six seconds powers the board off
+// whatever this firmware thinks. A short press is a deny; a long one is a
+// shutdown, and no code here participates in that.
+//
+// And one risk worth naming rather than discovering: `PWR` is the button people
+// press to *get out* of a screen, so muscle memory will occasionally deny a
+// request somebody meant to read. That is the safe direction to be wrong in
+// (§10.10: never a silent allow), which is why the mapping is acceptable.
+struct Keys {
+    buttons::Buttons *buttons = nullptr;
+    size_t allow = 0;
+    size_t deny = 0;
+};
+
+// What the card is doing, for `request` on the console. A snapshot, like
+// `Status` above and for the same reasons.
+struct CardStatus {
+    bool ready = false;
+
+    ui::CardState state = ui::CardState::kIdle;
+    uint8_t pending = 0;
+    uint8_t waiting = 0;
+    uint32_t remaining_ms = 0;
+
+    char tool[ui::kToolNameSize] = {};
+    char cwd[ui::kCwdSize] = {};
+
+    // **A preview, and it says how much it is not showing.** The whole
+    // `tool_input` is 2 KB and this snapshot is copied onto a caller's stack; the
+    // screen is where a command is read in full, and §10.8.4 is about the screen.
+    char input_preview[240] = {};
+    uint16_t input_length = 0;
+
+    ui::Outcome last_outcome = ui::Outcome::kNone;
+    char last_tool[ui::kToolNameSize] = {};
+
+    uint16_t allowed = 0;
+    uint16_t denied = 0;
+    uint16_t timed_out = 0;
+    uint16_t refused = 0;
+    uint16_t ignored = 0;
+};
+
 // Builds the screens on LVGL's active screen and starts the task. LVGL has to be
 // up already — `main` starts it — and a null `battery` is allowed: the icon then
-// says what it always says when there is nothing to ask.
-esp_err_t Init(pmic::Axp2101 *battery);
+// says what it always says when there is nothing to ask. A null `keys.buttons`
+// is allowed too, and means the card cannot be answered — which is a device that
+// still shows a request and still lets it time out (§10.10).
+esp_err_t Init(pmic::Axp2101 *battery, const Keys &keys);
 bool Ready();
 
 Status Get();
+
+// --- The card (§10.8.4) --------------------------------------------------
+
+// Put a request on the screen. False when the card queue refused it — full, a
+// field that did not fit, or no reply subject — and the caller's job is then
+// §10.10's: drop it, one log line, **no reply**.
+//
+// **The chirp of §10.8.1 is the caller's, not this function's**, and that is not
+// laziness: `Speaker::PlayWav` blocks for the length of the file, and a screen
+// task that stalls for a second cannot see the press it exists to see. So the
+// card goes up here and whoever put it there makes the noise.
+//
+// There is deliberately **no bus behind this yet.** Subscribing to `approvals.*`
+// in the `approvers` queue group would take real requests away from the
+// responders that can actually sign (§6's "Multiple clients", §10.2), and answer
+// them with nothing. Until §10.6 gives this device a key, the only thing that may
+// call this is the console.
+bool Inject(const ui::Request &request);
+
+CardStatus Card();
 
 }  // namespace screens

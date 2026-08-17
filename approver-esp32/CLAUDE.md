@@ -36,11 +36,13 @@ leased I²C bus and the chips on it, the panel and the touch, the codec, the
 buttons, the settings file on SPIFFS, the Wi-Fi radio with a manager above it,
 the clock and its SNTP half — a console on the USB port with a command per piece
 of it ([`commands.md`](commands.md) is the list), a socket open to the NATS
-server on the LAN, and **the first of §10.8's five screens: the clock face**,
-which is where the drift and the dimness an AMOLED needs stop being a paragraph
-and start being code. What does not exist is anything §6 or §7 would recognise:
-no key, no signature, no request card. The table below is row by row about which
-is which, and the rows that still need the repository owner's sign-off say so.
+server on the LAN, and **two of §10.8's five screens: the clock face and the
+request card over it** — the second of which is the screen this device exists for,
+answered by two buttons on the case. What does not exist is anything §6 or §7
+would recognise: no key, no signature, and therefore no reply. A press decides and
+nothing leaves, which the card says out loud. The table below is row by row about
+which is which, and the rows that still need the repository owner's sign-off say
+so.
 
 | Scope | State |
 |-------|-------|
@@ -66,8 +68,9 @@ is which, and the rows that still need the repository owner's sign-off say so.
 | The LVGL host preview (§10.12.1) | installed and rendering. It was written down here as the only part of this folder that ran; it is now the part that runs with no board, alongside the host tests |
 | Screenshots of the real panel (§10.12.2) | **working**: `screenshot` on the console streams the frame out as base64 — the panel cannot be read back and a frame does not fit in RAM, so it is taken a rendered strip at a time and never assembled — and `tools/screenshot.py` writes the PNG with nothing outside the standard library. Verified by decoding the digits back out of the pixels and matching `clock` |
 | Bus reachable from the device at all (§10.3) | **decided**: shared on the home LAN, no TLS, no auth — the router is the trust boundary |
-| Firmware: registration, signing | not started — the bus underneath them is what exists |
-| The five screens — clock, limits, request, settings, Wi-Fi (§10.8) | **one of five running**: the clock face (§10.8.2), on the board. The other four are specified and not started, and until the navigator has somewhere to send a swipe it is not wired to anything |
+| Firmware: registration, signing | not started — and now it is the only thing between the card and a working responder. `screens.cpp`'s `Decided()` is the one function §10.6 and §7 have to fill in: it is handed the whole request and the verdict, and today it writes a log line saying nothing was published |
+| The five screens — clock, limits, request, settings, Wi-Fi (§10.8) | **two of five running**: the clock face (§10.8.2) and the request card (§10.8.4), both on the board. Limits, settings and Wi-Fi are specified and not started, so a swipe still has nowhere to go |
+| The request card — `components/ui/request_card.*` + `components/screens/request_screen.*` (§10.8.4) | **running on hardware**: §7's fields in a bounded queue of four, the tool and the command as the heaviest thing on the glass, a countdown that is the hook's rather than the device's, `+N waiting`, and a receipt afterwards that distinguishes a verdict from a card nobody answered. **Answered by the buttons** — `BOOT` allows, `PWR` denies and doubles as the way back to the clock — with §10.8.1's queued-touch guard in the shape a press has. Nothing on it is touchable, deliberately. The deciding half is `<cstdint>`-only and host-tested (23 tests, 16 of 16 mutations caught). **No bus behind it**: `request test` on the console is the only way to raise one, because subscribing would take real requests from the responders that can sign |
 | The clock face — `components/ui/clock_face.*` + `components/screens` (§10.8.2) | **running on hardware**: 24-hour seven-segment digits filled by a travelling wave, three indicators to the left of them (radio, bus, battery), the date under them, and the whole face drifting ±30/±40 px because the panel is an AMOLED. `--:--` rather than a plausible midnight when no believable time has arrived. `clock` on the console prints what is on the glass and why — which is how the drift and the water are checked without a camera. The deciding half is `<cstdint>`-only and host-tested (32 tests, 14 of 14 mutations caught); the painting half is LVGL and is the only file in the firmware that draws anything |
 | The Wi-Fi driver — `components/wifi` (§10.9) | **running on hardware**: two modes (access point, client), one network at a time, a latched link state, a disconnection reason turned into the three answers a person can act on, and a scan that works in both modes. It has **no opinions** — which network and when is the manager's, and that split is what makes the manager testable |
 | The internet check — `components/wifimgr/reachability.*` (§10.9) | **running on hardware**: once a minute, while there is a client link, an ICMP echo to one of a few addresses from `config.json` (8.8.8.8, 1.1.1.1, 9.9.9.9 by default). Three states — `unknown` is the honest one — two failed rounds to say offline and one reply to come back. `wifi ping` and `wifi check` on the console. **It never decides anything**: a link with no internet is reported, never a reason to change networks |
@@ -75,7 +78,7 @@ is which, and the rows that still need the repository owner's sign-off say so.
 | The Wi-Fi screen (§10.8.6) | specified, not started — the manager underneath it is what exists |
 | Where the configuration lives (§10.15) | **decided**: all of it in JSON on SPIFFS, nothing of ours in NVS — with the cost stated (SPIFFS cannot be encrypted at rest). `spiffs_image/config.json` + `config.init.json` are flashed, and `components/config` is what reads them |
 | The `KEY`-at-boot config restore (§10.15) | specified, not started |
-| Host-tier tests (§10.11) — `host_test/` | **running**: 344 Unity tests over `ui` (the navigator and the clock face), `i2cbus`, `pmic`, `rtc`, `imu`, `audio`, `config`, `buttons`, `timezone`, `speaker`, `wifimgr`, `timesync` and `nats`, one command, no board. The drivers are compiled **unmodified** against a fake ESP-IDF (`host_test/fakes/`), which is §10.14.3's owed fake backend arriving in a different shape than that section specified, and which now covers I²S and a filesystem as well as the I²C wire. Built by MSVC rather than by ESP-IDF's `linux` target, which does not work on a Windows host — §10.11 records why |
+| Host-tier tests (§10.11) — `host_test/` | **running**: 367 Unity tests over `ui` (the navigator, the clock face and the request card), `i2cbus`, `pmic`, `rtc`, `imu`, `audio`, `config`, `buttons`, `timezone`, `speaker`, `wifimgr`, `timesync` and `nats`, one command, no board. The drivers are compiled **unmodified** against a fake ESP-IDF (`host_test/fakes/`), which is §10.14.3's owed fake backend arriving in a different shape than that section specified, and which now covers I²S and a filesystem as well as the I²C wire. Built by MSVC rather than by ESP-IDF's `linux` target, which does not work on a Windows host — §10.11 records why |
 | Protocol parity vectors (§10.11 tier 2) | not started |
 
 Read §10.3 before anything else: it is the one part of this that changes
@@ -1313,6 +1316,91 @@ because this is a gadget and gadgets invite reflex taps:
   the press nor the signature tells the operator what actually left the device.
   `responder_yubikey.print_decision` (§8.7) exists for exactly this reason.
 
+##### What is written, and the six decisions inside it
+
+The split is the same one for the third time — `ui::RequestCard` decides and
+`screens::RequestScreen` paints — and here it earns the most, because every rule
+on this screen is a rule about not approving something by accident:
+
+| File | What it is |
+|---|---|
+| `components/ui/request_card.h/.cpp` | **`ui::RequestCard`** — §7's fields in a bounded queue, the press guard, the countdown, the receipt. Includes `<cstdint>`, `<cstddef>` and the navigator, and nothing else, so all of it is host-tested (§10.11) |
+| `components/screens/request_screen.h/.cpp` | the overlay: two plates, a scrollable command, a countdown. No decisions |
+
+**What the board has actually done**: shown a `Bash` card with the command as the
+heaviest thing on the glass and a countdown running down from the request's own
+TTL, taken two more behind it and said `+2 waiting`, aged the queued ones out
+while the first was up, expired the first and shown `TIMED OUT / Bash / nobody
+answered - nothing was sent`, then let the clock back. Screenshots of each, taken
+with §10.12.2, are what checked the layout.
+
+Six things are decisions rather than plumbing:
+
+- **The verdict is two physical buttons, and nothing on the screen is
+  touchable.** `BOOT` allows, `PWR` denies. That is stricter than §10.8.4 asks
+  for — it specifies on-screen buttons — and it is stricter in the useful
+  direction: a stray finger on a 480×480 panel cannot approve anything at all.
+  The plates are labels naming the buttons, built by **one function for both** so
+  that "the same size and weight" survives somebody editing one of them. The one
+  thing touch still does is drag a long command into view, which decides nothing.
+- **`PWR` doubles as the way back to the clock, and that is a risk taken with
+  eyes open.** It is the button people press to *get out* of a screen, so muscle
+  memory will occasionally deny a request somebody meant to read. It is the safe
+  direction to be wrong in (§10.10: never a silent allow) — a denied request is
+  one the operator can ask for again, and an allowed one is not. Two consequences
+  are written into the code: while a card is up that button is **a verdict and
+  nothing else** — a press the guard throws away must not fall through to
+  navigating, or the guard becomes a way to leave the screen instead of a way to
+  protect it — and holding it six seconds still powers the board off, which is
+  the AXP2101's own behaviour (§10.1) and not something this firmware
+  participates in.
+- **§10.8.1's queued touch became one comparison.** A press is taken only if it
+  *began* at least 300 ms after the card was presented. That single signed
+  subtraction refuses both halves of the rule — a finger already down when the
+  card arrived gives a negative difference, and a card that has only just
+  appeared gives a small one — and it applies again from scratch to the next card
+  in the queue, which is exactly the moment §10.8.4 says the guard earns its
+  place. The buttons are read as **edges**, so a finger resting on the allow
+  button cannot approve a stream of arrivals either.
+- **A payload that does not fit is refused, never truncated.** §10.8.4 forbids
+  shortening a command into something that reads as harmless, so `kToolInputSize`
+  is a limit with a stated cost rather than a cut: 2 KB holds any `Bash` command
+  and does **not** hold a large `Write`, and such a request produces no card and
+  no reply, which puts the question back in Claude Code's own terminal. The same
+  door refuses a request with no reply subject and one with no tool name — a card
+  nobody could answer, and a card that asks about nothing.
+- **`Tick` can make a card disappear and can never answer one**, which is the
+  single most load-bearing assertion in the host suite: two minutes of ticking a
+  one-minute card produces an expiry and no verdict. And an expiry reads as a
+  **timeout**, in amber, not as a deny in red: the hook has already fallen back
+  to its own prompt, and an operator told "denied" would believe they had
+  answered something they never saw.
+- **There is no bus behind it, and that is a decision rather than a gap.**
+  Subscribing to `approvals.*` in the `approvers` queue group would take real
+  requests away from the responders that can sign one (§6's "Multiple clients",
+  §10.2) and answer them with nothing. So the only caller of `screens::Inject` is
+  `request test` on the console, and `screens.cpp`'s `Decided()` is the single
+  function §10.6 and §7 have to fill in — it is handed the whole request and the
+  verdict, and today it writes a log line. **The receipt says so on the glass**:
+  `decided, not sent - no key yet`, because a screen that implied a reply had left
+  would be the one lie here that matters.
+
+Two things only the board could have said, both fixed, and both found by putting
+a screenshot (§10.12.2) next to `request`:
+
+- **`+N waiting` never appeared.** The queue count was refreshed only when the
+  *card* changed, and a second request arriving does not change the card — so a
+  queue that grew under one said nothing. It has its own comparison now.
+- **A card nobody answered read `decided, not sent`.** The caller's note was
+  printed under every outcome, including a timeout, where nothing was decided at
+  all. The model had it right and the words did not, which is the failure mode a
+  receipt is supposed to prevent.
+
+And one number that came from measuring rather than reasoning: a `ui::Request` is
+2.3 KB of §7 fields, and two of them as locals in the button poll took the screen
+task's free stack from 2,944 bytes to **1,088**. They are static now — which
+§10.14.1 would have asked for anyway; the measurement is what made it urgent.
+
 #### 10.8.5 Settings
 
 One list, no cleverness:
@@ -1845,6 +1933,7 @@ Three tiers, and the first one is where nearly everything belongs:
    |---|---|
    | `components/ui` | every transition of §10.8's table; swipes that must *not* navigate on the settings and Wi-Fi screens; the settings screen being reachable from the clock **and from nowhere else**, and the Wi-Fi screen only from settings; a request preempting all four screens without moving any of them; navigation vanishing entirely while the card is up; the screen underneath surviving both an answer and an expiry; the pending queue refusing a fifth arrival. Its `CMakeLists.txt` has an empty `REQUIRES`, which is not an omission — a navigator that included LVGL would be a navigator that needs a board |
    | `components/ui` (the clock face) | §10.8.2's rules, and the sixth subject in this firmware that needs no fake. **The time**: an unset clock showing dashes rather than a plausible `00:00`, a year outside the RTC's own 2024..2099 refused at each end, the digits being 24-hour with their leading zeros, and a wall clock out of range showing dashes rather than rendering an hour of 74. **The three indicators**: a connected link never showing *no* bars, because an empty icon reads as "not connected"; the connecting animation never being blank; an access point and a switched-off radio both lighting none; no server configured being a shape rather than a red light; the two-minute traffic window opening on a delivery, closing on time, surviving the ~49-day wrap, **not** opening on the first reading of a counter that was already non-zero, and **not** opening on a counter that went backwards — which is a reconnect (§10.5) rather than a message; traffic never showing through a dropped link; and a battery percentage clamped, with negative meaning "nothing to ask" rather than empty. **The panel's own two**: the drift staying inside its box, reaching all four corners of it, never standing still, and being continuous across the millisecond wrap — the last of which is the only test that catches a cycle read as `now_ms % period`; and the water bounded away from both ends of the scale, travelling with the phase, varying down the face, and free of hard edges. Plus `Wave` interpolating rather than reading its 64-entry table flat, which is here because the mutation pass showed that breaking it was invisible through `Shimmer` |
+   | `components/ui` (the request card) | §10.8.4's rules, and the ones where a test is worth the most. **What a card is allowed to be**: every refusal is its own case — a queue that is full, a field with no terminator in it (all seven, in one loop, so a field added later cannot skip the check), a request with no reply subject, one with no tool name — because a refused card is §10.10's fail-safe and a *shown* card is a question put to a human. **The queue**: the oldest is the one on screen, the bound is asserted equal to the navigator's, and room freed is room usable. **The press guard**: a press inside the first 300 ms is thrown away, a press that *began* before the card appeared is thrown away by the same comparison, the next card in the queue gets its own guard from scratch, and pressing nothing decides nothing. **The outcomes**: a press hands back the whole request the reply will have to echo; a card that timed out reads as a timeout and not as a deny; a request that waited past its own life is dropped without ever being shown; a missing TTL falls back to one that expires rather than to forever; the countdown floors at zero; and the ~49-day wrap lands inside a card's life. **The receipt**: it fades on its own, it is skipped when another card is waiting, and an arriving request outranks it. Plus the assertion the whole file is built around — **no amount of ticking produces a verdict** |
    | `components/i2cbus` | §10.14.3's three: contention, an acquire that **times out rather than blocks** (asserted as the tick count it asked for, which is why the fake mutex never sleeps), and a recovery that clocks SCL nine times and drops the device handles with the old bus. Plus the device table's per-device clock, its reopen-on-speed-change, and its refusal when full. And **the non-recursive mutex, from both sides**: `AddDevice` called while a lease is held is refused rather than granted — the trap `es8311.h` records — and `Recover`, which used to skip the lease entirely, now waits for it and tears nothing down if it cannot have it |
    | `components/pmic` | the 13-bit battery field against the 14-bit ones — the width that gives a *plausible* wrong voltage when wrong; the TS-pin silencing and the ADC read-modify-write; VBUS needing both status bits; `PowerOff` refusing over USB **and writing nothing**; `Read` being one snapshot rather than a dozen moments; and the two halves of the vendor's rail guard — a rail already at 3.3 V is not rewritten (DCDC1 supplies the C6, so a pointless write is a risk with no upside) and one at the wrong voltage is, with the bits above the field kept |
    | `components/rtc` | BCD both ways; the seven counters in one burst; the OS flag making a *successful* read untrustworthy, and being masked out of the seconds it shares a register with; the clock stopped and restarted around a write — including after a write that failed; and the century this chip does not have, so 2100 and 1999 are refused before the bus is touched while 2099 goes through |
@@ -1935,6 +2024,27 @@ Three tiers, and the first one is where nearly everything belongs:
    many distinct values it takes over its 256 angles — 64 entries read flat
    cannot produce more than 64, and interpolation produces most of the scale.
    The claim in the code and the assertion in the test are the same claim now.
+
+   **The request card added sixteen, all caught, and two of them only after
+   something was fixed.** The fourteen ordinary ones: a full queue taking a fifth
+   card, the field-length check skipped, a card with nowhere to answer shown, a
+   card with no tool shown, the guard set to zero, the guard made unsigned so it
+   could not see a finger that was already down, a timeout recorded as a deny, a
+   timeout counted as an answer, queued cards never aged, a missing TTL meaning
+   forever, the deadline compared unsigned, the next card inheriting the last
+   one's guard, an arrival not outranking a receipt, and the decision handed back
+   without the request it is about.
+
+   The other two are about the harness rather than the code, and both are worth
+   knowing before somebody repeats them. `Reached` lives in the **header**, so
+   the mutation aimed at the `.cpp` found no pattern — a mutation that reports
+   "not found" is not a survivor and must not be counted as one. And the
+   "a receipt must not sit in front of the next card" mutation made `Front()`
+   return null, which the tests **dereferenced**: the suite died with no output at
+   all, which the harness classified as a build error. The mutation was caught
+   either way; the fix is a helper that answers `<no card>` instead of crashing,
+   so the failure now names the rule that broke. A suite that dies without saying
+   which test it was is a suite that costs an hour the next time.
 
    **The bus link added eleven, one survivor, and a warning about the ritual
    itself.** Ten were caught — the backoff's growth and its cap taken away
@@ -2094,15 +2204,23 @@ The numbers §10.12 asks for, taken with `idf.py size-components`: the whole
 `nats` component, header-only client included, is **36,438 bytes** (25,773 of
 them flash text, and 10,665 of DIRAM that is mostly the task's 8 KB stack), and
 `espressif__esp_websocket_client` has no line at all — built, never linked. The
-app is **1,630,784 bytes** against a 2.5 MB slot.
+app is **1,646,640 bytes** against a 2.5 MB slot.
 
-And the clock of §10.8.2, because it is the first screen and therefore the first
-data point for what four more of them cost: `libscreens.a` is **10,132 bytes**
-(5,700 of flash and 4,432 of DIRAM, of which 4 KB is the task's stack) and
-`libui.a` — the navigator and the whole of the clock face's arithmetic, sine
-table included — is **1,204 bytes**, all of it flash. That ratio is the §10.14.2
-split showing up in the size report: the half with every decision in it is the
-cheap half.
+And the two screens of §10.8.2 and §10.8.4, because they are the first data point
+for what three more of them cost: `libscreens.a` is **30,372 bytes** (10,770 of
+flash and 19,602 of DIRAM) and `libui.a` — the navigator, the whole of the clock
+face's arithmetic including its sine table, and the request card's queue *logic* —
+is **2,648 bytes**, all of it flash.
+
+Two things in that pair are worth reading rather than skimming. The **ratio** is
+the §10.14.2 split showing up in the size report: the half with every decision in
+it is the cheap half, twelve times over. And `libscreens.a`'s DIRAM is where the
+card actually costs something — 16,990 of `.bss` and 2,612 of `.data` against the
+clock's 4,432 — because a queue of four requests with §7's fields in them is about
+9 KB, the request handed back to a verdict is another 2.3, and the screen's label
+buffers are 2.3 more. That is the price of §10.8.4's "never truncated": the
+buffers are big enough that a real command fits, and a payload that does not fit
+is refused rather than cut.
 
 **These figures are a snapshot and drift with every commit**, which is worth
 saying once rather than re-taking them silently: the three recorded before this
@@ -2239,7 +2357,9 @@ back out of the segment boxes of the PNG, at a drift of `+10,-8`.
   arrived before step 1. What that bought was the AMOLED question — the drift and
   the dimness — answered in code on the panel that has the problem, rather than
   answered for the first time under the one screen that must not be got wrong.
-  What it did not do is move the order for the rest:
+  The **request screen** then followed, so step 1 is now two thirds done: the bus
+  is open and the card is on the glass, and what is missing between them is the
+  key. What none of it moved is the order for the rest:
   1. bus + registration + the **request** screen (§10.8.4) — the loop closes here,
      and until it does the rest is decoration;
   2. **Wi-Fi** (§10.9) and its screen — until then, credentials compiled in or set

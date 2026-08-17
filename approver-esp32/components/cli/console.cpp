@@ -2,6 +2,7 @@
 
 #include <sys/time.h>
 
+#include <cctype>
 #include <cinttypes>
 #include <cmath>
 #include <cstdio>
@@ -28,6 +29,7 @@
 #include "lvgl_display.h"
 #include "nats_link.h"
 #include "qmi8658.h"
+#include "request_card.h"
 #include "screens.h"
 #include "speaker.h"
 #include "storage.h"
@@ -2440,6 +2442,161 @@ int CmdScreenshot(int argc, char **) {
     return 0;
 }
 
+// --- `request` (CLAUDE.md §10.8.4, §10.10) -------------------------------
+//
+// The card, and the only way to put one on the screen today.
+//
+// **There is deliberately no bus behind it.** Subscribing to `approvals.*` in the
+// `approvers` queue group would take real requests away from the responders that
+// can actually sign one, and answer them with nothing — §6's "Multiple clients"
+// and §10.2, and the reason this is a console command rather than a subscription.
+// When §10.6 gives this device a key, the bus handler becomes a second caller of
+// `screens::Inject` and this command stays exactly as it is.
+//
+// The synthetic card carries a plausible §7 payload because the fields are the
+// ones the screen shows: an implausible one would test the layout against text
+// nobody will ever see.
+int CmdRequest(int argc, char **argv) {
+    auto usage = []() {
+        printf("usage: request                    what is on the card, and the tally\n");
+        printf("       request test [seconds]     put a synthetic card up\n");
+        printf("       request test <tool> <text> ...with a tool and arguments of your own\n");
+        printf("the card is answered on the board: BOOT allows, PWR denies\n");
+    };
+
+    if (argc == 1) {
+        const screens::CardStatus card = screens::Card();
+        if (!card.ready) {
+            printf("card       not running - the panel or LVGL did not come up\n");
+            return 1;
+        }
+
+        switch (card.state) {
+            case ui::CardState::kIdle:
+                printf("card       nothing pending\n");
+                break;
+            case ui::CardState::kCard:
+                printf("card       %s, %" PRIu32 " s left\n", card.tool,
+                       (card.remaining_ms + 999) / 1000);
+                printf("cwd        %s\n", card.cwd);
+                printf("input      %s", card.input_preview);
+                if (card.input_length > std::strlen(card.input_preview)) {
+                    // The screen is where a command is read in full (§10.8.4); a
+                    // console preview that looked complete would be the truncation
+                    // that section forbids, arriving through the back door.
+                    printf("  ... %u byte(s) in all", static_cast<unsigned>(card.input_length));
+                }
+                printf("\n");
+                if (card.waiting > 0) {
+                    printf("waiting    %u more\n", static_cast<unsigned>(card.waiting));
+                }
+                break;
+            case ui::CardState::kReceipt:
+                printf("card       showing what happened to the last one\n");
+                break;
+        }
+
+        const char *last = "nothing yet";
+        switch (card.last_outcome) {
+            case ui::Outcome::kAllowed:
+                last = "allowed";
+                break;
+            case ui::Outcome::kDenied:
+                last = "denied";
+                break;
+            case ui::Outcome::kTimedOut:
+                last = "timed out - nobody answered, and nothing was sent";
+                break;
+            case ui::Outcome::kNone:
+                break;
+        }
+        printf("last       %s%s%s\n", last, card.last_tool[0] != '\0' ? " - " : "",
+               card.last_tool);
+        printf("tally      %u allowed, %u denied, %u timed out\n",
+               static_cast<unsigned>(card.allowed), static_cast<unsigned>(card.denied),
+               static_cast<unsigned>(card.timed_out));
+        // Both of these are guards working rather than faults, which is why they
+        // are on their own line: `refused` is a payload this device would not show
+        // somebody, `ignored` is a press that began before the card did.
+        printf("guards     %u refused, %u press(es) ignored\n",
+               static_cast<unsigned>(card.refused), static_cast<unsigned>(card.ignored));
+        printf("signing    no key on this device yet - a press decides and nothing is sent\n");
+        return 0;
+    }
+
+    if (strcmp(argv[1], "help") == 0) {
+        usage();
+        return 0;
+    }
+
+    if (strcmp(argv[1], "test") != 0) {
+        usage();
+        return 1;
+    }
+
+    // Static, because it is 2 KB of §7 fields and the REPL task's stack is not
+    // where that belongs (§10.14.1).
+    static ui::Request request;
+    request = ui::Request{};
+    request.v = 1;
+    request.ts = static_cast<int64_t>(time(nullptr));
+    snprintf(request.session_id, sizeof(request.session_id), "console-test");
+    // Not a real nonce and it does not need to be: nothing signs this, and the
+    // screen uses it only to tell one card from the next. A real one is 32 bytes
+    // from the RNG **after Wi-Fi is up** (§10.7), which is the signer's problem.
+    snprintf(request.nonce, sizeof(request.nonce), "test-%llu",
+             static_cast<unsigned long long>(esp_timer_get_time()));
+    snprintf(request.input_sha256, sizeof(request.input_sha256),
+             "0000000000000000000000000000000000000000000000000000000000000000");
+    snprintf(request.reply, sizeof(request.reply), "_INBOX.console.test");
+    snprintf(request.cwd, sizeof(request.cwd), "E:\\projects\\ai-remote");
+
+    uint32_t seconds = 30;
+    if (argc == 3 && isdigit(static_cast<unsigned char>(argv[2][0])) != 0) {
+        char *end = nullptr;
+        const long value = strtol(argv[2], &end, 10);
+        if (end == argv[2] || *end != '\0' || value < 1 || value > 600) {
+            printf("request test takes 1..600 seconds\n");
+            return 1;
+        }
+        seconds = static_cast<uint32_t>(value);
+        snprintf(request.tool_name, sizeof(request.tool_name), "Bash");
+        snprintf(request.tool_input, sizeof(request.tool_input), "{\"command\": \"rm -rf build\"}");
+    } else if (argc >= 4) {
+        snprintf(request.tool_name, sizeof(request.tool_name), "%s", argv[2]);
+        // The rest of the line, joined with spaces — an argument list is what a
+        // `tool_input` looks like from a console.
+        size_t at = 0;
+        for (int i = 3; i < argc && at + 1 < sizeof(request.tool_input); ++i) {
+            const int written = snprintf(request.tool_input + at, sizeof(request.tool_input) - at,
+                                         "%s%s", i > 3 ? " " : "", argv[i]);
+            if (written <= 0) {
+                break;
+            }
+            at += static_cast<size_t>(written);
+        }
+    } else {
+        snprintf(request.tool_name, sizeof(request.tool_name), "Bash");
+        snprintf(request.tool_input, sizeof(request.tool_input), "{\"command\": \"rm -rf build\"}");
+    }
+    request.ttl_ms = seconds * 1000;
+
+    if (!screens::Inject(request)) {
+        printf("refused - the queue is full, or a field did not fit\n");
+        return 1;
+    }
+
+    // **The chirp is here and not in `screens`**, and the reason is in
+    // `screens.h`: `PlayWav` blocks for the length of the file, and the task that
+    // watches for a press must not be the task that waits for a sound.
+    if (board::Sound().Ready()) {
+        board::Sound().PlayWav("alert.wav");
+    }
+
+    printf("card up: %s, %" PRIu32 " s - BOOT allows, PWR denies\n", request.tool_name, seconds);
+    return 0;
+}
+
 int CmdDevStatus(int argc, char **) {
     if (argc != 1) {
         printf("usage: devstatus     the board, the chips, the screen, time and the network\n");
@@ -2458,8 +2615,8 @@ int CmdDevStatus(int argc, char **) {
         {"imu", &CmdImu},         {"audio", &CmdAudio},     {"display", &CmdDisplay},
         // `date` carries the clock **and** where its time came from, which is
         // why there is no separate sync section.
-        // And the screen, after the panel it is drawn on.
-        {"clock", &CmdClock},
+        // And the screens, after the panel they are drawn on.
+        {"clock", &CmdClock},     {"request", &CmdRequest},
         {"date", &CmdDate},       {"wifi", &CmdWifi},
         // And the bus after the network that carries it, which is also the
         // order in which one of them being wrong stops the next from working.
@@ -2502,6 +2659,15 @@ const esp_console_cmd_t kCommands[] = {
         .help = "the frame as base64 for tools/screenshot.py — holds the display while it runs",
         .hint = nullptr,
         .func = &CmdScreenshot,
+        .argtable = nullptr,
+        .func_w_context = nullptr,
+        .context = nullptr,
+    },
+    {
+        .command = "request",
+        .help = "the permission card: what is on it, the tally, or 'request test' to raise one",
+        .hint = "[test [seconds|<tool> <text>]]",
+        .func = &CmdRequest,
         .argtable = nullptr,
         .func_w_context = nullptr,
         .context = nullptr,
