@@ -37,6 +37,7 @@
 #include "responder.h"
 #include "screens.h"
 #include "storage.h"
+#include "watcher.h"
 #include "timesync.h"
 #include "timezone.h"
 #include "wifi_manager.h"
@@ -258,6 +259,10 @@ extern "C" void app_main(void) {
     // which a card could be answered into nothing. And it is the last line of
     // `app_main` for the reason §10.14.1 gives about the main task's 8 KB stack —
     // everything is composed by now, and this returns immediately.
+    // The `status` watcher first, so the responder's very first tick already has
+    // something to maintain. It opens nothing and starts no task (§10.8.3).
+    watcher::Init();
+
     const esp_err_t responder_err = responder::Init();
     if (responder_err != ESP_OK) {
         ESP_LOGE(TAG, "responder not started: %s", esp_err_to_name(responder_err));

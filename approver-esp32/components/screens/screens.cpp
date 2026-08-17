@@ -7,6 +7,7 @@
 
 #include "clock_face.h"
 #include "clock_screen.h"
+#include "limits_screen.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -35,6 +36,11 @@ ClockScreen g_clock;
 ui::ClockFace g_face;
 RequestScreen g_request_screen;
 ui::RequestCard g_card;
+
+// The limits of §10.8.3, which arrive rather than being navigated to —
+// `ui/limits_view.h` says why and at whose request.
+LimitsScreen g_limits_screen;
+ui::LimitsView g_limits;
 
 // **The navigator is kept in step with the card rather than owning the queue.**
 // §10.8.1 gives it the rule that navigation vanishes while a card is up, and it
@@ -214,11 +220,16 @@ void PollKeys(uint32_t now_ms) {
                 Decided(g_answered, ui::Verdict::kDeny);
             }
         } else {
-            // Otherwise it is the way home. Today the clock is the only screen
-            // there is, so this is a no-op that is already right — wired now
-            // rather than when the other four arrive, because the rule is about
-            // the button and not about the screens.
-            g_nav.Navigate(ui::Nav::kBack);
+            // Otherwise it is the way home — and from the limits screen that is
+            // also a **dismissal**: §10.8.3's numbers arrive every few seconds
+            // while a session is working, so a back that only changed the screen
+            // would be undone before the finger left the button. `Dismissed`
+            // makes it last until the stream goes quiet, which is the only
+            // reading in which the button does anything (`limits_view.h`).
+            const bool leaving_limits = g_nav.Screen() == ui::ScreenId::kLimits;
+            if (g_nav.Navigate(ui::Nav::kBack) && leaving_limits) {
+                g_limits.Dismissed();
+            }
         }
     }
 }
@@ -290,10 +301,29 @@ void Task(void *) {
             std::strftime(date, sizeof(date), "%a %d %b", &local);
         }
 
+        // A minute with no document is the stream having stopped (§10.8.3), and
+        // the screen leaves. Checked here rather than on arrival because it is a
+        // thing that happens when nothing happens.
+        if (g_limits.Tick(now_ms)) {
+            g_nav.LimitsWentQuiet();
+        }
+
         bool applied = false;
         if (display::Lock lock(kLockTimeoutMs); lock) {
             g_clock.SetDate(date);
             g_clock.Apply(view);
+
+            // Which of the two full-screen objects is up is the navigator's
+            // answer, and applying it is the twenty lines `navigator.h` promised
+            // somebody else would write.
+            const bool limits_up = g_nav.Screen() == ui::ScreenId::kLimits;
+            g_clock.SetVisible(!limits_up);
+            g_limits_screen.SetVisible(limits_up);
+            // The epoch, or 0 when it is not believable — which is what decides
+            // whether a countdown is computed here or taken from what the
+            // publisher resolved (§10.8.3).
+            g_limits_screen.Apply(g_limits, view.time_valid ? in.epoch_utc : 0, now_ms);
+
             // The card last, so it is the last thing invalidated — and it sits on
             // top of a clock that has no idea it is there (§10.8.1).
             g_request_screen.Apply(g_card, now_ms, g_note);
@@ -348,6 +378,14 @@ esp_err_t Init(pmic::Axp2101 *battery, const Keys &keys, audio::Speaker *alert) 
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "clock not built: %s", esp_err_to_name(err));
             return err;
+        }
+
+        // Between the clock and the card in sibling order, which is the order they
+        // outrank each other in: the limits cover the clock, the card covers both.
+        const esp_err_t limits = g_limits_screen.Create(screen);
+        if (limits != ESP_OK) {
+            ESP_LOGE(TAG, "limits not built: %s", esp_err_to_name(limits));
+            return limits;
         }
 
         // After the clock, so it is the later sibling and therefore the one LVGL
@@ -493,6 +531,48 @@ void SetReceiptNote(const char *note) {
     // the one string on this screen where a short version still says the true
     // thing, and the alternative to truncating is a receipt with nothing on it.
     std::snprintf(g_note, sizeof g_note, "%s", note);
+}
+
+void ShowLimits(const ui::Limits &limits) {
+    if (g_handle == nullptr) {
+        return;
+    }
+    const uint32_t now_ms = static_cast<uint32_t>(esp_timer_get_time() / 1000);
+
+    // Under the snapshot lock and not the display lock, exactly as `Inject` is:
+    // the task picks it up on its next pass, at most 20 ms away, and this call
+    // never waits behind a frame.
+    if (xSemaphoreTake(g_lock, pdMS_TO_TICKS(100)) != pdTRUE) {
+        return;
+    }
+    const bool raise = g_limits.Arrived(limits, now_ms);
+    if (raise) {
+        // The navigator has the last word: a request card outranks a readout, and
+        // an operator in settings is not thrown out of them (§10.8.1).
+        g_nav.LimitsArrived();
+    }
+    xSemaphoreGive(g_lock);
+}
+
+LimitsStatus Limits() {
+    LimitsStatus out;
+    if (g_handle == nullptr) {
+        return out;
+    }
+    const uint32_t now_ms = static_cast<uint32_t>(esp_timer_get_time() / 1000);
+    if (xSemaphoreTake(g_lock, pdMS_TO_TICKS(100)) != pdTRUE) {
+        return out;
+    }
+    out.ready = true;
+    out.on_screen = g_nav.Screen() == ui::ScreenId::kLimits;
+    out.has_document = g_limits.HasDocument();
+    out.quiet = g_limits.Quiet();
+    out.dismissed = g_limits.DismissedNow();
+    out.received = g_limits.Received();
+    out.age_ms = g_limits.AgeMs(now_ms);
+    out.document = g_limits.Document();
+    xSemaphoreGive(g_lock);
+    return out;
 }
 
 }  // namespace screens

@@ -10,4 +10,4 @@
 # signs. §10.11's device tier is where that belongs.
 idf_component_register(SRCS "responder.cpp"
                     INCLUDE_DIRS "."
-                    REQUIRES protocol crypto registration nats screens ui)
+                    REQUIRES protocol crypto registration nats screens ui watcher)

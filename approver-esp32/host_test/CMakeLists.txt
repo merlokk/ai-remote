@@ -84,6 +84,7 @@ add_executable(host_test
     test_signing.cpp
     test_registration.cpp
     test_approval.cpp
+    test_limits.cpp
 
     # The fake ESP-IDF the drivers are compiled against. `fakes/` shadows the
     # framework's headers on the include path below, so the sources listed
@@ -96,6 +97,7 @@ add_executable(host_test
     ../components/ui/navigator.cpp
     ../components/ui/clock_face.cpp
     ../components/ui/request_card.cpp
+    ../components/ui/limits_view.cpp
     ../components/i2cbus/i2c_bus.cpp
     ../components/pmic/axp2101.cpp
     ../components/rtc/pcf85063.cpp
@@ -128,6 +130,7 @@ add_executable(host_test
     ../components/protocol/signing.cpp
     ../components/protocol/registration.cpp
     ../components/protocol/approval.cpp
+    ../components/protocol/status.cpp
 
     # cJSON, the real one, out of the managed component `idf.py build` fetched.
     "${CJSON_DIR}/cJSON.c"

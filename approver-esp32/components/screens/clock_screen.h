@@ -123,6 +123,14 @@ class ClockScreen {
     // (§10.8.2), and that edge is the caller. Empty hides it.
     void SetDate(const char *text);
 
+    // Show or hide the whole face. **The clock is not always what is up any
+    // more** (§10.8.3): the limits screen is a sibling of it and exactly one of
+    // the two is visible, which the navigator decides. Everything under here keeps
+    // running while it is hidden — the drift, the water, the indicators — so
+    // coming back is a flag rather than a rebuild, which is what §10.8.1 means by
+    // "what was underneath comes back exactly".
+    void SetVisible(bool visible);
+
    private:
     static void DrawDigits(lv_event_t *event);
     static void DrawIcons(lv_event_t *event);
@@ -138,7 +146,8 @@ class ClockScreen {
     lv_obj_t *date_ = nullptr;
 
     ui::ClockView view_ = {};
-    bool painted_ = false;  // has `view_` ever been applied
+    bool painted_ = false;
+    bool visible_ = true;  // has `view_` ever been applied
 
     // Both labels are `lv_label_set_text_static` over these, so a changing
     // string costs no allocation out of LVGL's pool (§10.14.1).

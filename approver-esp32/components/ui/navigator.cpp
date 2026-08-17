@@ -68,6 +68,32 @@ bool Navigator::RequestArrived() {
     return true;
 }
 
+bool Navigator::LimitsArrived() {
+    // §10.8.1: nothing outranks the card, and a readout least of all. The
+    // document is still taken — `LimitsView` has it — this only declines to put
+    // it on the glass.
+    if (RequestVisible()) {
+        return false;
+    }
+    // Only from the clock. Arriving numbers must not take an operator out of
+    // settings or a half-typed password on the Wi-Fi screen, which is the rule
+    // §10.8.1 spends a paragraph on and the reason this is not simply an
+    // assignment.
+    if (screen_ != ScreenId::kClock) {
+        return false;
+    }
+    screen_ = ScreenId::kLimits;
+    return true;
+}
+
+bool Navigator::LimitsWentQuiet() {
+    if (screen_ != ScreenId::kLimits) {
+        return false;
+    }
+    screen_ = ScreenId::kClock;
+    return true;
+}
+
 bool Navigator::RequestAnswered() { return Drop(); }
 
 bool Navigator::RequestExpired() { return Drop(); }

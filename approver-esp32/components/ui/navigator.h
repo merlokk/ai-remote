@@ -94,6 +94,26 @@ class Navigator {
     // drop it, one log line, no reply.
     bool RequestArrived();
 
+    // --- the limits screen (§10.8.3) --------------------------------------
+    //
+    // **It arrives rather than being navigated to**, which is the one place this
+    // firmware departs from §10.8.3 — see `limits_view.h` for why and at whose
+    // request. The swipe below still reaches it; nothing depends on that.
+    //
+    // Raising it is subject to the same rule everything else is: **the request
+    // card outranks it** (§10.8.1). A `status` document that lands while a
+    // permission request is on the glass changes what the limits screen *shows*
+    // and never what is up — which is this section's "everything else is quiet",
+    // applied to the one screen that could otherwise steal focus for a readout.
+    //
+    // Returns true if the screen changed.
+    bool LimitsArrived();
+
+    // A minute with nothing (`ui::LimitsView::kQuietMs`). Back to the clock, and
+    // only from the limits screen — a stream going quiet while the operator is in
+    // settings must not throw them out of it.
+    bool LimitsWentQuiet();
+
     // Answered — a decision was signed and published — and expired — the
     // countdown ran out and nothing was sent. **The navigator cannot tell them
     // apart and should not:** the difference is about what left the device,

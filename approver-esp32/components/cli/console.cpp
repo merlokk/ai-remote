@@ -30,6 +30,7 @@
 #include "registrar.h"
 #include "registration.h"
 #include "responder.h"
+#include "watcher.h"
 #include "mbedtls/base64.h"
 #include "lvgl_display.h"
 #include "nats_link.h"
@@ -2183,6 +2184,81 @@ int CmdForget(int argc, char **argv) {
     return 0;
 }
 
+// The limits of §10.8.3 — what the last `status` document said, and whether the
+// screen is up. **A readout of a readout**, which is the whole of this screen's
+// job: nothing here can be acted on and nothing here reaches a responder.
+int CmdLimits(int argc, char **) {
+    if (argc != 1) {
+        printf("usage: limits        the last status document, and whether it is on screen\n");
+        return 1;
+    }
+
+    const watcher::Status wire = watcher::Get();
+    const screens::LimitsStatus view = screens::Limits();
+
+    if (!wire.ready) {
+        printf("watching   the status watcher did not start\n");
+        return 1;
+    }
+    printf("watching   %s\n",
+           wire.subscribed ? "yes - status" : watcher::BlockerText(wire.blocked_by));
+    printf("documents  %" PRIu32 " arrived, %" PRIu32 " unreadable\n", wire.received, wire.refused);
+
+    if (!view.ready) {
+        printf("screen     not running - the panel or LVGL did not come up\n");
+        return 0;
+    }
+    if (!view.has_document) {
+        printf("screen     nothing yet - it comes up on its own when one arrives\n");
+        return 0;
+    }
+
+    printf("screen     %s%s\n", view.on_screen ? "up" : "on the clock",
+           view.dismissed ? " (dismissed until the stream goes quiet)" : "");
+    printf("last       %" PRIu32 " s ago%s\n", view.age_ms / 1000,
+           view.quiet ? " - the stream has stopped" : "");
+
+    const ui::Limits &doc = view.document;
+    printf("model      %s%s%s\n", doc.model[0] != 0 ? doc.model : "unknown",
+           doc.effort[0] != 0 ? ", effort " : "", doc.effort);
+    printf("session    %s\n", doc.cwd[0] != 0 ? doc.cwd : "unknown");
+
+    struct Row {
+        const char *label;
+        const ui::Gauge *gauge;
+        bool window;
+    };
+    const Row rows[] = {
+        {"5h ", &doc.five_hour, true},
+        {"7d ", &doc.seven_day, true},
+        {"ctx", &doc.context, false},
+    };
+    for (const Row &row : rows) {
+        if (!row.gauge->present) {
+            // §9.7 omits a whole section for an API key rather than a
+            // subscription, and "absent" is not "empty".
+            printf("%s        not published\n", row.label);
+            continue;
+        }
+        const ui::Level level = row.window ? ui::WindowLevel(row.gauge->used_percent)
+                                           : ui::ContextLevel(row.gauge->used_percent);
+        const char *colour = level == ui::Level::kGreen    ? "green"
+                             : level == ui::Level::kYellow ? "yellow"
+                                                           : "red";
+        if (row.gauge->resets_at != 0) {
+            printf("%s        %u%% spent (%s), resets in %s\n", row.label,
+                   static_cast<unsigned>(row.gauge->used_percent), colour,
+                   row.gauge->resets_in_text[0] != 0 ? row.gauge->resets_in_text : "?");
+        } else {
+            // The context window resets when the session does, not on a clock.
+            printf("%s        %u%% spent (%s)\n", row.label,
+                   static_cast<unsigned>(row.gauge->used_percent), colour);
+        }
+    }
+    return 0;
+}
+
+
 int CmdTerm(int argc, char **argv) {
     if (argc > 2) {
         printf("usage: term          ask the terminal again, and follow its answer\n");
@@ -2859,6 +2935,8 @@ int CmdDevStatus(int argc, char **) {
         // to: a socket that is open and a key that cannot sign are the same
         // silence from the other end.
         {"keys", &CmdKeys},
+        // And the readout that is only a readout (§10.8.3).
+        {"limits", &CmdLimits},
     };
 
     bool first = true;
@@ -3014,6 +3092,15 @@ const esp_console_cmd_t kCommands[] = {
         .help = "drop the registration and the pinned handler key (needs a new token after)",
         .hint = "now",
         .func = &CmdForget,
+        .argtable = nullptr,
+        .func_w_context = nullptr,
+        .context = nullptr,
+    },
+    {
+        .command = "limits",
+        .help = "the last status document from a Claude Code session, and the screen for it",
+        .hint = nullptr,
+        .func = &CmdLimits,
         .argtable = nullptr,
         .func_w_context = nullptr,
         .context = nullptr,

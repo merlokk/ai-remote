@@ -678,6 +678,48 @@ identity.
 
 Nothing to forget is not an error, it just says so.
 
+### `limits`
+The last `status` document a Claude Code session published, and whether the
+screen for it is up:
+
+```
+watching   yes - status
+documents  14 arrived, 0 unreadable
+screen     up
+last       3 s ago
+model      Opus 5 (1M context), effort high
+session    E:\projects\ai-remote\approver-esp32
+5h         61% spent (yellow), resets in 1h4m
+7d         76% spent (yellow), resets in 1d6h
+ctx        72% spent (red)
+```
+
+**This screen arrives; you do not navigate to it.** A document lands and the
+screen comes up; a minute with none and it goes back to the clock; `PWR` sends it
+back now. The status line publishes on every render, so in practice the screen is
+up while you are working and the clock is up when you are not.
+
+`PWR` dismisses the **burst**, not the message — the next document is a few
+seconds away, so a back that lasted one message would be undone before your finger
+left the button. The screen stays away until the stream stops and starts again.
+
+Two things the readout is honest about that the screen alone could not be:
+
+- **`last … s ago`**, and `the stream has stopped` once the minute is up. These
+  numbers are a current value with nothing behind them: they are as true as they
+  are recent, and the last good document is kept rather than blanked.
+- **`not published`** against a gauge, which is not the same as 0 %. An API key
+  rather than a subscription has no rate limits at all, and an empty bar would say
+  the opposite.
+
+The colours are the status line's own scales, and they differ per gauge on
+purpose: a rate-limit window is green to 50 % and yellow to 80 %, the context
+window green to 20 % and yellow to 45 %. Half a five-hour window is an ordinary
+working state; half a context window is most of the way to a compact.
+
+Nothing here can be acted on, and that is the design: deleting this screen has to
+leave a working responder, so it has no way to reach one.
+
 ---
 
 ## The filesystem

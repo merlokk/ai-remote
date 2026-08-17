@@ -32,6 +32,7 @@
 #include "buttons.h"
 #include "clock_face.h"
 #include "esp_err.h"
+#include "limits_view.h"
 #include "speaker.h"
 #include "request_card.h"
 
@@ -187,6 +188,32 @@ Status Get();
 bool Inject(const ui::Request &request);
 
 CardStatus Card();
+
+// --- The limits (§10.8.3) ------------------------------------------------
+
+// A `status` document arrived. **This raises the screen**, which is the one place
+// this firmware departs from §10.8.3 — `ui/limits_view.h` says why and at whose
+// request — unless the operator dismissed the current burst, or a request card is
+// up, in which case the numbers are taken and the glass is left alone.
+//
+// Safe from any task. Like `Inject`, it does no LVGL work of its own.
+void ShowLimits(const ui::Limits &limits);
+
+// What the limits screen is doing, for `limits` on the console. A snapshot, like
+// the two above and for the same reasons.
+struct LimitsStatus {
+    bool ready = false;
+    bool on_screen = false;
+    bool has_document = false;
+    bool quiet = true;
+    bool dismissed = false;
+
+    uint32_t received = 0;
+    uint32_t age_ms = 0;
+    ui::Limits document = {};
+};
+
+LimitsStatus Limits();
 
 // --- Where a verdict goes (§7, §10.8.4) ----------------------------------
 

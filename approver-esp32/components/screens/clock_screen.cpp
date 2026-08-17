@@ -275,6 +275,18 @@ esp_err_t ClockScreen::Create(lv_obj_t *parent) {
     return ESP_OK;
 }
 
+void ClockScreen::SetVisible(bool visible) {
+    if (face_ == nullptr || visible == visible_) {
+        return;
+    }
+    visible_ = visible;
+    if (visible) {
+        lv_obj_remove_flag(face_, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(face_, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
 void ClockScreen::SetDate(const char *text) {
     if (date_ == nullptr) {
         return;

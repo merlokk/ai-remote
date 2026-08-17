@@ -44,10 +44,13 @@ Wi-Fi radio with a manager above it, the clock and its SNTP half — a console o
 the USB port with a command per piece of it ([`commands.md`](commands.md) is the
 list), the bus, an Ed25519 identity (§10.6) and a registration (§10.7).
 
-What is **not** done, and the table below is row by row about it: three of §10.8's
-five screens, so a swipe still has nowhere to go; and §10.6's key custody shipped
-as its *fallback* — the seed is in unencrypted NVS rather than behind an eFuse,
-which is a decision with a cost that section states in a table of its own.
+Above it, three of §10.8's five screens: the clock, the limits that come up on
+their own while a session is spending, and the request card over both.
+
+What is **not** done, and the table below is row by row about it: settings and
+Wi-Fi, so a swipe still has nowhere to go; and §10.6's key custody shipped as its
+*fallback* — the seed is in unencrypted NVS rather than behind an eFuse, which is
+a decision with a cost that section states in a table of its own.
 
 | Scope | State |
 |-------|-------|
@@ -76,16 +79,17 @@ which is a decision with a cost that section states in a table of its own.
 | Firmware: the key and the signing bytes (§10.2, §10.6) — `components/crypto`, `components/protocol` | **written, and the key signs on the board**: the boot self-test passes both halves, the identity is derived and survives a reboot, `keys` is on the console, and a signature this board made verifies under `lib/crypto.py`. §7's signing bytes are assembled and host-tested against Python's own output (14 tests, 7 of 7 mutations caught). **On §10.6's fallback, not its design** — no eFuse key is burned, so the seed is in unencrypted NVS and that section's table has the row that says what it costs |
 | Firmware: registration (§6, §10.7) — `components/registration`, `components/protocol` | **done, against the real handler**: `register <token>` on the console runs §6 verbatim — a nonce made after the radio is up, a private inbox, the handler's signature verified **before** a single field of the reply is read, and `registration.json` written only on a verified `ok:true`. On the board: registered, survived a reboot, refused a spent token, and **refused a perfectly valid `ok:true` signed by a handler it is not pinned to** — with the file unchanged every time. 25 host tests |
 | Firmware: the loop (§7) — `components/responder`, `components/protocol` | **closed**: `approvals.*` in the queue group `approvers`, parsed, on the glass, and a press signed and published into the request's own reply subject. It subscribes only when it has a key, a registration **and** a connection, so a device that cannot answer never takes a request from a responder that can. On the board: a request built by `hook.build_request` arrived and showed the command whole. 19 host tests over the wire format |
-| The five screens — clock, limits, request, settings, Wi-Fi (§10.8) | **two of five running**: the clock face (§10.8.2) and the request card (§10.8.4), both on the board. Limits, settings and Wi-Fi are specified and not started, so a swipe still has nowhere to go |
+| The five screens — clock, limits, request, settings, Wi-Fi (§10.8) | **three of five running**: the clock face (§10.8.2), the limits (§10.8.3) and the request card (§10.8.4), all on the board. Settings and Wi-Fi are specified and not started |
 | The request card — `components/ui/request_card.*` + `components/screens/request_screen.*` (§10.8.4) | **running on hardware**: §7's fields in a bounded queue of four, the tool and the command as the heaviest thing on the glass, a countdown that is the hook's rather than the device's, `+N waiting`, and a receipt afterwards that distinguishes a verdict from a card nobody answered. **Answered by the buttons** — `BOOT` allows, `PWR` denies and doubles as the way back to the clock — with §10.8.1's queued-touch guard in the shape a press has. Nothing on it is touchable, deliberately. The deciding half is `<cstdint>`-only and host-tested (23 tests, 16 of 16 mutations caught). **And now a bus behind it**: `components/responder` subscribes when it can actually answer, and `request test` is still there for when it cannot |
 | The clock face — `components/ui/clock_face.*` + `components/screens` (§10.8.2) | **running on hardware**: 24-hour seven-segment digits filled by a travelling wave, three indicators to the left of them (radio, bus, battery), the date under them, and the whole face drifting ±30/±40 px because the panel is an AMOLED. `--:--` rather than a plausible midnight when no believable time has arrived. `clock` on the console prints what is on the glass and why — which is how the drift and the water are checked without a camera. The deciding half is `<cstdint>`-only and host-tested (32 tests, 14 of 14 mutations caught); the painting half is LVGL and is the only file in the firmware that draws anything |
 | The Wi-Fi driver — `components/wifi` (§10.9) | **running on hardware**: two modes (access point, client), one network at a time, a latched link state, a disconnection reason turned into the three answers a person can act on, and a scan that works in both modes. It has **no opinions** — which network and when is the manager's, and that split is what makes the manager testable |
 | The internet check — `components/wifimgr/reachability.*` (§10.9) | **running on hardware**: once a minute, while there is a client link, an ICMP echo to one of a few addresses from `config.json` (8.8.8.8, 1.1.1.1, 9.9.9.9 by default). Three states — `unknown` is the honest one — two failed rounds to say offline and one reply to come back. `wifi ping` and `wifi check` on the console. **It never decides anything**: a link with no internet is reported, never a reason to change networks |
 | The Wi-Fi manager — `components/wifimgr` (§10.9) | **running on hardware, and tested on the host**: desired state (off / client / AP) against current, round-robin over the remembered networks with a growing capped backoff, sticky auth failures, and after N fruitless rounds a fallback access point that stays up for two minutes unless somebody attaches to it. `wifi` on the console. `wifi_policy.h` includes `<cstdint>` and nothing else, the way the navigator's does; the radio is lazily brought up, so a device with `wifi.active` false pays nothing for this existing. **It has joined a real network**, walked past one that refuses on the way, and come up on both DHCP and a fixed address — §10.9 has that run, and it is what makes the cycle, the fallback AP and the scan more than a proof against a network that does not exist. What no board has produced yet is a deliberate **auth failure**, which needs a network whose password is wrong on purpose |
+| The limits screen (§10.8.3) — `components/ui/limits_view.*`, `components/screens/limits_screen.*`, `components/watcher` | **running on hardware**: it came up on its own when this repository's own status line published, showed the model over three gauges on §9.2's two scales, and went back to the clock 73 s after the last document. **It arrives rather than being swiped to**, at the repository owner's request — that section says what changed and why `PWR` dismisses a burst rather than a message. The deciding half is `<cstdint>`-only and host-tested (21 tests, 10 of 11 mutations caught, and the eleventh has an answer) |
 | The Wi-Fi screen (§10.8.6) | specified, not started — the manager underneath it is what exists |
 | Where the configuration lives (§10.15) | **decided**: all of it in JSON on SPIFFS, nothing of ours in NVS — with the cost stated (SPIFFS cannot be encrypted at rest). `spiffs_image/config.json` + `config.init.json` are flashed, and `components/config` is what reads them |
 | The `KEY`-at-boot config restore (§10.15) | specified, not started |
-| Host-tier tests (§10.11) — `host_test/` | **running**: 425 Unity tests over `ui` (the navigator, the clock face and the request card), `protocol` (§7's signing bytes, its wire format, and §6's registration exchange), `i2cbus`, `pmic`, `rtc`, `imu`, `audio`, `config`, `buttons`, `timezone`, `speaker`, `wifimgr`, `timesync` and `nats`, one command, no board. The drivers are compiled **unmodified** against a fake ESP-IDF (`host_test/fakes/`), which is §10.14.3's owed fake backend arriving in a different shape than that section specified, and which now covers I²S and a filesystem as well as the I²C wire. Built by MSVC rather than by ESP-IDF's `linux` target, which does not work on a Windows host — §10.11 records why |
+| Host-tier tests (§10.11) — `host_test/` | **running**: 446 Unity tests over `ui` (the navigator, the clock face, the request card and the limits), `protocol` (§7's signing bytes, its wire format, §6's registration exchange and §9.7's status document), `i2cbus`, `pmic`, `rtc`, `imu`, `audio`, `config`, `buttons`, `timezone`, `speaker`, `wifimgr`, `timesync` and `nats`, one command, no board. The drivers are compiled **unmodified** against a fake ESP-IDF (`host_test/fakes/`), which is §10.14.3's owed fake backend arriving in a different shape than that section specified, and which now covers I²S and a filesystem as well as the I²C wire. Built by MSVC rather than by ESP-IDF's `linux` target, which does not work on a Windows host — §10.11 records why |
 | Protocol parity vectors (§10.11 tier 2) | not started |
 
 Read §10.3 before anything else: it is the one part of this that changes
@@ -1490,6 +1494,34 @@ A port of `approver-web`'s "model and limits plaque" onto the panel: the model
 name, `effort.level`, the `5h` and `7d` gauges with countdowns, `ctx`, and the
 `cwd` the session is in.
 
+**It arrives rather than being navigated to**, which is the one rule below that
+did not survive contact with the repository owner, and the change is the whole
+character of the screen. The table above still lists it under "swipe left/right
+from the clock" and the navigator still honours that; nothing depends on it. What
+actually happens:
+
+| | |
+|---|---|
+| a `status` document lands | the screen comes up — unless a request card is up, which outranks it (§10.8.1), or the operator is in settings, which arriving numbers must not take them out of |
+| a minute with no document | back to the clock |
+| `PWR` | back to the clock now |
+
+Why it is better than the swipe on this device: §9.7 publishes on **every render**
+of the status line, so documents arrive every few seconds while Claude Code is
+working and stop dead when it is idle. The minute is what turns that into "the
+screen follows the work" — a desk object that shows what the session is spending
+while there is a session, and a clock the rest of the time. On a device where
+three of five screens do not exist, it is also the only way anybody was going to
+reach this one.
+
+**And one place the instruction could not be taken literally.** "Back on `PWR`
+until the next document" would be undone within seconds, because the next document
+is seconds away. So a dismissal lasts until the stream goes **quiet**: the screen
+stays away until the minute expires and something arrives after that. `PWR`
+therefore means "not for this burst", which is the only reading in which the
+button does anything at all. `ui/limits_view.h` carries that argument next to the
+code.
+
 - **It is a second subscription on the connection that is already open, it is
   never answered, and the request path must not read it.** Same test
   `approver-web` states: deleting this screen must leave a working responder. No
@@ -1522,6 +1554,56 @@ name, `effort.level`, the `5h` and `7d` gauges with countdowns, `ctx`, and the
   or is missing `ts`/`line`, or carries a percentage that is not a number → one
   log line, previous document kept. Percentages are clamped 0–100 a second time
   here, because a bar drawn from someone else's `130` overflows its track.
+
+##### What is written, and the four decisions inside it
+
+The split is the same one for the fourth time, and by now it is the shape of this
+firmware rather than a choice made per screen:
+
+| File | What it is |
+|---|---|
+| `protocol/status.h/.cpp` | §9.7's document into fields. cJSON only, host-tested |
+| `ui/limits_view.h/.cpp` | **`ui::LimitsView`** — the two scales, the countdown, when the screen comes and goes. `<cstdint>` and the navigator, so all of it is host-tested |
+| `screens/limits_screen.h/.cpp` | three bars, a model and an age. No decisions |
+| `components/watcher` | the subscription. A component of its own, and the next paragraph is why |
+
+**What the board has actually done**: come up on its own when this repository's
+own status line published, shown `Opus 5 (1M context) · high` over three gauges —
+61 % and 76 % in yellow, 72 % of the context window in red, which is §9.2's two
+scales disagreeing exactly as they should — and gone back to the clock 73 seconds
+after the last document, keeping the numbers for `limits` to print.
+
+Four things are decisions rather than plumbing:
+
+- **The subscription is its own component, because §10.8.3 states a test rather
+  than a preference**: deleting the limits screen must leave a working responder.
+  `components/watcher` and `components/responder` cannot name each other —
+  neither is on the other's `REQUIRES` line — so that is something you can
+  perform. The one thread between them is a scheduling favour: `watcher` has no
+  task, because it has nothing to do between deliveries, and the responder's tick
+  calls `Maintain()` so a reconnect is noticed. A second task ticking twice a
+  second to watch a boolean would be 3 KB of stack for nothing.
+- **It subscribes with no queue group, and as soon as there is a socket.** No
+  group because a broadcast current value is meant to reach every subscriber and
+  joining one would take it from `approver-web` (§10.5). No key and no
+  registration because *reading* needs neither — a device that cannot approve
+  anything still shows what the session is spending.
+- **Junk keeps the last good document**, which is the opposite of the approval
+  path and the reason the parser assembles into a local and copies out at the end.
+  There is something worth keeping here; a bad `approvals.*` message has nothing
+  behind it. For the same reason a field that is too long is **truncated** rather
+  than refused — the one place in this firmware where that is the right way round,
+  and §10.8.4 is the contrast: a shortened command is one somebody approves by
+  reflex, a shortened model name is a readout that is slightly less specific.
+- **The countdown comes from whichever clock is trustworthy.** After SNTP it is
+  computed from `resets_at`; before, it is what the publisher resolved, aged by
+  the time since it arrived — which is why `resets_in` travels on the wire at all
+  (§9.7). A device whose clock is wrong by hours would otherwise print a countdown
+  wrong by hours with nothing to say it was.
+
+And the number this screen exists to be honest about: **its age**, in seconds,
+under everything else. §9.7 is a current value with no stream behind it, so these
+numbers are as true as they are recent and nothing else here would say so.
 
 #### 10.8.4 Request — the screen the device exists for
 
@@ -2238,6 +2320,7 @@ Three tiers, and the first one is where nearly everything belongs:
    | `components/protocol` | §7's signing bytes (§10.2), and the suite with the least room to be approximately right — every other test here protects a behaviour somebody would notice going wrong, this one protects an exact byte string whose failure is invisible from the device's side. So the expectations are **not derived from the header and not typed out of §7's table**: three complete messages generated by `approver/protocol.py` and pasted in, which is tier 2's method arriving early for the one layout that could not wait for it. Plus the shape independently of the content — the two always-empty fields keeping their *positions*, which is what makes the message end in a separator and is the easiest thing to lose while tidying; exactly eight separators whatever the fields hold; and every refusal writing **nothing**, because a half-assembled buffer here is something a caller could sign. And the integers on their own, `INT64_MIN` included: the value with no positive counterpart, which the obvious negate-and-divide loop gets wrong and which is the reason `AppendInt` accumulates downwards |
    | `components/protocol` (the registration exchange) | §6/§10.7's, and the suite is mostly about **one rule**: the handler's signature is checked before any field of the reply is read. That is testable at all because the verifier comes in as an argument — the one used here *records the message it was handed*, so "these are `registration_reply_signing_bytes`" is an assertion rather than a reading of the code, and every rejection that happens *before* the signature uses a verifier that fails the test if it runs. Then each refusal as its own case, because each has its own sentence on a console: not an object, another protocol version, an `ok` that is a string rather than a bool, no handler key, a **pin mismatch** (which is not a bad signature and must not be spelled as one), a nonce that answers a different request, no timestamp, a `ts` past 2^53 that cJSON would silently round, a field longer than the device will hold, and a signature that is not one. Plus the two that are about agreeing with Python rather than refusing anything: the signing bytes byte for byte, and an absent optional field signing as `""` — because the handler omits `error` on success and the other side signs it as empty |
    | `components/protocol` (the wire format) | §7's JSON, and the fixture is **`hook.py`'s own output** rather than something written to match the parser — a request invented here would pass for a parser that agrees with this file and with nothing else. The parse: every field where §7 says, `tool_input` rendered **whole** rather than reached into (§10.8.4 forbids showing part of what is being asked for), and no TTL arriving so the card's own default is what expires one. Then every refusal as its own case, because this is the one subject anybody on the LAN can publish to: not an object, another version, a missing field one at a time, a field longer than the card holds, a `tool_input` too big to show whole — the refusal with a stated cost — a `ts` that cannot be echoed exactly, and no reply subject at all. Each of them asserted to leave the caller's card **untouched**, because the card in that struct belongs to a request somebody is still reading. The reply: the six fields `hook.py::verify_reply` compares one by one, an empty `reason`, and **no `updated_input`** — whose absence is what keeps `updated_input_sha256` empty in the signed bytes |
+   | `components/ui` + `components/protocol` (the limits) | §9.2, §9.7 and §10.8.3, and the fixture is §9.7's own example document. **The two traffic-light scales**, both boundaries of each, and the assertion §10.8.3 asks for by name — that they cannot drift into each other, checked at every percentage from 0 to 100 rather than at a sample. `countdown()` against `render.rs`'s own cases, a reset in the past reading `now` rather than underflowing. **Absent is absent**: a document with no `rate_limits` is ordinary, and one window without the other is read. `ts` as the only required field, junk keeping the last good document, a percentage clamped and *rounded*, and a field too long **truncated** rather than refused — the one place in this firmware where that is right, and the test says so. Then the arrival rules: a document raises the screen, the minute is checked at both sides of its boundary and across the ~49-day wrap, a stream that keeps arriving keeps the screen, and a dismissal survives ten more documents but not the silence after them |
    | `components/i2cbus` | §10.14.3's three: contention, an acquire that **times out rather than blocks** (asserted as the tick count it asked for, which is why the fake mutex never sleeps), and a recovery that clocks SCL nine times and drops the device handles with the old bus. Plus the device table's per-device clock, its reopen-on-speed-change, and its refusal when full. And **the non-recursive mutex, from both sides**: `AddDevice` called while a lease is held is refused rather than granted — the trap `es8311.h` records — and `Recover`, which used to skip the lease entirely, now waits for it and tears nothing down if it cannot have it |
    | `components/pmic` | the 13-bit battery field against the 14-bit ones — the width that gives a *plausible* wrong voltage when wrong; the TS-pin silencing and the ADC read-modify-write; VBUS needing both status bits; `PowerOff` refusing over USB **and writing nothing**; `Read` being one snapshot rather than a dozen moments; and the two halves of the vendor's rail guard — a rail already at 3.3 V is not rewritten (DCDC1 supplies the C6, so a pointless write is a risk with no upside) and one at the wrong voltage is, with the bits above the field kept |
    | `components/rtc` | BCD both ways; the seven counters in one burst; the OS flag making a *successful* read untrustworthy, and being masked out of the seconds it shares a register with; the clock stopped and restarted around a write — including after a write that failed; and the century this chip does not have, so 2100 and 1999 are refused before the bus is touched while 2099 goes through |
@@ -2362,6 +2445,29 @@ Three tiers, and the first one is where nearly everything belongs:
    string at a 63-character field, which an off-by-one bound refuses just as
    happily as a correct one. Exactly at the bound and exactly one over is the
    only pair that says anything.
+
+   **The limits added eleven, ten caught, and the survivor is the useful one.**
+   The ten: the quiet window off by a tick, a dismissal never cleared when the
+   stream stops, a dismissal cleared by every arrival, the context gauge given the
+   window's scale, the sub-minute countdown boundary moved, the countdown always
+   taken from the publisher, a gauge with no reset given one anyway, a percentage
+   left unclamped, a percentage truncated rather than rounded, and a document with
+   no `ts` accepted.
+
+   The survivor is **writing straight into the caller's document instead of into a
+   local**, and the answer is that today it cannot matter: `ts` is the only
+   required field and it is read first, so after that line nothing can fail and
+   there is no input that gets half-written and then refused. The local is defence
+   for the day a second required field is added below it. Kept, at about 300 bytes
+   of stack, and the reasoning is now in `status.cpp` next to the line — because
+   the alternative is somebody rediscovering the same survivor in a year and
+   deleting the protection.
+
+   One of the eleven was also a lesson about the ritual rather than the code: the
+   first version of the dismissal mutation *inserted* a dead `if (false)` in front
+   of the real clear rather than removing it, and duly "survived". A mutation that
+   does not change behaviour is not a survivor; it is a mutation that was not
+   written yet.
 
    **The wire format added nine, all caught, and none of them interesting** —
    which is itself worth one line: a request with nowhere to answer shown anyway,
@@ -2761,6 +2867,13 @@ back out of the segment boxes of the PNG, at a drift of `+10,-8`.
   4. **limits** (§10.8.3) — last, because it is the only screen whose removal
      leaves everything else working, which is also the test that it stayed a
      readout.
+
+  **Step 4 was built third**, at the repository owner's request and for the same
+  reason step 3 was: the order above is about which screens are load-bearing, and
+  the owner is entitled to want the desk object to show something. What it did not
+  cost is the property that put it last — `components/watcher` and
+  `components/responder` cannot name each other, so "delete the limits screen and
+  the responder still works" is something you can perform rather than believe.
 - **No authentication on the device.** Whoever can reach the screen can approve
   and have it signed — the key is bound to the chip, not to a person. Identical to
   `approver-web`'s position, and acceptable for the same reason (a single-operator

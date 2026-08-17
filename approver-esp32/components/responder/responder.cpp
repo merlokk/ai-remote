@@ -13,6 +13,7 @@
 #include "registration.h"
 #include "screens.h"
 #include "signing.h"
+#include "watcher.h"
 
 namespace responder {
 namespace {
@@ -285,6 +286,15 @@ void MaintainSubscription() {
 void Task(void *) {
     for (;;) {
         MaintainSubscription();
+
+        // **Somebody else's subscription, on this task's clock.** The `status`
+        // watcher of §10.8.3 has no task of its own — it has nothing to do between
+        // deliveries — and a second task ticking twice a second to notice a
+        // reconnect would be 3 KB of stack for a boolean. This is a scheduling
+        // favour and not a dependency: nothing in `watcher` is on this
+        // component's `REQUIRES` line the other way round, which is what keeps
+        // §10.8.3's "delete the limits screen and the responder still works" true.
+        watcher::Maintain();
 
         // Drain whatever was decided. Taken one at a time and copied out under the
         // lock, so the screen task can add another while this one is being signed.
