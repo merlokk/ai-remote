@@ -63,7 +63,7 @@ so.
 | The navigation state machine — `components/ui` (§10.8.1) | **written and tested on the host**: which screen is up, the request card outranking everything, the bounded pending queue. Its header includes `<cstdint>` and nothing else and its `CMakeLists.txt` has an empty `REQUIRES`, which together are what make it testable without a board |
 | The boot splash — `spiffs_image/splash.bin`, `components/display/rawimage` (§10.8) | **running on hardware**: white katakana, on the glass for two seconds before LVGL owns it. Generated on the host by `tools/make-splash.ps1`, streamed off SPIFFS as raw RGB565 with no decoder |
 | The language and the layering (§10.14) — C++ except where C is forced, no dynamic memory, library layer before logic, the I²C bus leased | **decided, and what is written follows it**: every component below is C++, none of them contains a `new`, a `malloc`, a `std::vector` or a `std::function`, the tasks and their stacks are static, and nothing outside `components/i2cbus` touches `i2c_master_*`. What is still undemonstrated is the half that has no code: `main/` composing the logic rather than drawing a placeholder |
-| The ESP-IDF dependency set (§10.4) — LVGL + `esp_lvgl_port`, the CO5300/CST9220 drivers, libsodium for Ed25519, `debsahu/espidf-nats` for the bus | **signed off** (root §1). The display half is **resolved and building**: LVGL 9.4.0, `esp_lvgl_port` 2.9.0, `esp_lcd_sh8601` 2.0.1, `waveshare/esp_lcd_touch_cst9217` 1.0.4 — two of which are not the names §10.4 guessed, see below. The **NATS client is resolved and running**: `debsahu/espidf-nats` 1.4.0, which drags `espressif/esp_websocket_client` 1.8.0 in behind it — a transitive component root §1 asks about, and the one thing on this list nobody signed off in advance. libsodium is still unresolved |
+| The ESP-IDF dependency set (§10.4) — LVGL + `esp_lvgl_port`, the CO5300/CST9220 drivers, libsodium for Ed25519, `debsahu/espidf-nats` for the bus | **signed off** (root §1). The display half is **resolved and building**: LVGL 9.4.0, `esp_lvgl_port` 2.9.0, `esp_lcd_sh8601` 2.0.1, `waveshare/esp_lcd_touch_cst9217` 1.0.4 — two of which are not the names §10.4 guessed, see below. The **NATS client is resolved and running**: `debsahu/espidf-nats` 1.4.0, which drags `espressif/esp_websocket_client` 1.8.0 in behind it — a transitive component root §1 asks about, and the one thing on this list nobody signed off in advance. **libsodium is resolved and has signed on the board**: `espressif/libsodium` 1.0.22~1, no transitive component at all, and a signature that matches `lib/crypto.py` byte for byte — §10.4 has the numbers and §10.6 what the check settled. So the whole of §10.4's list is now resolved, and none of it is paper |
 | The bus link — `components/nats` (§10.3, §10.5) | **connected on hardware**: the §10.5 wrapper as a class, the connect policy next to it, and a task that waits for a client link and keeps a socket open. Against the server at `192.168.11.70:4222` it connected, subscribed to `approvals.*` in the queue group `approvers`, took a request-shaped message with its reply-to subject, and published into that subject with the server confirming. `nats` on the console. **Nothing of §7 is on top of it** — no key, no signing, no card |
 | The LVGL host preview (§10.12.1) | installed and rendering. It was written down here as the only part of this folder that ran; it is now the part that runs with no board, alongside the host tests |
 | Screenshots of the real panel (§10.12.2) | **working**: `screenshot` on the console streams the frame out as base64 — the panel cannot be read back and a frame does not fit in RAM, so it is taken a rendered strip at a time and never assembled — and `tools/screenshot.py` writes the PNG with nothing outside the standard library. Verified by decoding the digits back out of the pixels and matching `clock` |
@@ -422,6 +422,30 @@ there for what it does and does not settle.
 | **an Ed25519 implementation** — `libsodium` (Espressif publishes it as a managed component) | mbedTLS has **no EdDSA**: it cannot sign or verify Ed25519 at all. §6's server key is Ed25519 *by fixed protocol* (`protocol.SERVER_KEY_TYPE`), so verify is not optional | switch the device's own key to `key_type: p256` (mbedTLS ECDSA, already a first-class scheme in §7 — the YubiKey and the browser both use it) — **but the registration reply still needs Ed25519 verify**, so this removes signing from libsodium's job, not libsodium |
 | **a NATS client** — `debsahu/espidf-nats` (ESP Component Registry, `^1.4.0`, MIT, header-only C++, ESP-IDF 4.4–6.0) | the §10.5 subset without writing and debugging a socket state machine; and it brings TLS 1.2/1.3 with server-cert validation, mTLS and SNI, which is exactly what §10.3 needs and the one part of a hand-written client that would *not* have been ~300 lines | writing it ourselves, and the two options below |
 
+**libsodium resolved to `espressif/libsodium` 1.0.22~1, and it is the cheapest
+entry on this list to have signed off.** It brings **no transitive component at
+all** — its manifest names `idf >=4.2` and nothing else — which is worth stating
+next to the NATS client below, where the same question got the opposite answer.
+Two things it did cost, both measured rather than assumed:
+
+- **It is not in-tree here, which is cJSON's story a second time.** §10.4
+  approved it as a managed component, and on the v5.5.x this section pins it is
+  *also* an in-tree `libsodium`; on the installed v6.0.2 the in-tree copy is
+  gone and the registry one is the only one. Same library, same sign-off, new
+  delivery — and one more line on the version ledger of §10.12.
+- **134,225 bytes when something references it, and nothing does yet.** With the
+  §10.6 call surface linked — `sodium_init`, `crypto_sign_seed_keypair`,
+  `crypto_sign_detached`, `crypto_sign_verify_detached` — `idf.py
+  size-components` puts `libespressif__libsodium.a` at 134,225 bytes (133,022 of
+  flash, 1,203 of DIRAM) and the app at 1,780,864 against the 2.5 MB slot. With
+  the probe removed it has no line at all, exactly like the WebSocket client:
+  built, never linked, and the app back at 1,646,640. So the number above is
+  what §10.6 will spend, banked now rather than discovered then.
+
+The Kconfig that goes with it is `CONFIG_LIBSODIUM_USE_MBEDTLS_SHA`, and §10.6
+is where the argument for checking it lives; `sdkconfig.defaults` carries the
+answer and what it saves.
+
 **The NATS client is the interesting decision.** For Rust, §9.4 concluded that
 reimplementing the protocol to avoid `async-nats` "would be far worse than
 depending on it" — because an official client existed. For ESP-IDF there is no
@@ -721,6 +745,34 @@ own terminal. So at boot, sign a **fixed test vector with a fixed test key** and
 compare against bytes generated by `lib/crypto.py`; refuse to subscribe if it
 does not match, and say so on the screen. Ed25519 is deterministic, which is
 what makes this check possible at all.
+
+**That seam has now been fired at, before any of §10.6 was written, and it is
+clean — which changes what the self-test is for rather than removing it.** A
+throwaway probe in `main.cpp` ran the four calls this section needs against a
+vector generated by `lib/crypto.py` (the seed `00 01 … 1f`, and the message
+`ai-remote approver-esp32 libsodium self-test v1`), on ESP-IDF v6.0.2 and this
+board, **both ways**: with `CONFIG_LIBSODIUM_USE_MBEDTLS_SHA` set and clear, the
+derived public key matches, the signature matches byte for byte, and the verify
+of Python's own signature succeeds. The historical bug is not present here. So
+the switch stays at its default `y` — 10,780 bytes of flash cheaper, and
+`libmbedtls.a` is byte-identical either way because mbedTLS is linked for
+`esp-tls` regardless — and `sdkconfig.defaults` carries the reasoning where a
+menuconfig session will trip over it.
+
+The self-test stays, for the reason it was written down: this measured one
+build of one library on one day, and the failure it guards against is a *silent*
+one. What it no longer has to be is a first contact with an unknown.
+
+**And the probe found something this section will need, which is the point of
+having run it.** The first version panicked — `Guru Meditation Error: Core 0
+panic'ed (Stack protection fault)` in task `main`, inside `crypto_sign`. Signing
+uses **4,112 bytes of stack** (measured as a high-water mark against a 16 KB
+task; 4,128 with the mbedTLS SHA wrapper), and the main task's is 3,584. So the
+key derivation and the signature of §10.6 do not run wherever it is convenient:
+they need a task sized for them, which is §10.5's lesson about the 4 KB NATS
+stack arriving a second time and from a different direction. It is also the
+second argument, after §10.8.1's, for the signature never running inside an LVGL
+callback.
 
 ### 10.7 Registration on the device (§6, without a keyboard)
 
@@ -2197,14 +2249,27 @@ unchanged.
 4.4–6.0 and was therefore the remaining candidate to reopen the version
 argument; it resolves, compiles and connects on v6.0.2. What it needed was one
 `#undef` for a WebSocket contradiction that is the component's own rather than
-the version's (§10.4). So **libsodium is the last unmeasured entry on §10.4's
-list**, and nothing left in this project has a claim on v5.5.3.
+the version's (§10.4). So libsodium was the last unmeasured entry on §10.4's
+list, and nothing left in this project has a claim on v5.5.3.
+
+**And libsodium closed it, on the same version.** `espressif/libsodium` 1.0.22~1
+compiles for RISC-V, links, and produces a signature that matches `lib/crypto.py`
+byte for byte on this chip — §10.6 has what that settled and §10.4 what it
+costs. **Every entry on §10.4's list is now resolved and measured**, which is
+the thing this section has been asking for since the first build.
 
 The numbers §10.12 asks for, taken with `idf.py size-components`: the whole
 `nats` component, header-only client included, is **36,438 bytes** (25,773 of
 them flash text, and 10,665 of DIRAM that is mostly the task's 8 KB stack), and
 `espressif__esp_websocket_client` has no line at all — built, never linked. The
 app is **1,646,640 bytes** against a 2.5 MB slot.
+
+`espressif__libsodium` is in that second category today and will not stay
+there, so its number was taken while a probe held it down: **134,225 bytes**
+(133,022 of flash, 1,203 of DIRAM) for §10.6's four calls, which is what the
+signature will cost when it arrives and takes the app to **1,780,864**. Measured
+under `CONFIG_LIBSODIUM_USE_MBEDTLS_SHA=y`; `n` is 145,005, and §10.6 says why
+that is the more interesting half of the comparison.
 
 And the two screens of §10.8.2 and §10.8.4, because they are the first data point
 for what three more of them cost: `libscreens.a` is **30,372 bytes** (10,770 of

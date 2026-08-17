@@ -87,6 +87,16 @@ dependencies:
       registry_url: https://components.espressif.com
       type: service
     version: 1.8.0
+  espressif/libsodium:
+    component_hash: d4066b373fc6d4c5196db42aeea7faef4ac7f3080af96c2b74e2476c08b78dc1
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=4.2'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.0.22~1
   idf:
     source:
       type: idf
@@ -117,9 +127,10 @@ direct_dependencies:
 - espressif/cjson
 - espressif/esp_lcd_sh8601
 - espressif/esp_lvgl_port
+- espressif/libsodium
 - idf
 - lvgl/lvgl
 - waveshare/esp_lcd_touch_cst9217
-manifest_hash: c07a5aca086d17d5ae0cb8e541e829f1a12e7274eba68272e2f53d6029bf87c6
+manifest_hash: 4d638bba7001e7ca2393f25a11a5c9d19ef109d88b0b2a7ecb177eb227299210
 target: esp32c6
 version: 3.0.0

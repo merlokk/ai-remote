@@ -436,6 +436,35 @@ py -c "import sys; sys.path.insert(0, r'E:\projects\ai-remote'); from approver i
 Do the same for `registration_reply_signing_bytes`, and for an Ed25519 key pair
 with a known signature — the latter is what the boot self-test of §10.6 consumes.
 
+**Note the interpreter.** `py` has no `cryptography` — that lives in the
+project's venv, so anything touching `lib/crypto.py` runs as
+`E:\projects\ai-remote\.venv\Scripts\python.exe`.
+
+The Ed25519 vector has been generated and is worth not regenerating: seed
+`00 01 02 … 1f`, message `ai-remote approver-esp32 libsodium self-test v1`,
+
+```
+pub A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=
+sig BAzU2LyejENvC1nkIPHSfBpKP30SSGPZpGfjpPzApJUEg3kkTQP10cKjFKD15gQjlTq19AilUqET4kvTkwG/CQ==
+```
+
+— which `crypto_sign_seed_keypair` and `crypto_sign_detached` on this board
+reproduce exactly, both with and without `CONFIG_LIBSODIUM_USE_MBEDTLS_SHA`
+(§10.6). The command that produced it:
+
+```powershell
+& E:\projects\ai-remote\.venv\Scripts\python.exe -c @'
+import base64
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives import serialization
+sk  = Ed25519PrivateKey.from_private_bytes(bytes(range(32)))
+pub = sk.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+sig = sk.sign(b"ai-remote approver-esp32 libsodium self-test v1")
+print("pub", base64.b64encode(pub).decode())
+print("sig", base64.b64encode(sig).decode())
+'@
+```
+
 ## The LVGL preview (§10.12.1)
 
 `lvgl-mcp-server` is registered project-wide in [`../.mcp.json`](../.mcp.json),

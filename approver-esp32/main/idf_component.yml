@@ -73,3 +73,24 @@ dependencies:
   ## whatever the linker cannot garbage-collect. §10.12 asks for that number to
   ## be taken with `idf.py size-components` rather than assumed.
   debsahu/espidf-nats: "^1.4.0"
+
+  ## --- The signature (§10.4, §10.6) ---------------------------------------
+  ## Ed25519, and it is here because mbedTLS cannot do it: there is no EdDSA in
+  ## mbedTLS at all, and §6's server key is Ed25519 by fixed protocol
+  ## (`protocol.SERVER_KEY_TYPE`), so *verifying* the registration reply is not
+  ## a choice this firmware gets to make. Signing a decision could have been
+  ## moved to P-256 — §7 has that scheme already, and both the YubiKey and the
+  ## browser use it — but that would remove signing from libsodium's job, not
+  ## libsodium.
+  ##
+  ## **Not in-tree here, and that is cJSON's story a second time.** §10.4
+  ## approved it as "Espressif publishes it as a managed component", which on
+  ## ESP-IDF v5.5.x is *also* an in-tree `libsodium`; on the v6.0.2 installed
+  ## here the in-tree copy is gone and the registry one is the only one. Same
+  ## library, same sign-off, new delivery — and one more entry on the version
+  ## ledger of §10.12.
+  ##
+  ## It brings **nothing transitive**: its manifest depends on `idf >=4.2` and
+  ## on no component at all, which is the opposite of what the NATS client did
+  ## above and is worth recording next to it.
+  espressif/libsodium: "^1.0.22"
