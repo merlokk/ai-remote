@@ -1,8 +1,8 @@
 # `scripts/` — the command files
 
 Windows command files that drive the flows end to end. Two are self-checking
-tests (they pass or fail on their own); three need a human, either to press a
-YubiKey or to read what came back.
+tests (they pass or fail on their own); four need a human, to press a YubiKey, to
+press a button on the ESP32, or to read what came back.
 
 This is the operational guide: what each one does, how to start it, and what its
 exit code means. The design rationale and the gotchas behind each script live
@@ -10,13 +10,14 @@ next to the flow it drives — [`approver/CLAUDE.md`](../approver/CLAUDE.md) for
 the approval and registration ones, [`tools/CLAUDE.md`](../tools/CLAUDE.md) for
 the two that wrap `tools/`.
 
-| Script | What it does | Self-checking? | Needs a YubiKey? | Elevated? |
-|--------|--------------|----------------|------------------|-----------|
+| Script | What it does | Self-checking? | Needs hardware? | Elevated? |
+|--------|--------------|----------------|-----------------|-----------|
 | [`e2e-registration.cmd`](#e2e-registrationcmd) | registers a responder against a real handler and checks the allowlist | yes | no | no |
 | [`e2e-approval.cmd`](#e2e-approvalcmd) | a full allow decision through real `responder.py` + `hook.py` | yes | no | no |
 | [`test-request.cmd`](#test-requestcmd) | sends one permission request and prints the answer | no — you read it | no | no |
-| [`yubikey-arkg.cmd`](#yubikey-arkgcmd) | the five-step ARKG hardware run: version → credential → derive → sign → verify | no — reports what the key returned | **yes** (2 touches) | **yes** |
-| [`yubikey-approval.cmd`](#yubikey-approvalcmd) | the whole approval loop with the key on a YubiKey | yes, apart from the touches | **yes** (2 touches) | **yes** |
+| [`yubikey-arkg.cmd`](#yubikey-arkgcmd) | the five-step ARKG hardware run: version → credential → derive → sign → verify | no — reports what the key returned | **YubiKey** (2 touches) | **yes** |
+| [`yubikey-approval.cmd`](#yubikey-approvalcmd) | the whole approval loop with the key on a YubiKey | yes, apart from the touches | **YubiKey** (2 touches) | **yes** |
+| [`esp32-approval.cmd`](#esp32-approvalcmd) | the whole approval loop against the ESP32 on the desk | yes, apart from the presses | **the board** (1 press, 1 deliberate non-press) | no |
 
 ## Before you start
 
@@ -26,12 +27,19 @@ the two that wrap `tools/`.
 cd nats && docker compose up -d && cd ..
 ```
 
-**The `py` launcher must find the project venv.** The two `e2e-*` scripts and
-`test-request.cmd` call `py`, which picks `.venv` only when `VIRTUAL_ENV` is set
-in the shell. If you see `ModuleNotFoundError: No module named 'cryptography'`
-(or "could not mint token"), run `uv sync` and start them from a shell where the
-venv is active. The two YubiKey scripts resolve `.venv\Scripts\python.exe` **by
-path** instead, precisely because elevation drops `VIRTUAL_ENV`.
+**`uv sync` must have been run**, and that is now the whole requirement. Every
+script here resolves `.venv\Scripts\python.exe` **by path** and falls back to the
+`py` launcher with a warning if it is not there.
+
+That used to be true of only three of them, and the other two were a trap worth
+recording rather than quietly deleting: `py` finds the venv only when
+`VIRTUAL_ENV` happens to be set in the calling shell, so the two `e2e-*` scripts
+worked from a venv-activated console and died from an ordinary one with
+`ModuleNotFoundError: No module named 'nats.aio'` — or, worse, with nothing but
+`could not mint token`, which reads as a NATS problem. The YubiKey scripts had
+already been made to resolve the interpreter by path for a *different* reason
+(elevation drops `VIRTUAL_ENV`), so the fix was to spread a decision that had
+been taken twice already rather than to invent one.
 
 **The YubiKey scripts do not elevate themselves.** Start an elevated console
 first (`sudo cmd`, or "Run as administrator") and run the script from there.
@@ -235,6 +243,49 @@ at all. Step 3 prints the allowlist entry the handler stored, so the
 **Exit codes:** `0` PASS, `1` FAIL, `2` `--require-yubikey` said this is not a
 YubiKey.
 
+## `esp32-approval.cmd`
+
+The device tier of [`approver-esp32/CLAUDE.md`](../approver-esp32/CLAUDE.md)
+§10.11 — the acceptance test for the firmware, and the only place in this
+repository where the key bound to that chip meets the allowlist Claude Code
+verifies against.
+
+```bat
+scripts\esp32-approval.cmd
+```
+
+No arguments. It sets `AI_REMOTE_ESP32_DEVICE=1` and runs
+`tests\test_esp32_device.py`, which asks for **two interactions** and says so on
+screen: press ALLOW (the `BOOT` button) on the card that appears, then press
+nothing at all for about twenty seconds. The second one is the §10.10 fail-safe —
+no press must mean no reply, so that the hook times out and Claude Code falls
+back to its own terminal. Everything else is derived from the one signed reply
+without asking again: the verdict flipped, each echoed field changed in turn, the
+`key_id` renamed, the signature removed.
+
+**Three preconditions, and the third is the one that produces a confusing
+failure:**
+
+- NATS is up and the device is connected to it — `nats` on its console;
+- the device is **registered**, so `approver-esp32` is in `handler-config.json`.
+  This script does not register it: a token is one-time, and a test that spent
+  one per run would need a fresh one per run. `register <token>` on the console
+  ([`approver-esp32/commands.md`](../approver-esp32/commands.md));
+- **nothing else is subscribed to `approvals.*`** — no `responder.py serve`, no
+  browser tab. §6's queue group hands each request to exactly one responder, so
+  another one running is a suite that passes against the wrong key. The test
+  asserts `key_id` for precisely that reason, but stopping them first turns a
+  puzzling failure into no failure at all.
+
+Without `AI_REMOTE_ESP32_DEVICE=1` every test in the file skips, so a plain
+`pytest` on a machine with no board stays green.
+
+It resolves `.venv\Scripts\python.exe` **by path** rather than calling `py`, for
+the reason the two YubiKey scripts do: it needs `cryptography` and `nats-py`, and
+the launcher only finds them when a venv happens to be active.
+
+**Exit codes:** `0` PASS, `1` FAIL (or the suite skipped).
+
 ---
 
 ## Editing these files
@@ -249,3 +300,10 @@ YubiKey.
   `for /f "usebackq"` on a backquoted command truncates the inner string at its
   first quote. Where a value has to travel, these scripts write it to a file and
   read it back with a plain `for /f` — that is why `--sig-out` and `--out` exist.
+  **All four token-minting scripts do it that way now.** The two `e2e-*` ones
+  used to capture the token from a backquoted command and got away with it
+  because base64 contains no quote — which is the kind of thing that works until
+  the day the format changes, and the file idiom costs one extra line.
+- **Resolve the interpreter by path**, per the note above: `set "PYEXE=…"`, a
+  warning, and a `py` fallback. Copy the three lines rather than reasoning about
+  whether a particular script needs them.

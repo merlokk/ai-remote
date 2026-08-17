@@ -60,3 +60,11 @@ Project-level files:
 - Run via the **`py`** launcher (Python 3.14.6): `py script.py`, `py -m pytest`, `py -c "..."`.
 - The real interpreter that `py` points to: `C:\Users\User\AppData\Local\Python\pythoncore-3.14-64\python.exe`.
   `C:\...\WindowsApps\python.exe` is the Microsoft Store stub, do NOT use it.
+- **But the dependencies are in `.venv`, not in that interpreter**, and the line
+  above is only true for code that imports nothing outside the standard library.
+  `py` selects `.venv` only when `VIRTUAL_ENV` is set in the calling shell;
+  without it, anything reaching `lib/bus.py` or `lib/crypto.py` — which is
+  `hook.py`, both responders, the handler, `tools/`, and the whole pytest suite —
+  fails with `ModuleNotFoundError`. So: activate the venv, or name the
+  interpreter by path, `.venv\Scripts\python.exe`. Every script in `scripts/`
+  resolves it that way and [`scripts/README.md`](scripts/README.md) says why.
