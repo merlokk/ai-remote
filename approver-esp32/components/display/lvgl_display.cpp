@@ -2,6 +2,8 @@
 
 #include "esp_log.h"
 #include "esp_lvgl_port.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 
 namespace display {
 
@@ -52,6 +54,66 @@ void TouchReadCb(lv_indev_t *indev, lv_indev_data_t *data) {
         // bus timeout would be a press nobody made. §10.10's rule about never
         // inventing input, one layer down from where it is usually quoted.
         data->state = LV_INDEV_STATE_RELEASED;
+    }
+}
+
+// The screenshot of `lvgl_display.h`, and all of its state. One capture at a
+// time, so there is one of these rather than a handle — and it is static, like
+// everything else in this firmware (§10.14.1).
+struct CaptureState {
+    CaptureSink sink = nullptr;
+    void *user = nullptr;
+
+    // Written by the caller's task and read by the LVGL task, so `volatile` —
+    // and that is all the synchronisation these need: the caller arms under the
+    // LVGL lock and then only ever reads.
+    volatile bool armed = false;
+    volatile bool done = false;
+
+    uint32_t pieces = 0;
+
+    SemaphoreHandle_t finished = nullptr;
+    StaticSemaphore_t finished_storage = {};
+};
+
+CaptureState capture;
+
+// How long `Capture` waits for the LVGL lock in order to arm. Nothing to do with
+// how long the frame itself may take — see the note at the call site.
+constexpr uint32_t kCaptureArmMs = 500;
+
+// Fires once per rendered piece, **before** the port writes it to the panel —
+// which is why the pixels here are still LVGL's little-endian RGB565 rather than
+// the big-endian this glass wants (`lvgl_display.h` says so, because a decoder
+// on the other end has to know).
+//
+// The event carries the area; the buffer comes from `lv_display_get_buf_active`,
+// which is the one the piece was rendered into: LVGL swaps its two buffers
+// *after* the flush callback returns, so during this event the active one and the
+// one being flushed are the same. `lv_refr.c` is where that ordering lives, and
+// it is the only reason this hook works at all.
+void FlushStartCb(lv_event_t *event) {
+    if (!capture.armed) {
+        return;
+    }
+    auto *area = static_cast<lv_area_t *>(lv_event_get_param(event));
+    lv_draw_buf_t *buf = lv_display_get_buf_active(lv_display);
+    if (area == nullptr || buf == nullptr || buf->data == nullptr) {
+        return;
+    }
+
+    capture.pieces++;
+    if (capture.sink != nullptr) {
+        capture.sink(*area, buf->header.stride, buf->data, capture.user);
+    }
+
+    // LVGL sets this before calling the flush callback, so it is already true on
+    // the last piece — which makes "the frame is complete" a fact to read rather
+    // than a row count to add up and get wrong.
+    if (lv_display_flush_is_last(lv_display)) {
+        capture.armed = false;
+        capture.done = true;
+        xSemaphoreGive(capture.finished);
     }
 }
 
@@ -131,6 +193,17 @@ esp_err_t LvglInit(Panel &panel, Touch *touch) {
 
         lv_display_add_event_cb(lv_display, RoundAreaCb, LV_EVENT_INVALIDATE_AREA, nullptr);
 
+        // Registered once and disarmed, rather than added and removed around
+        // each capture: what it costs while nobody is looking is one load and
+        // one branch per flush, and what adding it at runtime would cost is a
+        // list being edited from a task other than the one walking it.
+        capture.finished = xSemaphoreCreateBinaryStatic(&capture.finished_storage);
+        if (capture.finished == nullptr) {
+            ESP_LOGE(TAG, "capture semaphore not created");
+        } else {
+            lv_display_add_event_cb(lv_display, FlushStartCb, LV_EVENT_FLUSH_START, nullptr);
+        }
+
         if (touch != nullptr && touch->Ready()) {
             lv_pointer = lv_indev_create();
             if (lv_pointer == nullptr) {
@@ -153,6 +226,52 @@ esp_err_t LvglInit(Panel &panel, Touch *touch) {
 }
 
 bool LvglReady() { return started; }
+
+esp_err_t Capture(CaptureSink sink, void *user, uint32_t timeout_ms) {
+    if (!started || lv_display == nullptr || capture.finished == nullptr) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (sink == nullptr) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (capture.armed) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    {
+        // **A short wait for the lock and a long one for the frame**, which is
+        // not the same number: arming takes microseconds, and the sink is what
+        // takes seconds. Passing `timeout_ms` to both would mean a command that
+        // sits on the LVGL lock for half a minute if something else is holding
+        // it.
+        Lock lock(kCaptureArmMs);
+        if (!lock) {
+            return ESP_ERR_TIMEOUT;
+        }
+        capture.sink = sink;
+        capture.user = user;
+        capture.pieces = 0;
+        capture.done = false;
+        // Drain a give left by a capture that timed out: the piece that arrived
+        // late still signalled, and inheriting that would make the next capture
+        // return before it had anything.
+        xSemaphoreTake(capture.finished, 0);
+        capture.armed = true;
+
+        // The whole screen, because a partial screenshot of a screen that only
+        // repaints its digits would be a picture of the digits.
+        lv_obj_invalidate(lv_screen_active());
+    }
+
+    // **Not under the lock**, and that is the one thing in here that has to be
+    // right: the work happens in the LVGL task, and waiting for it while holding
+    // its lock is a deadlock rather than a slow command.
+    if (xSemaphoreTake(capture.finished, pdMS_TO_TICKS(timeout_ms)) != pdTRUE) {
+        capture.armed = false;
+        return ESP_ERR_TIMEOUT;
+    }
+    return ESP_OK;
+}
 
 lv_display_t *LvglDisplay() { return lv_display; }
 

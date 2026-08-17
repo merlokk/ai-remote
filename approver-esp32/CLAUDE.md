@@ -64,6 +64,7 @@ is which, and the rows that still need the repository owner's sign-off say so.
 | The ESP-IDF dependency set (§10.4) — LVGL + `esp_lvgl_port`, the CO5300/CST9220 drivers, libsodium for Ed25519, `debsahu/espidf-nats` for the bus | **signed off** (root §1). The display half is **resolved and building**: LVGL 9.4.0, `esp_lvgl_port` 2.9.0, `esp_lcd_sh8601` 2.0.1, `waveshare/esp_lcd_touch_cst9217` 1.0.4 — two of which are not the names §10.4 guessed, see below. The **NATS client is resolved and running**: `debsahu/espidf-nats` 1.4.0, which drags `espressif/esp_websocket_client` 1.8.0 in behind it — a transitive component root §1 asks about, and the one thing on this list nobody signed off in advance. libsodium is still unresolved |
 | The bus link — `components/nats` (§10.3, §10.5) | **connected on hardware**: the §10.5 wrapper as a class, the connect policy next to it, and a task that waits for a client link and keeps a socket open. Against the server at `192.168.11.70:4222` it connected, subscribed to `approvals.*` in the queue group `approvers`, took a request-shaped message with its reply-to subject, and published into that subject with the server confirming. `nats` on the console. **Nothing of §7 is on top of it** — no key, no signing, no card |
 | The LVGL host preview (§10.12.1) | installed and rendering. It was written down here as the only part of this folder that ran; it is now the part that runs with no board, alongside the host tests |
+| Screenshots of the real panel (§10.12.2) | **working**: `screenshot` on the console streams the frame out as base64 — the panel cannot be read back and a frame does not fit in RAM, so it is taken a rendered strip at a time and never assembled — and `tools/screenshot.py` writes the PNG with nothing outside the standard library. Verified by decoding the digits back out of the pixels and matching `clock` |
 | Bus reachable from the device at all (§10.3) | **decided**: shared on the home LAN, no TLS, no auth — the router is the trust boundary |
 | Firmware: registration, signing | not started — the bus underneath them is what exists |
 | The five screens — clock, limits, request, settings, Wi-Fi (§10.8) | **one of five running**: the clock face (§10.8.2), on the board. The other four are specified and not started, and until the navigator has somewhere to send a swipe it is not wired to anything |
@@ -2168,6 +2169,66 @@ Two rules about believing what it shows:
   be too heavy for 512 KB. And the preview only stays honest while the
   simulator's LVGL and the firmware's are the same minor version (it ships 9.5)
   — when §10.4's LVGL gets pinned, pin it against this one.
+
+#### 10.12.2 A screenshot of the real panel — the other half of that
+
+The preview above renders a screen with no board. This is the opposite and it
+closes the gap the preview cannot: **what the glass is actually showing**,
+returned as a PNG. Between them, a layout can be argued about before it exists
+and checked after it does.
+
+The reason it is not simply `lv_snapshot_take` is §10.1 twice over: QSPI to the
+CO5300 is **write-only**, so the panel cannot be read back, and a 480×480 frame
+at 16 bpp is 460,800 bytes against 512 KB of SRAM shared with lwIP, Wi-Fi and
+LVGL's own pool, with no PSRAM and no way to add it. There is nowhere to put a
+frame, so the frame is never assembled.
+
+**So it is streamed through the one place the pixels already pass in pieces.**
+LVGL renders a partial buffer at a time; `display::Capture` hooks
+`LV_EVENT_FLUSH_START`, which fires with the area about to be written and — via
+`lv_display_get_buf_active` — the buffer it was rendered into. Each piece is
+base64-encoded straight to the console and forgotten. The memory this costs is a
+720-byte staging buffer and the line it encodes into.
+
+Four things that are decisions rather than plumbing:
+
+- **The hook works because of an ordering in `lv_refr.c`**, and that is worth
+  writing down rather than rediscovering: LVGL swaps its two buffers *after* the
+  flush callback returns, so during the event the active buffer and the one being
+  flushed are the same one. And `flushing_last` is set *before* the callback, so
+  `lv_display_flush_is_last` is what says the frame is complete — a fact to read
+  rather than a row count to add up and get wrong.
+- **The pixels are LVGL-native little-endian**, not the big-endian this glass
+  wants: `esp_lvgl_port` swaps in place inside its own flush callback, which is
+  after the event. Nothing to work around, and it is the order a host decoder
+  wants anyway — but a byte order that depends on *where* in the path you look is
+  exactly the thing to state once.
+- **It stalls the display for as long as the transfer takes**, a few seconds,
+  from inside the LVGL task. That is what §10.8.1 forbids and it is deliberate:
+  somebody typed the command, and the alternative is a screenshot that does not
+  exist. It shows up honestly in `clock`, whose count of frames given up for the
+  display goes up by a handful each time.
+- **Pieces carry their own rectangle**, so the decoder places them rather than
+  concatenating. A full-screen invalidate does produce full-width bands in
+  order, so concatenation would work today — and would break silently the first
+  time it did not.
+
+The host half is **`tools/screenshot.py`**, and it writes the PNG with `zlib`
+and `struct` rather than an image library: root §1 keeps a short list and this
+was not worth a conversation. `--from` decodes a capture taken any other way,
+which is also how the decoder is tested with no board — a synthetic capture with
+a known picture in it makes a shear, a byte-order slip and an upside-down frame
+all visible.
+
+**And the way to know the picture is the screen** rather than a plausible image:
+`clock` next to it. It prints the digits, the drift and every indicator, so the
+two are independent answers — and since the drift is what places the geometry, a
+capture whose *pixels decode* to the time `clock` reported is a capture in the
+right place as well. Done on this board: `15:50` off the console and `15:50` read
+back out of the segment boxes of the PNG, at a drift of `+10,-8`.
+
+[`working-with-code.md`](working-with-code.md) has the one command;
+[`commands.md`](commands.md) has the wire format.
 
 ### 10.13 Not in scope, but decided
 

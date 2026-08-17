@@ -187,7 +187,40 @@ travelling wave rather than a flat green.
 The three icon lines say which of each indicator's states is on screen, in
 words. `updates` next to the count of frames given up waiting for the display is
 the load figure: a number that climbs there means something else is holding
-LVGL.
+LVGL — and `screenshot` below is the one thing that reliably makes it climb.
+
+### `screenshot`
+The frame itself, as base64, for `tools/screenshot.py` to turn into a PNG.
+Nothing here is meant to be read by a person.
+
+**It holds up the display while it runs** — a few seconds, because 460 800 bytes
+of RGB565 is 614 400 characters. That is deliberate and it is why `clock` shows
+a handful of frames given up afterwards: the screen task could not have the
+display while the transfer had it.
+
+Why it streams instead of taking a picture and handing it over: the panel cannot
+be read back over QSPI, and a whole frame does not fit in this chip's RAM
+alongside the network stack. So the pixels are sent a rendered strip at a time
+and forgotten, and the host reassembles them.
+
+    screenshot
+    -----BEGIN SCREENSHOT 480 480 rgb565le-----
+    @ 0 0 479 39
+    <base64>
+    …
+    -----END SCREENSHOT 12 460800-----
+
+Each `@` line is one strip's rectangle, so a strip lands where it belongs rather
+than wherever concatenation would put it. The closing marker carries the strip
+count and the byte count, and the decoder refuses a capture that does not match
+them — a truncated transfer fails loudly instead of producing half a picture.
+
+**The pixel order is the little-endian RGB565 LVGL renders**, not the big-endian
+this panel is fed: the swap happens after the pixels are handed over. Nothing to
+work around, and worth knowing before decoding it by hand.
+
+Taking one is a single command on the host — [`working-with-code.md`](working-with-code.md)
+has it.
 
 ### `audio`
 The ES8311 and the I²S channel in front of it: whether the codec answered at

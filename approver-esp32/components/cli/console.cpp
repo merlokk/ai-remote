@@ -24,6 +24,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "linenoise/linenoise.h"
+#include "mbedtls/base64.h"
 #include "lvgl_display.h"
 #include "nats_link.h"
 #include "qmi8658.h"
@@ -2304,6 +2305,141 @@ int CmdClock(int argc, char **) {
     return 0;
 }
 
+// --- `screenshot` (CLAUDE.md §10.8) --------------------------------------
+//
+// The one command here whose output is not for a person to read. `display`
+// answers "is the panel up", `clock` answers "what does the screen think it is
+// showing", and neither can answer "show me". This can: it streams the frame out
+// as base64 and `tools/screenshot.py` turns it into a PNG.
+//
+// **Why it is streamed and not stored** is `lvgl_display.h`'s argument and worth
+// not rediscovering: the panel is write-only over QSPI and a 480×480 frame is
+// 460,800 bytes on a part with 512 KB of SRAM and no PSRAM (§10.1). So the pixels
+// are taken a rendered piece at a time and encoded straight to the console,
+// costing the two buffers below and nothing else.
+//
+// It **holds up the display for as long as the transfer takes** — a few seconds,
+// because 460,800 bytes of RGB565 is 614,400 characters of base64. That is
+// exactly what §10.8.1 says not to do in the LVGL task, and it is deliberate
+// here: somebody typed it, and the alternative is a screenshot that does not
+// exist.
+
+// 720 bytes in, 960 characters out. A multiple of three, so a line is a whole
+// number of base64 groups and the decoder never has to stitch one together
+// across two lines.
+// Long enough for 614,400 characters to leave over USB Serial/JTAG. Generous on
+// purpose: a capture that times out half way through prints half a picture, and
+// the failure is then in the decoder rather than here.
+constexpr uint32_t kShotTimeoutMs = 60000;
+
+constexpr size_t kShotGroupBytes = 720;
+constexpr size_t kShotLineChars = (kShotGroupBytes / 3) * 4;
+
+// Static rather than on the REPL task's stack (§10.14.1), and one of them
+// because `display::Capture` refuses a second caller anyway.
+struct ShotState {
+    uint8_t pending[kShotGroupBytes];
+    char line[kShotLineChars + 1];
+    size_t pending_len;
+    size_t bytes;
+    uint32_t pieces;
+    bool failed;
+};
+
+ShotState shot;
+
+void ShotFlushLine(bool force) {
+    if (shot.pending_len == 0) {
+        return;
+    }
+    if (!force && shot.pending_len < kShotGroupBytes) {
+        return;
+    }
+    size_t written = 0;
+    const int err = mbedtls_base64_encode(reinterpret_cast<unsigned char *>(shot.line),
+                                          sizeof(shot.line), &written, shot.pending,
+                                          shot.pending_len);
+    if (err != 0) {
+        shot.failed = true;
+        shot.pending_len = 0;
+        return;
+    }
+    shot.line[written] = '\0';
+    printf("%s\n", shot.line);
+    shot.pending_len = 0;
+}
+
+void ShotFeed(const uint8_t *bytes, size_t count) {
+    while (count > 0) {
+        const size_t room = kShotGroupBytes - shot.pending_len;
+        const size_t take = count < room ? count : room;
+        memcpy(shot.pending + shot.pending_len, bytes, take);
+        shot.pending_len += take;
+        bytes += take;
+        count -= take;
+        shot.bytes += take;
+        ShotFlushLine(false);
+    }
+}
+
+// One rendered piece. The header goes out as text and the rows as base64, and the
+// pending group is flushed at the boundary so that **no line straddles two
+// pieces** — which is what lets the decoder trust a line's length.
+void ShotSink(const lv_area_t &area, uint32_t stride, const uint8_t *rows, void *) {
+    const int32_t width = area.x2 - area.x1 + 1;
+    const int32_t height = area.y2 - area.y1 + 1;
+    if (width <= 0 || height <= 0) {
+        return;
+    }
+
+    shot.pieces++;
+    printf("@ %" PRId32 " %" PRId32 " %" PRId32 " %" PRId32 "\n", area.x1, area.y1, area.x2,
+           area.y2);
+
+    // A row is the area's width, not the buffer's stride: the two can differ, and
+    // sending the padding would be sending whatever was in it last frame.
+    const size_t row_bytes = static_cast<size_t>(width) * 2;
+    for (int32_t y = 0; y < height; ++y) {
+        ShotFeed(rows + static_cast<size_t>(y) * stride, row_bytes);
+    }
+    ShotFlushLine(true);
+}
+
+int CmdScreenshot(int argc, char **) {
+    if (argc != 1) {
+        printf("usage: screenshot     the frame as base64 — tools/screenshot.py makes the png\n");
+        return 1;
+    }
+    if (!::display::LvglReady()) {
+        printf("no display — nothing to photograph\n");
+        return 1;
+    }
+
+    memset(&shot, 0, sizeof(shot));
+
+    // The width and the pixel format are in the opening marker rather than
+    // assumed by the decoder: a screenshot that has to be told its own geometry
+    // is a screenshot that silently decodes wrong the day a panel changes.
+    printf("-----BEGIN SCREENSHOT %d %d rgb565le-----\n", board::kScreenWidth,
+           board::kScreenHeight);
+
+    const esp_err_t err = ::display::Capture(&ShotSink, nullptr, kShotTimeoutMs);
+    ShotFlushLine(true);
+
+    printf("-----END SCREENSHOT %" PRIu32 " %u-----\n", shot.pieces,
+           static_cast<unsigned>(shot.bytes));
+
+    if (err != ESP_OK) {
+        printf("capture incomplete: %s\n", esp_err_to_name(err));
+        return 1;
+    }
+    if (shot.failed) {
+        printf("capture incomplete: base64 encoder refused a group\n");
+        return 1;
+    }
+    return 0;
+}
+
 int CmdDevStatus(int argc, char **) {
     if (argc != 1) {
         printf("usage: devstatus     the board, the chips, the screen, time and the network\n");
@@ -2357,6 +2493,15 @@ const esp_console_cmd_t kCommands[] = {
         .help = "firmware, IDF and chip versions, running slot, uptime, heap, storage",
         .hint = nullptr,
         .func = &CmdStatus,
+        .argtable = nullptr,
+        .func_w_context = nullptr,
+        .context = nullptr,
+    },
+    {
+        .command = "screenshot",
+        .help = "the frame as base64 for tools/screenshot.py — holds the display while it runs",
+        .hint = nullptr,
+        .func = &CmdScreenshot,
         .argtable = nullptr,
         .func_w_context = nullptr,
         .context = nullptr,
