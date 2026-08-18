@@ -56,6 +56,8 @@ const char *RowName(ui::SettingsEntry entry) {
             return "touch test";
         case ui::SettingsEntry::kReboot:
             return "reboot";
+        case ui::SettingsEntry::kPowerOff:
+            return "power off";
         case ui::SettingsEntry::kCount:
             break;
     }
@@ -161,27 +163,47 @@ void SettingsScreen::Apply(const ui::SettingsMenu &menu, uint32_t now_ms) {
     }
 
     const uint8_t selected = menu.Selected();
-    const bool armed = menu.RebootArmed(now_ms);
-    if (selected == shown_selected_ && armed == shown_armed_) {
+    const bool armed = menu.Armed(now_ms);
+    const bool can_power_off = menu.CanPowerOff();
+    if (selected == shown_selected_ && armed == shown_armed_ &&
+        can_power_off == shown_can_power_off_) {
         return;
     }
     shown_selected_ = selected;
     shown_armed_ = armed;
+    shown_can_power_off_ = can_power_off;
 
     for (uint8_t i = 0; i < ui::SettingsMenu::kEntryCount; ++i) {
         MenuRow &row = rows_[i];
+        const auto entry = static_cast<ui::SettingsEntry>(i);
         lv_obj_set_style_bg_color(row.plate, i == selected ? PlateSelected() : Plate(),
                                   LV_PART_MAIN);
 
-        if (static_cast<ui::SettingsEntry>(i) != ui::SettingsEntry::kReboot) {
+        if (!ui::SettingsMenu::Destructive(entry)) {
             continue;
         }
-        // The armed reboot is the only row whose words change, and it changes
-        // colour with them: an amber row that asks a question is not the same
-        // object as a grey row that opens a screen.
-        lv_label_set_text_static(row.note, armed ? "press again" : "");
-        lv_obj_set_style_text_color(row.label, armed ? Attention() : Bright(), LV_PART_MAIN);
-        lv_obj_set_style_text_color(row.note, armed ? Attention() : Dim(), LV_PART_MAIN);
+        // **The two rows whose words change**, and they change colour with them:
+        // an amber row that asks a question is not the same object as a grey row
+        // that opens a screen.
+        //
+        // And the power-off says why it cannot happen *before* anybody presses
+        // it. §10.1: VBUS is a power-on source, so a shutdown with the cable in
+        // is one the hardware undoes — the honest thing is to put the cable on
+        // the row rather than to answer a press with a refusal.
+        const bool asking = armed && i == selected;
+        const bool blocked = entry == ui::SettingsEntry::kPowerOff && !can_power_off;
+
+        const char *note = "";
+        if (asking) {
+            note = "press again";
+        } else if (blocked) {
+            note = "usb in";
+        }
+        lv_label_set_text_static(row.note, note);
+        lv_obj_set_style_text_color(row.label,
+                                    asking ? Attention() : (blocked ? Faint() : Bright()),
+                                    LV_PART_MAIN);
+        lv_obj_set_style_text_color(row.note, asking ? Attention() : Dim(), LV_PART_MAIN);
     }
 }
 

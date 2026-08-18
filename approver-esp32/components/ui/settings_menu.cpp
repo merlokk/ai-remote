@@ -7,6 +7,7 @@ bool SettingsMenu::Built(SettingsEntry entry) {
         case SettingsEntry::kStatus:
         case SettingsEntry::kTouch:
         case SettingsEntry::kReboot:
+        case SettingsEntry::kPowerOff:
             return true;
         case SettingsEntry::kWifi:
         case SettingsEntry::kCount:
@@ -15,10 +16,15 @@ bool SettingsMenu::Built(SettingsEntry entry) {
     return false;
 }
 
+bool SettingsMenu::Destructive(SettingsEntry entry) {
+    return entry == SettingsEntry::kReboot || entry == SettingsEntry::kPowerOff;
+}
+
 void SettingsMenu::Next() {
-    // Moving off the reboot row disarms it. Without this, arming it, wandering
+    // Moving off an armed row disarms it. Without this, arming one, wandering
     // down the list and coming back would leave one press between a stray finger
-    // and a restart — the arming would be a delay rather than a confirmation.
+    // and a device that switches off — the arming would be a delay rather than a
+    // confirmation.
     Disarm();
     selected_ = static_cast<uint8_t>((selected_ + 1) % kEntryCount);
 }
@@ -49,8 +55,25 @@ SettingsAction SettingsMenu::Activate(uint32_t now_ms) {
             return Built(SettingsEntry::kTouch) ? SettingsAction::kOpenTouch
                                                 : SettingsAction::kNotBuilt;
 
+        case SettingsEntry::kPowerOff:
+            // **Refused before it is armed, not after.** Arming a row that
+            // cannot fire would ask the operator to confirm something the
+            // hardware is going to refuse anyway, and the second press would be
+            // the one that finally explained why.
+            if (!can_power_off_) {
+                Disarm();
+                return SettingsAction::kPowerOffBlocked;
+            }
+            if (Armed(now_ms)) {
+                Disarm();
+                return SettingsAction::kPowerOff;
+            }
+            armed_ = true;
+            armed_at_ms_ = now_ms;
+            return SettingsAction::kArmed;
+
         case SettingsEntry::kReboot:
-            if (RebootArmed(now_ms)) {
+            if (Armed(now_ms)) {
                 Disarm();
                 return SettingsAction::kReboot;
             }
@@ -64,11 +87,11 @@ SettingsAction SettingsMenu::Activate(uint32_t now_ms) {
     return SettingsAction::kNone;
 }
 
-bool SettingsMenu::RebootArmed(uint32_t now_ms) const {
+bool SettingsMenu::Armed(uint32_t now_ms) const {
     // Subtraction rather than a comparison of two absolute counters, so the
     // ~49-day wrap is arithmetic and not a case — every other window in this
     // firmware is written the same way, and this is the one where getting it
-    // wrong reboots a device somebody was reading.
+    // wrong restarts or switches off a device somebody was reading.
     return armed_ && (now_ms - armed_at_ms_) < kArmedMs;
 }
 

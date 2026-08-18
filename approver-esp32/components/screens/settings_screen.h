@@ -39,13 +39,19 @@ namespace screens {
 // generous gaps: this is a list touched with a finger on a 480×480 panel, and
 // the thing a finger is worst at is small targets next to each other.
 inline constexpr int32_t kSettingsPad = 24;
-inline constexpr int32_t kSettingsTitleTop = 22;
+inline constexpr int32_t kSettingsTitleTop = 18;
 
-inline constexpr int32_t kSettingsFirstRowTop = 100;
-inline constexpr int32_t kSettingsRowStride = 88;
-inline constexpr int32_t kSettingsRowHeight = 74;
+// **These numbers shrank when the fifth row arrived, and the `static_assert`
+// below is what noticed** — four rows at the old stride left 526 pixels of list
+// on a 480-pixel panel, and the build refused it rather than the operator
+// discovering that `power off` was drawn past the bottom of the glass. That is
+// the whole reason the assertion exists: a layout constant is the one kind of
+// mistake that looks fine in every test and only shows up on the panel.
+inline constexpr int32_t kSettingsFirstRowTop = 76;
+inline constexpr int32_t kSettingsRowStride = 80;
+inline constexpr int32_t kSettingsRowHeight = 68;
 inline constexpr int32_t kSettingsRowTextLeft = 22;
-inline constexpr int32_t kSettingsRowTextTop = 20;
+inline constexpr int32_t kSettingsRowTextTop = 17;
 
 // The width of the right-hand note on a row — "soon" on a row with nothing
 // behind it, "press again" on an armed reboot. Right-aligned rather than
@@ -108,6 +114,7 @@ class SettingsScreen {
 
     uint8_t shown_selected_ = kNoRow;
     bool shown_armed_ = false;
+    bool shown_can_power_off_ = false;
     bool visible_ = false;
 };
 

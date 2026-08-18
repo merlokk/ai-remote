@@ -25,6 +25,10 @@ constexpr uint8_t kWifi = static_cast<uint8_t>(SettingsEntry::kWifi);
 constexpr uint8_t kStatus = static_cast<uint8_t>(SettingsEntry::kStatus);
 constexpr uint8_t kTouch = static_cast<uint8_t>(SettingsEntry::kTouch);
 constexpr uint8_t kReboot = static_cast<uint8_t>(SettingsEntry::kReboot);
+constexpr uint8_t kPowerOff = static_cast<uint8_t>(SettingsEntry::kPowerOff);
+
+// A menu with the cable out, which is the only state a power-off can happen in.
+void Unplugged(SettingsMenu *menu) { menu->SetCanPowerOff(true); }
 
 }  // namespace
 
@@ -37,12 +41,92 @@ void test_the_menu_opens_at_the_top(void) {
                           static_cast<int>(menu.SelectedEntry()));
 }
 
-void test_reboot_is_the_last_row(void) {
-    // The owner's order, and the one part of it that is a safety property rather
-    // than a preference: the row that restarts the device is as far as possible
-    // from the row a finger lands on when the screen opens.
-    TEST_ASSERT_EQUAL_UINT8(SettingsMenu::kEntryCount - 1, kReboot);
-    TEST_ASSERT_NOT_EQUAL(kReboot, 0);
+void test_the_two_destructive_rows_are_last_and_in_order(void) {
+    // The owner's order, and the part of it that is a safety property rather than
+    // a preference: the rows that take the device away are as far as possible
+    // from the one a finger lands on when the screen opens — and the one that is
+    // hardest to undo is last of all. A reboot comes back in ten seconds; a
+    // power-off comes back when somebody presses the button on the case.
+    TEST_ASSERT_EQUAL_UINT8(SettingsMenu::kEntryCount - 1, kPowerOff);
+    TEST_ASSERT_EQUAL_UINT8(SettingsMenu::kEntryCount - 2, kReboot);
+    TEST_ASSERT_TRUE(SettingsMenu::Destructive(SettingsEntry::kReboot));
+    TEST_ASSERT_TRUE(SettingsMenu::Destructive(SettingsEntry::kPowerOff));
+    TEST_ASSERT_FALSE(SettingsMenu::Destructive(SettingsEntry::kStatus));
+    TEST_ASSERT_FALSE(SettingsMenu::Destructive(SettingsEntry::kWifi));
+    TEST_ASSERT_FALSE(SettingsMenu::Destructive(SettingsEntry::kTouch));
+}
+
+void test_power_off_is_blocked_while_the_cable_is_in(void) {
+    // §10.1: VBUS is a power-on source for this chip, so a shutdown with the
+    // cable in is one the hardware immediately undoes — and what the operator
+    // would see is not a device switching off but a device rebooting. The
+    // console's `poweroff` already refuses for this reason; the row does too.
+    SettingsMenu menu;  // the default is "cannot", which is a device on a cable
+    menu.Select(kPowerOff);
+    TEST_ASSERT_FALSE(menu.CanPowerOff());
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(SettingsAction::kPowerOffBlocked),
+                          static_cast<int>(menu.Activate(1000)));
+}
+
+void test_a_blocked_power_off_does_not_arm(void) {
+    // **Refused before it is armed, not after.** Otherwise the first press would
+    // ask the operator to confirm something the hardware is going to refuse, and
+    // the second press would be the one that finally explained why — and worse,
+    // unplugging the cable at that moment would leave a device one stray press
+    // from switching off.
+    SettingsMenu menu;
+    menu.Select(kPowerOff);
+    menu.Activate(1000);
+    TEST_ASSERT_FALSE(menu.Armed(1000));
+
+    Unplugged(&menu);
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(SettingsAction::kArmed),
+                          static_cast<int>(menu.Activate(1100)));
+}
+
+void test_power_off_takes_two_presses_like_reboot(void) {
+    SettingsMenu menu;
+    Unplugged(&menu);
+    menu.Select(kPowerOff);
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(SettingsAction::kArmed),
+                          static_cast<int>(menu.Activate(1000)));
+    TEST_ASSERT_TRUE(menu.Armed(1000));
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(SettingsAction::kPowerOff),
+                          static_cast<int>(menu.Activate(1000 + SettingsMenu::kArmedMs - 1)));
+}
+
+void test_an_armed_power_off_expires_like_an_armed_reboot(void) {
+    SettingsMenu menu;
+    Unplugged(&menu);
+    menu.Select(kPowerOff);
+    menu.Activate(1000);
+    TEST_ASSERT_FALSE(menu.Armed(1000 + SettingsMenu::kArmedMs));
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(SettingsAction::kArmed),
+                          static_cast<int>(menu.Activate(1000 + SettingsMenu::kArmedMs)));
+}
+
+void test_arming_one_destructive_row_does_not_arm_the_other(void) {
+    // They share one flag, so this is the test that says the flag belongs to the
+    // *selected* row: arming the reboot and then stepping onto power-off must not
+    // leave the second one one press from firing.
+    SettingsMenu menu;
+    Unplugged(&menu);
+    menu.Select(kReboot);
+    menu.Activate(1000);
+    menu.Select(kPowerOff);
+    TEST_ASSERT_FALSE(menu.Armed(1100));
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(SettingsAction::kArmed),
+                          static_cast<int>(menu.Activate(1100)));
+
+    // And the other way round.
+    SettingsMenu back;
+    Unplugged(&back);
+    back.Select(kPowerOff);
+    back.Activate(1000);
+    back.Select(kReboot);
+    TEST_ASSERT_FALSE(back.Armed(1100));
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(SettingsAction::kArmed),
+                          static_cast<int>(back.Activate(1100)));
 }
 
 void test_next_walks_every_row_and_wraps(void) {
@@ -108,7 +192,7 @@ void test_one_press_on_reboot_does_not_reboot(void) {
     menu.Select(kReboot);
     TEST_ASSERT_EQUAL_INT(static_cast<int>(SettingsAction::kArmed),
                           static_cast<int>(menu.Activate(1000)));
-    TEST_ASSERT_TRUE(menu.RebootArmed(1000));
+    TEST_ASSERT_TRUE(menu.Armed(1000));
 }
 
 void test_a_second_press_inside_the_window_reboots(void) {
@@ -126,7 +210,7 @@ void test_the_arming_expires_and_the_next_press_arms_again(void) {
     menu.Select(kReboot);
     menu.Activate(1000);
 
-    TEST_ASSERT_FALSE(menu.RebootArmed(1000 + SettingsMenu::kArmedMs));
+    TEST_ASSERT_FALSE(menu.Armed(1000 + SettingsMenu::kArmedMs));
     TEST_ASSERT_EQUAL_INT(static_cast<int>(SettingsAction::kArmed),
                           static_cast<int>(menu.Activate(1000 + SettingsMenu::kArmedMs)));
 }
@@ -139,7 +223,7 @@ void test_moving_off_the_reboot_row_disarms_it(void) {
     armed_by_next.Activate(1000);
     armed_by_next.Next();  // wraps to the top
     armed_by_next.Select(kReboot);
-    TEST_ASSERT_FALSE(armed_by_next.RebootArmed(1100));
+    TEST_ASSERT_FALSE(armed_by_next.Armed(1100));
     TEST_ASSERT_EQUAL_INT(static_cast<int>(SettingsAction::kArmed),
                           static_cast<int>(armed_by_next.Activate(1100)));
 
@@ -148,7 +232,7 @@ void test_moving_off_the_reboot_row_disarms_it(void) {
     armed_by_tap.Activate(1000);
     armed_by_tap.Select(kStatus);
     armed_by_tap.Select(kReboot);
-    TEST_ASSERT_FALSE(armed_by_tap.RebootArmed(1100));
+    TEST_ASSERT_FALSE(armed_by_tap.Armed(1100));
 }
 
 void test_walking_the_list_round_with_the_button_disarms_the_reboot(void) {
@@ -166,7 +250,7 @@ void test_walking_the_list_round_with_the_button_disarms_the_reboot(void) {
         menu.Next();
     }
     TEST_ASSERT_EQUAL_UINT8(kReboot, menu.Selected());
-    TEST_ASSERT_FALSE(menu.RebootArmed(1100));
+    TEST_ASSERT_FALSE(menu.Armed(1100));
     TEST_ASSERT_EQUAL_INT(static_cast<int>(SettingsAction::kArmed),
                           static_cast<int>(menu.Activate(1100)));
 }
@@ -179,7 +263,7 @@ void test_selecting_the_reboot_row_again_does_not_disarm_it(void) {
     menu.Select(kReboot);
     menu.Activate(1000);
     menu.Select(kReboot);
-    TEST_ASSERT_TRUE(menu.RebootArmed(1100));
+    TEST_ASSERT_TRUE(menu.Armed(1100));
     TEST_ASSERT_EQUAL_INT(static_cast<int>(SettingsAction::kReboot),
                           static_cast<int>(menu.Activate(1100)));
 }
@@ -190,7 +274,7 @@ void test_leaving_and_coming_back_disarms_and_goes_to_the_top(void) {
     menu.Activate(1000);
     menu.Opened();
     TEST_ASSERT_EQUAL_UINT8(0, menu.Selected());
-    TEST_ASSERT_FALSE(menu.RebootArmed(1100));
+    TEST_ASSERT_FALSE(menu.Armed(1100));
 }
 
 void test_the_arming_window_survives_the_millisecond_wrap(void) {
@@ -201,9 +285,9 @@ void test_the_arming_window_survives_the_millisecond_wrap(void) {
     menu.Select(kReboot);
     menu.Activate(0xFFFFFF00u);
 
-    TEST_ASSERT_TRUE(menu.RebootArmed(0xFFFFFF10u));  // 16 ms later, not yet wrapped
-    TEST_ASSERT_TRUE(menu.RebootArmed(400));          // wrapped, 656 ms after
-    TEST_ASSERT_FALSE(menu.RebootArmed(0xFFFFFF00u + SettingsMenu::kArmedMs));
+    TEST_ASSERT_TRUE(menu.Armed(0xFFFFFF10u));  // 16 ms later, not yet wrapped
+    TEST_ASSERT_TRUE(menu.Armed(400));          // wrapped, 656 ms after
+    TEST_ASSERT_FALSE(menu.Armed(0xFFFFFF00u + SettingsMenu::kArmedMs));
 }
 
 // --- The pager -----------------------------------------------------------
@@ -232,7 +316,7 @@ void test_reopening_the_status_goes_back_to_the_first_page(void) {
 
 void RegisterSettingsMenuTests(void) {
     RUN_TEST(test_the_menu_opens_at_the_top);
-    RUN_TEST(test_reboot_is_the_last_row);
+    RUN_TEST(test_the_two_destructive_rows_are_last_and_in_order);
     RUN_TEST(test_next_walks_every_row_and_wraps);
     RUN_TEST(test_next_does_not_skip_the_rows_with_nothing_behind_them);
     RUN_TEST(test_a_tap_between_rows_selects_nothing);
@@ -249,6 +333,12 @@ void RegisterSettingsMenuTests(void) {
     RUN_TEST(test_selecting_the_reboot_row_again_does_not_disarm_it);
     RUN_TEST(test_leaving_and_coming_back_disarms_and_goes_to_the_top);
     RUN_TEST(test_the_arming_window_survives_the_millisecond_wrap);
+
+    RUN_TEST(test_power_off_is_blocked_while_the_cable_is_in);
+    RUN_TEST(test_a_blocked_power_off_does_not_arm);
+    RUN_TEST(test_power_off_takes_two_presses_like_reboot);
+    RUN_TEST(test_an_armed_power_off_expires_like_an_armed_reboot);
+    RUN_TEST(test_arming_one_destructive_row_does_not_arm_the_other);
 
     RUN_TEST(test_the_status_opens_on_the_first_page);
     RUN_TEST(test_the_pages_wrap);

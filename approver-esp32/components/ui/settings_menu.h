@@ -40,8 +40,13 @@ namespace ui {
 enum class SettingsEntry : uint8_t {
     kWifi = 0,  // → the Wi-Fi screen (§10.8.6), not built
     kStatus,    // → the status pages (§10.8.5)
-    kTouch,     // → touch calibration and test, not built
-    kReboot,    // the only row that does something rather than opening something
+    kTouch,     // → the touch test and its calibration (§10.8.5)
+    // The two that *do* something rather than opening something, last and in
+    // this order on purpose: the further down the list, the harder it is to
+    // undo. A reboot comes back in ten seconds; a power-off comes back when
+    // somebody presses the button on the case.
+    kReboot,
+    kPowerOff,
     kCount,
 };
 
@@ -53,8 +58,14 @@ enum class SettingsAction : uint8_t {
     kOpenStatus,
     kOpenTouch,
     kNotBuilt,  // a row that is on the list and has no screen behind it yet
-    kArmed,     // the first press on reboot: it now asks
+    kArmed,     // the first press on a destructive row: it now asks
     kReboot,    // the second press, inside the window
+    kPowerOff,
+    // **Pressed while the cable is in**, which this chip turns straight back
+    // into a power-on (§10.1). Its own answer rather than a silent refusal: the
+    // row already says `usb in`, and a press that did nothing and said nothing
+    // would read as a device that had stopped listening.
+    kPowerOffBlocked,
 };
 
 class SettingsMenu {
@@ -75,6 +86,18 @@ class SettingsMenu {
     // needs it to draw the row faint before anybody presses anything.
     static bool Built(SettingsEntry entry);
 
+    // The two rows that take the device away from whoever is looking at it, and
+    // therefore the two that ask twice.
+    static bool Destructive(SettingsEntry entry);
+
+    // **Whether a power-off would actually happen.** False while USB is in, and
+    // the caller is what knows that — this layer has never heard of a PMIC. It is
+    // a *state* rather than an argument to `Activate` because the row draws
+    // itself with it: the operator should be told the cable is in the way before
+    // they press, not after.
+    void SetCanPowerOff(bool can) { can_power_off_ = can; }
+    bool CanPowerOff() const { return can_power_off_; }
+
     uint8_t Selected() const { return selected_; }
     SettingsEntry SelectedEntry() const { return static_cast<SettingsEntry>(selected_); }
 
@@ -91,10 +114,10 @@ class SettingsMenu {
     // Act on the selected row.
     SettingsAction Activate(uint32_t now_ms);
 
-    // Is the reboot row asking for a second press right now. Takes the clock
+    // Is the selected row asking for a second press right now. Takes the clock
     // because the arming expires — asking is a state with a deadline in it, not
-    // a flag.
-    bool RebootArmed(uint32_t now_ms) const;
+    // a flag. Only ever true on a destructive row, because only those arm.
+    bool Armed(uint32_t now_ms) const;
 
     // The screen came up. Clears the arming and puts the selection back at the
     // top: coming back into settings and finding the previous visit's armed
@@ -106,6 +129,7 @@ class SettingsMenu {
 
     uint8_t selected_ = 0;
     bool armed_ = false;
+    bool can_power_off_ = false;
     uint32_t armed_at_ms_ = 0;
 };
 

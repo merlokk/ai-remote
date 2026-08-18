@@ -223,9 +223,15 @@ Which screen is up — and, with a word, a way to move between them that is not 
 finger.
 
     screen     settings
-    selected   wi-fi (row 1 of 4)
+    selected   wi-fi (row 1 of 5)
+    power off  refused while the cable is in - it would come straight back on
     press      KEY, or tap the row - the console cannot press one
     in         swipe up or hold KEY for 2 s; out is PWR or a swipe down
+
+The `power off` line appears only while the cable is in, which is the state the
+row itself shows as `usb in`: VBUS is a power-on source for this chip, so a
+shutdown with the cable connected is one the hardware undoes. `poweroff` on the
+console refuses for the same reason and says the same thing.
 
 **The second half is what earns it a place.** Every other screen can be checked
 from a script: `clock` prints what the face decided, `limits` prints the

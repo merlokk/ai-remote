@@ -2251,6 +2251,8 @@ const char *MenuRowName(uint8_t row) {
             return "touch test";
         case ui::SettingsEntry::kReboot:
             return "reboot";
+        case ui::SettingsEntry::kPowerOff:
+            return "power off";
         case ui::SettingsEntry::kCount:
             break;
     }
@@ -2314,7 +2316,10 @@ int CmdScreen(int argc, char **argv) {
         printf("selected   %s (row %u of %u)%s\n", MenuRowName(now.selected),
                static_cast<unsigned>(now.selected + 1),
                static_cast<unsigned>(ui::SettingsMenu::kEntryCount),
-               now.reboot_armed ? ", reboot is asking for a second press" : "");
+               now.armed ? " - asking for a second press" : "");
+        if (!now.can_power_off) {
+            printf("power off  refused while the cable is in - it would come straight back on\n");
+        }
         printf("press      KEY, or tap the row - the console cannot press one\n");
     } else if (now.screen == ui::ScreenId::kStatus) {
         printf("page       %u of %u - BOOT, or tap the body\n",

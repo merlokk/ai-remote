@@ -302,7 +302,8 @@ struct MenuStatus {
     bool ready = false;
     ui::ScreenId screen = ui::ScreenId::kClock;
     uint8_t selected = 0;
-    bool reboot_armed = false;
+    bool armed = false;       // the selected row is asking for a second press
+    bool can_power_off = false;  // false while the cable is in (§10.1)
     uint8_t status_page = 0;
     uint8_t status_pages = 0;
 };

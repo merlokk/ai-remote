@@ -617,6 +617,27 @@ void RebootNow() {
     esp_restart();
 }
 
+// **A power-off asked for by a finger**, and the driver is what refuses it while
+// the cable is in (§10.1) — the row has already said `usb in` by then, so this
+// path is only reached with the cable out. Not a `vTaskDelay` and a flush like
+// the reboot above: the console is going down with the chip either way, and the
+// PMIC cuts the rails the moment the register is written.
+void PowerOffNow() {
+    if (g_battery == nullptr || !g_battery->Present()) {
+        ESP_LOGW(TAG, "no PMIC, so nothing to switch off");
+        return;
+    }
+    ESP_LOGW(TAG, "power off from the settings screen");
+    fflush(stdout);
+    vTaskDelay(pdMS_TO_TICKS(120));
+    const esp_err_t err = g_battery->PowerOff();
+    if (err != ESP_OK) {
+        // The one that gets here is `ESP_ERR_INVALID_STATE`: the cable went back
+        // in between the row being drawn and the press landing.
+        ESP_LOGW(TAG, "not switched off: %s", esp_err_to_name(err));
+    }
+}
+
 // One row's action, taken on the screen task and never in a callback.
 void Activated(uint32_t now_ms) {
     switch (g_menu.Activate(now_ms)) {
@@ -628,6 +649,14 @@ void Activated(uint32_t now_ms) {
             break;
         case ui::SettingsAction::kReboot:
             RebootNow();
+            break;
+        case ui::SettingsAction::kPowerOff:
+            PowerOffNow();
+            break;
+        case ui::SettingsAction::kPowerOffBlocked:
+            // The row says `usb in` and has said so since before the press, so
+            // this is for whoever is reading the log rather than the screen.
+            ESP_LOGI(TAG, "not switched off: the cable is in, and it would come straight back on");
             break;
         case ui::SettingsAction::kNotBuilt:
             // The row already says `soon` on the glass, so this is for whoever is
@@ -807,6 +836,12 @@ void Task(void *) {
         // read** (§10.8.1), and only while the screen showing them is up: the
         // status page costs a bus transaction and the clock must not pay for it.
         // The page travels with the facts — `status_screen.h` says why.
+        // **Whether a power-off would actually happen**, handed to the menu so
+        // that the row can say `usb in` before anybody presses it rather than
+        // after (§10.1). From the same snapshot the clock's battery icon uses,
+        // so it costs no extra transaction.
+        g_menu.SetCanPowerOff(battery_valid && !battery.vbus_present);
+
         // The touch test, and it is polled outside the LVGL lock for the reason
         // the status page is: it is an I²C read (§10.8.1).
         TouchView touch_view;
@@ -1129,7 +1164,8 @@ MenuStatus Menu() {
     out.ready = true;
     out.screen = g_nav.Screen();
     out.selected = g_menu.Selected();
-    out.reboot_armed = g_menu.RebootArmed(static_cast<uint32_t>(esp_timer_get_time() / 1000));
+    out.armed = g_menu.Armed(static_cast<uint32_t>(esp_timer_get_time() / 1000));
+    out.can_power_off = g_menu.CanPowerOff();
     out.status_page = g_pager.Index();
     out.status_pages = ui::StatusPager::kPageCount;
     xSemaphoreGive(g_lock);
