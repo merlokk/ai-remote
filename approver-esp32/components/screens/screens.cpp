@@ -10,6 +10,7 @@
 
 #include "clock_face.h"
 #include "clock_screen.h"
+#include "idle_policy.h"
 #include "limits_screen.h"
 #include "esp_app_desc.h"
 #include "esp_heap_caps.h"
@@ -104,6 +105,41 @@ ui::Navigator g_nav;
 Hardware g_hardware;
 pmic::Axp2101 *g_battery = nullptr;
 Keys g_keys;
+
+// --- The idle timer (§10.8.1) --------------------------------------------
+//
+// **The rule §10.8.1 states and nothing kept**: brightness drops on an idle
+// timeout, the panel blanks after it, and anything at all wakes it. The two
+// settings that were supposed to carry it were read by nobody at all;
+// `ui/idle_policy.h` is where the decisions moved to and where the argument
+// lives. What is here is the three things that cannot be host-tested — reading
+// the world, and telling the panel.
+ui::IdlePolicy g_idle;
+display::Panel *g_panel = nullptr;
+
+// What the last pass saw, so a finger is one comparison rather than a second
+// poll of the controller under the same lease.
+uint32_t g_touch_activity_seen = 0;
+
+// The accelerometer, for the two facts §10.8.1 needs from it: is the board being
+// moved, and is it standing on its USB edge. Read at its own slow rate — the
+// clock's battery is 2 s and this is 500 ms, because a device picked up should
+// light before it reaches eye level.
+constexpr uint32_t kMotionEveryTicks = 25;
+static_assert(kMotionEveryTicks % kFaceEveryTicks == 0,
+              "the motion read has to land on a pass that is not skipped");
+float g_last_accel[3] = {0.0f, 0.0f, 0.0f};
+bool g_have_accel = false;
+
+// Set when the settings changed under the policy, so that a `config set
+// brightness` is on the glass before the operator has finished reading the line
+// that confirmed it. A state change alone would not do it: the state did not
+// change, the level it means did.
+bool g_display_dirty = true;
+
+// Something happened. Safe from any task — `ui::IdlePolicy::Activity` is one
+// store, and it is deliberately not the thing that recomputes anything.
+void Activity() { g_idle.Activity(static_cast<uint32_t>(esp_timer_get_time() / 1000)); }
 
 // **Where a decided request is handed back, and it is not the stack.** A
 // `ui::Request` is 2.3 KB of §7 fields; two of them as locals in the button poll
@@ -689,7 +725,34 @@ void PollKeys(uint32_t now_ms) {
     const bool card_up = g_card.State() == ui::CardState::kCard;
     const ui::ScreenId screen = g_nav.Screen();
 
-    if (g_keys.buttons->Poll(g_keys.allow) == buttons::Event::kPressed) {
+    // **All three sampled up front, because an edge on any of them is somebody
+    // being here** (§10.8.1's idle timer) — including the ones that go on to do
+    // nothing at all. A press the card's guard throws away is still a person
+    // pressing a button, and a device that stayed dark through it would be a
+    // device you have to press twice.
+    const buttons::Event allow = g_keys.buttons->Poll(g_keys.allow);
+    const buttons::Event deny = g_keys.buttons->Poll(g_keys.deny);
+    const buttons::Event menu_event = g_keys.buttons->Poll(g_keys.menu);
+    if (allow != buttons::Event::kNone || deny != buttons::Event::kNone ||
+        menu_event != buttons::Event::kNone) {
+        g_idle.Activity(now_ms);
+    }
+
+    // **And a press that wakes the panel does not also do what it says** — the
+    // rule `display::SwallowTouch` keeps for a finger, kept here for the three
+    // buttons, because with the display off the operator cannot see what they
+    // are about to act on either. `BOOT` would otherwise step the settings list
+    // invisibly and `KEY` could reach the reboot row two presses into the dark.
+    //
+    // It cannot swallow a verdict: a card on the glass holds the screen awake
+    // for as long as it is up (§10.10), so `ALLOW` and `DENY` are never in this
+    // branch when there is anything to answer. The edges are consumed above, so
+    // nothing acts on them late either.
+    if (g_idle.State() == ui::DisplayPower::kOff) {
+        return;
+    }
+
+    if (allow == buttons::Event::kPressed) {
         if (g_card.Press(ui::Verdict::kAllow, now_ms, &g_answered)) {
             g_nav.RequestAnswered();
             Decided(g_answered, ui::Verdict::kAllow);
@@ -710,7 +773,7 @@ void PollKeys(uint32_t now_ms) {
         }
     }
 
-    if (g_keys.buttons->Poll(g_keys.deny) == buttons::Event::kPressed) {
+    if (deny == buttons::Event::kPressed) {
         if (card_up) {
             // **While a card is up this button is a verdict and nothing else.**
             // §10.8.1: navigation is gone, not deferred — and a press the guard
@@ -731,7 +794,6 @@ void PollKeys(uint32_t now_ms) {
     // The split is `buttons::PressLength`'s, where it is tested — and the long
     // press fires while the finger is still down, because the operator is holding
     // a button with no feedback but the screen.
-    g_keys.buttons->Poll(g_keys.menu);
     const buttons::Press key = g_key_hold.Update(g_keys.buttons->Pressed(g_keys.menu), now_ms);
     if (card_up) {
         // Nothing at all, and it costs no branch of its own above: the navigator
@@ -751,6 +813,44 @@ void PollKeys(uint32_t now_ms) {
     }
 }
 
+// **Telling the panel what the idle timer decided**, and the only place in this
+// file that touches it. Under the display lock, because those commands go out on
+// the same QSPI wires as the frame LVGL is drawing — the console's
+// `display brightness` does it without the lock and gets away with it because a
+// human types once a minute; this runs ten times a second.
+//
+// A lock it could not get is a retry on the next pass rather than a state the
+// panel never heard about, which is the rule the battery read next door follows
+// for the same reason.
+void ApplyDisplayPower() {
+    if (g_panel == nullptr || !g_panel->Ready()) {
+        return;
+    }
+    const bool on = g_idle.State() != ui::DisplayPower::kOff;
+
+    display::Lock lock(kLockTimeoutMs);
+    if (!lock) {
+        g_display_dirty = true;
+        return;
+    }
+
+    if (on) {
+        // Brightness before the panel comes back, or waking from the blank is a
+        // flash of whatever level it was at when it went dark.
+        g_panel->SetBrightness(g_idle.Brightness());
+        if (!g_panel->On()) {
+            g_panel->SetOn(true);
+        }
+    } else {
+        g_panel->SetOn(false);
+    }
+
+    // §10.8.1's queued touch, in the shape a dark screen has: the finger that
+    // brings the panel back must not also press what is under it. Only the blank
+    // arms it — a dimmed screen is one the operator can still read.
+    display::SwallowTouch(!on);
+}
+
 void Publish(const ui::ClockView &view, bool applied) {
     if (xSemaphoreTake(g_lock, pdMS_TO_TICKS(20)) != pdTRUE) {
         return;
@@ -762,6 +862,13 @@ void Publish(const ui::ClockView &view, bool applied) {
         g_status.lock_misses++;
     }
     g_status.stack_low_water = uxTaskGetStackHighWaterMark(nullptr);
+
+    // The idle timer, so `display` on the console can say why the panel is at
+    // the level it is at — the alternative being to sit in front of it for
+    // fifteen minutes and see what happens.
+    g_status.power = g_idle.State();
+    g_status.idle_ms = g_idle.IdleMs(static_cast<uint32_t>(esp_timer_get_time() / 1000));
+    g_status.upright = g_idle.Upright();
     xSemaphoreGive(g_lock);
 }
 
@@ -784,6 +891,25 @@ void Task(void *) {
             g_nav.RequestExpired();
         }
         PollKeys(now_ms);
+
+        // **A finger anywhere on the glass**, taken from the count LVGL's own
+        // read callback keeps rather than by polling the controller a second
+        // time — that would be another I²C transaction per tick, under the same
+        // lease, for a fact somebody already has.
+        const uint32_t touches = display::TouchActivity();
+        if (touches != g_touch_activity_seen) {
+            g_touch_activity_seen = touches;
+            g_idle.Activity(now_ms);
+        }
+
+        // **A card on the glass holds the screen awake.** §10.10: the one screen
+        // this device exists for must not be the one that dims while somebody is
+        // reading it, and its arrival being an activity is not enough — a
+        // request left unanswered for the length of its TTL would otherwise fade
+        // out under the operator.
+        if (g_card.State() == ui::CardState::kCard) {
+            g_idle.Activity(now_ms);
+        }
 
         // Asked for from the console rather than by a finger. Consumed here so
         // that it goes through exactly the door a gesture does.
@@ -814,6 +940,34 @@ void Task(void *) {
                 battery = fresh;
                 battery_valid = true;
             }
+        }
+
+        // **The accelerometer, for the two facts §10.8.1 needs from it**: is the
+        // board being moved, and is it standing on its USB edge. It is the only
+        // reader outside the status page, and it changes nothing about §10.13's
+        // rule — no gesture approves anything, and what this can do is turn a
+        // screen on.
+        if (g_hardware.motion != nullptr && g_hardware.motion->Present() &&
+            (tick % kMotionEveryTicks) == 0) {
+            ::imu::Sample sample = {};
+            if (g_hardware.motion->Read(&sample) == ESP_OK) {
+                if (g_have_accel && ui::Moved(g_last_accel, sample.accel_g)) {
+                    g_idle.Activity(now_ms);
+                }
+                for (int axis = 0; axis < 3; ++axis) {
+                    g_last_accel[axis] = sample.accel_g[axis];
+                }
+                g_have_accel = true;
+                g_idle.SetUpright(ui::StandingButtonsUp(sample.accel_g[0], sample.accel_g[1],
+                                                        sample.accel_g[2]));
+            }
+        }
+
+        // Everything that could have woken it has been read by now, so this is
+        // where the panel finds out.
+        if (g_idle.Tick(now_ms) || g_display_dirty) {
+            g_display_dirty = false;
+            ApplyDisplayPower();
         }
 
         Gather(&in, &battery_valid, &battery);
@@ -865,66 +1019,79 @@ void Task(void *) {
             FillStatus(&facts, battery_valid, battery);
         }
 
+        // **Nothing is painted while the panel is off.** The pixels would go to
+        // a display nobody can see, over the QSPI they share with everything
+        // else. Everything above still runs — the limits' quiet timer, the
+        // card's countdown, the clock's own arithmetic — because those are facts
+        // about the world rather than about the glass, and a device that came
+        // back out of the blank into a stale screen would be worse than one that
+        // never blanked.
+        const bool dark = g_idle.State() == ui::DisplayPower::kOff;
         bool applied = false;
-        if (display::Lock lock(kLockTimeoutMs); lock) {
-            // **What a finger did, taken under the same lock the callback that
-            // recorded it ran under** — which is what makes the handoff need no
-            // lock of its own. Acted on here rather than there: §10.8.1 keeps
-            // every decision off the LVGL task, and one of these ends in
-            // `esp_restart`.
-            if (g_settings_screen.TakeBack() || g_status_screen.TakeBack()) {
-                Apply(ui::Nav::kBack);
-            }
-            const uint8_t tapped = g_settings_screen.TakeTap();
-            if (tapped != SettingsScreen::kNoRow && g_nav.Screen() == ui::ScreenId::kSettings &&
-                !g_nav.RequestVisible()) {
-                // A tap is both the selection and the press, which is what
-                // `settings_menu.h` means when it says re-selecting the armed row
-                // must not disarm it.
-                g_menu.Select(tapped);
-                Activated(now_ms);
-            }
-            if (g_status_screen.TakeNext() && g_nav.Screen() == ui::ScreenId::kStatus) {
-                g_pager.Next();
-            }
-            if (g_gesture != LV_DIR_NONE) {
-                const lv_dir_t drawn = g_gesture;
-                g_gesture = LV_DIR_NONE;
-                Apply(NavForGesture(drawn));
-            }
+        if (!dark) {
+            if (display::Lock lock(kLockTimeoutMs); lock) {
+                // **What a finger did, taken under the same lock the callback that
+                // recorded it ran under** — which is what makes the handoff need no
+                // lock of its own. Acted on here rather than there: §10.8.1 keeps
+                // every decision off the LVGL task, and one of these ends in
+                // `esp_restart`.
+                if (g_settings_screen.TakeBack() || g_status_screen.TakeBack()) {
+                    Apply(ui::Nav::kBack);
+                }
+                const uint8_t tapped = g_settings_screen.TakeTap();
+                if (tapped != SettingsScreen::kNoRow && g_nav.Screen() == ui::ScreenId::kSettings &&
+                    !g_nav.RequestVisible()) {
+                    // A tap is both the selection and the press, which is what
+                    // `settings_menu.h` means when it says re-selecting the armed row
+                    // must not disarm it.
+                    g_menu.Select(tapped);
+                    Activated(now_ms);
+                }
+                if (g_status_screen.TakeNext() && g_nav.Screen() == ui::ScreenId::kStatus) {
+                    g_pager.Next();
+                }
+                if (g_gesture != LV_DIR_NONE) {
+                    const lv_dir_t drawn = g_gesture;
+                    g_gesture = LV_DIR_NONE;
+                    Apply(NavForGesture(drawn));
+                }
 
-            g_clock.SetDate(date);
-            g_clock.SetNotice(view.notice ? g_notice : "");
-            g_clock.Apply(view);
+                g_clock.SetDate(date);
+                g_clock.SetNotice(view.notice ? g_notice : "");
+                g_clock.Apply(view);
 
-            // Which of the two full-screen objects is up is the navigator's
-            // answer, and applying it is the twenty lines `navigator.h` promised
-            // somebody else would write.
-            const ui::ScreenId up = g_nav.Screen();
-            g_clock.SetVisible(up == ui::ScreenId::kClock);
-            g_limits_screen.SetVisible(up == ui::ScreenId::kLimits);
-            g_settings_screen.SetVisible(up == ui::ScreenId::kSettings);
-            g_status_screen.SetVisible(up == ui::ScreenId::kStatus);
-            g_touch_screen.SetVisible(up == ui::ScreenId::kTouch);
-            g_settings_screen.Apply(g_menu, now_ms);
-            if (up == ui::ScreenId::kStatus) {
-                g_status_screen.Apply(facts);
-            }
-            if (up == ui::ScreenId::kTouch) {
-                g_touch_screen.Apply(touch_view);
-            }
-            // The epoch, or 0 when it is not believable — which is what decides
-            // whether a countdown is computed here or taken from what the
-            // publisher resolved (§10.8.3).
-            g_limits_screen.Apply(g_limits, view.time_valid ? in.epoch_utc : 0, now_ms);
+                // Which of the two full-screen objects is up is the navigator's
+                // answer, and applying it is the twenty lines `navigator.h` promised
+                // somebody else would write.
+                const ui::ScreenId up = g_nav.Screen();
+                g_clock.SetVisible(up == ui::ScreenId::kClock);
+                g_limits_screen.SetVisible(up == ui::ScreenId::kLimits);
+                g_settings_screen.SetVisible(up == ui::ScreenId::kSettings);
+                g_status_screen.SetVisible(up == ui::ScreenId::kStatus);
+                g_touch_screen.SetVisible(up == ui::ScreenId::kTouch);
+                g_settings_screen.Apply(g_menu, now_ms);
+                if (up == ui::ScreenId::kStatus) {
+                    g_status_screen.Apply(facts);
+                }
+                if (up == ui::ScreenId::kTouch) {
+                    g_touch_screen.Apply(touch_view);
+                }
+                // The epoch, or 0 when it is not believable — which is what decides
+                // whether a countdown is computed here or taken from what the
+                // publisher resolved (§10.8.3).
+                g_limits_screen.Apply(g_limits, view.time_valid ? in.epoch_utc : 0, now_ms);
 
-            // The card last, so it is the last thing invalidated — and it sits on
-            // top of a clock that has no idea it is there (§10.8.1).
-            g_request_screen.Apply(g_card, now_ms, g_note);
-            applied = true;
+                // The card last, so it is the last thing invalidated — and it sits on
+                // top of a clock that has no idea it is there (§10.8.1).
+                g_request_screen.Apply(g_card, now_ms, g_note);
+                applied = true;
+            }
         }
 
-        Publish(view, applied);
+        // A pass skipped because the panel is off is not a frame given up
+        // waiting for the display, and the counter that says so is the one
+        // §10.12.2 reads.
+        Publish(view, applied || dark);
 
         ++tick;
         vTaskDelay(pdMS_TO_TICKS(kTickMs));
@@ -950,6 +1117,14 @@ esp_err_t Init(const Hardware &hardware, const Keys &keys) {
     g_keys = keys;
     g_alert = hardware.alert;
     g_touch = hardware.touch;
+    g_panel = hardware.panel;
+
+    // The idle timer starts now rather than at zero: `Init` runs several seconds
+    // into the boot, after the splash and the chime, and a policy that thought
+    // it had been idle since the epoch would dim the first screen the operator
+    // ever sees.
+    ApplyDisplaySettings();
+    g_idle.Activity(static_cast<uint32_t>(esp_timer_get_time() / 1000));
 
     if (g_lock == nullptr) {
         g_lock = xSemaphoreCreateMutexStatic(&g_lock_storage);
@@ -1050,11 +1225,34 @@ esp_err_t Init(const Hardware &hardware, const Keys &keys) {
 
 bool Ready() { return g_handle != nullptr; }
 
+void ApplyDisplaySettings() {
+    const config::Display &display = config::Get().display;
+
+    ui::IdleSettings settings;
+    settings.dim_after_ms = static_cast<uint32_t>(display.dim_after_seconds) * 1000U;
+    settings.sleep_after_ms = static_cast<uint32_t>(display.sleep_after_seconds) * 1000U;
+    settings.full_percent = display.brightness;
+    settings.dim_percent = display.dim_percent;
+    g_idle.Configure(settings);
+
+    // **The level can change without the state changing**, which is the whole
+    // reason this flag exists: `config set brightness 50` on a lit screen leaves
+    // the policy in `kFull` and means a different number, and a device that only
+    // acted on transitions would show it after the next idle timeout instead of
+    // now.
+    g_display_dirty = true;
+}
+
 bool Inject(const ui::Request &request) {
     if (g_handle == nullptr) {
         return false;
     }
     const uint32_t now_ms = static_cast<uint32_t>(esp_timer_get_time() / 1000);
+
+    // **A request wakes the panel unconditionally** (§10.8.1), and before the
+    // card is even queued: a device that lit up a moment after the chirp would
+    // be a device whose first frame of the one screen it exists for is missing.
+    g_idle.Activity(now_ms);
 
     // **Under the snapshot lock and not the display lock.** The queue is read by
     // the task on every tick and the screen catches up on its own next pass, at
@@ -1184,6 +1382,10 @@ bool Navigate(ui::Nav nav) {
     // one task that owns it — the same reason a tap is recorded and not acted on.
     g_pending_nav = nav;
     g_has_pending_nav = true;
+    // Somebody asked for a screen, so it had better be visible — the one place
+    // the console counts as activity, because unlike `config set` it is a
+    // request to look at something rather than a setting typed at it.
+    Activity();
 
     // **And waited for, because there is one slot and callers chain.** Reaching
     // the status pages is "up, then open" — two moves — and a second call that
@@ -1217,6 +1419,8 @@ void SetNotice(const char *text) {
     if (g_handle == nullptr) {
         return;
     }
+    // A line worth putting under the clock is a line worth being able to read.
+    Activity();
     if (text == nullptr || text[0] == '\0') {
         g_notice_set = false;
         g_notice[0] = '\0';
@@ -1235,6 +1439,11 @@ void ShowLimits(const ui::Limits &limits) {
         return;
     }
     const uint32_t now_ms = static_cast<uint32_t>(esp_timer_get_time() / 1000);
+
+    // §9.7 publishes on every render, so a document arriving means somebody is
+    // working — which is the operator's own definition of the device not being
+    // idle, and it holds whether or not the screen comes up.
+    g_idle.Activity(now_ms);
 
     // Under the snapshot lock and not the display lock, exactly as `Inject` is:
     // the task picks it up on its next pass, at most 20 ms away, and this call

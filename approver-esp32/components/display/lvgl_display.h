@@ -47,6 +47,34 @@ bool LvglReady();
 
 lv_display_t *LvglDisplay();
 
+// --- The finger, for the idle timer of §10.8.1 ---------------------------
+//
+// **Every touch on this device passes through one read callback**, and these two
+// are what let the screen task see it without polling the controller a second
+// time (which would be a second I²C transaction per tick, under the same lease,
+// for a fact LVGL already has).
+//
+// A count rather than a timestamp: the caller compares it with what it saw last
+// tick, so there is no clock in here and nothing to keep wrap-safe. It counts
+// *presses observed*, including the ones swallowed below — a swallowed press is
+// still a person touching the glass, and waking on it is the whole point.
+uint32_t TouchActivity();
+
+// **Swallow the press that wakes the panel.** With the display off the operator
+// cannot see what they are touching, so the finger that brings it back must not
+// also press whatever happens to be under it — a settings row, at worst the
+// reboot one. §10.8.1 already spends a paragraph on this hazard for a card that
+// appears under a finger; a dark screen is the same hazard with the lights out.
+//
+// It is a latch rather than a flag: disarming while a finger is still down keeps
+// suppressing until that finger lifts, so the press that woke the device cannot
+// be delivered late. Armed with no finger down it costs nothing and clears
+// itself on the next read.
+//
+// **Only the blank arms it, never the dim.** A dimmed screen is one the operator
+// can still read, so a deliberate tap on it should do what it says.
+void SwallowTouch(bool armed);
+
 // --- A screenshot, streamed rather than stored ----------------------------
 //
 // **The panel cannot be read back and there is nowhere to keep a frame.** QSPI

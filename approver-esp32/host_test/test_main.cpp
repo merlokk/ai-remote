@@ -23,6 +23,7 @@
 void RegisterNavigatorTests(void);
 void RegisterSettingsMenuTests(void);
 void RegisterTouchCalTests(void);
+void RegisterIdleTests(void);
 void RegisterClockFaceTests(void);
 void RegisterRequestCardTests(void);
 void RegisterI2cBusTests(void);
@@ -95,6 +96,7 @@ int main(int argc, char **argv) {
     if (Wanted("registration") || Wanted("protocol")) RegisterRegistrationTests();
     if (Wanted("approval") || Wanted("protocol")) RegisterApprovalTests();
     if (Wanted("limits") || Wanted("status")) RegisterLimitsTests();
+    if (Wanted("idle") || Wanted("dim")) RegisterIdleTests();
     if (Wanted("vectors") || Wanted("parity") || Wanted("protocol")) RegisterVectorTests();
 
     return UNITY_END();

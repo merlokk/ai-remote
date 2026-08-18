@@ -32,7 +32,8 @@ constexpr const char *kGoodJson = R"({
   "nats": { "url": "nats://10.0.0.9:4222" },
   "time": { "zone": "Europe/Kyiv", "posix": "EET-2EEST,M3.5.0/3,M10.5.0/4",
             "sntp": "time.google.com", "syncHours": 12 },
-  "display": { "brightness": 55, "dimSeconds": 15, "blankSeconds": 60 },
+  "display": { "brightness": 55, "dimAfterSeconds": 15, "dimPercent": 25,
+               "sleepAfterSeconds": 60 },
   "audio": { "volume": 45 }
 })";
 
@@ -182,8 +183,9 @@ void test_config_reads_every_field(void) {
     TEST_ASSERT_EQUAL_STRING("time.google.com", c.time.sntp_server);
     TEST_ASSERT_EQUAL_UINT8(12, c.time.sync_hours);
     TEST_ASSERT_EQUAL_UINT8(55, c.display.brightness);
-    TEST_ASSERT_EQUAL_UINT16(15, c.display.dim_seconds);
-    TEST_ASSERT_EQUAL_UINT16(60, c.display.blank_seconds);
+    TEST_ASSERT_EQUAL_UINT16(15, c.display.dim_after_seconds);
+    TEST_ASSERT_EQUAL_UINT8(25, c.display.dim_percent);
+    TEST_ASSERT_EQUAL_UINT16(60, c.display.sleep_after_seconds);
     TEST_ASSERT_EQUAL_UINT8(45, c.audio.volume_percent);
 }
 
@@ -707,13 +709,15 @@ void test_config_a_negative_number_is_clamped_and_not_wrapped(void) {
     // deliberate.
     FreshWithDefaults();
     fake::PutFile("config.json",
-                  R"({"display":{"brightness":-5,"dimSeconds":-1,"blankSeconds":99999},
+                  R"({"display":{"brightness":-5,"dimAfterSeconds":-1,"dimPercent":-30,
+                                   "sleepAfterSeconds":99999},
                       "audio":{"volume":-20}})");
 
     TEST_ASSERT_EQUAL_INT(ESP_OK, config::Init());
     TEST_ASSERT_EQUAL_UINT8(0, config::Get().display.brightness);
-    TEST_ASSERT_EQUAL_UINT16(0, config::Get().display.dim_seconds);
-    TEST_ASSERT_EQUAL_UINT16(65535, config::Get().display.blank_seconds);
+    TEST_ASSERT_EQUAL_UINT16(0, config::Get().display.dim_after_seconds);
+    TEST_ASSERT_EQUAL_UINT8(0, config::Get().display.dim_percent);
+    TEST_ASSERT_EQUAL_UINT16(65535, config::Get().display.sleep_after_seconds);
     TEST_ASSERT_EQUAL_UINT8(0, config::Get().audio.volume_percent);
 }
 

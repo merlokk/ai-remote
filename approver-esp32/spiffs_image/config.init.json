@@ -29,8 +29,9 @@
     },
     "display": {
         "brightness": 80,
-        "dimSeconds": 30,
-        "blankSeconds": 120
+        "dimAfterSeconds": 900,
+        "dimPercent": 30,
+        "sleepAfterSeconds": 1500
     },
     "touch": {
         "scaleX": 1000,

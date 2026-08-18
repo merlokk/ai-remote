@@ -788,7 +788,7 @@ int CmdImu(int argc, char **argv) {
 // name the same fields, and two hand-kept enumerations of the same nine words is
 // the drift that rule exists to prevent.
 constexpr const char *kSettableFields =
-    "volume, brightness, dim, blank, nats, tz, sntp, sync, wifi";
+    "volume, brightness, dim, dimlevel, sleep, nats, tz, sntp, sync, wifi";
 
 int SetConfigField(const char *key, const char *value) {
     config::Data &c = config::Get();
@@ -802,8 +802,13 @@ int SetConfigField(const char *key, const char *value) {
     constexpr NumberField kNumbers[] = {
         {"volume", 0, 100, "%"},
         {"brightness", 0, 100, "%"},
+        // The panel's idle timer: how long until it dims, what it dims to, and
+        // how long until it goes off — the last of which only ever happens with
+        // the board standing on its USB edge. Zero is off for either wait, and
+        // it is an answer rather than a missing value.
         {"dim", 0, 65535, " s"},
-        {"blank", 0, 65535, " s"},
+        {"dimlevel", 0, 100, "%"},
+        {"sleep", 0, 65535, " s"},
         {"sync", 0, 255, " h"},
     };
 
@@ -826,8 +831,18 @@ int SetConfigField(const char *key, const char *value) {
             }
         } else if (strcmp(key, "brightness") == 0) {
             c.display.brightness = static_cast<uint8_t>(parsed);
+            // **Applied at once, like the volume and the zone.** All four of
+            // these reach one call and it reaches only the panel's idle timer —
+            // the lesson `wifi check` taught, which is that a settings command
+            // reaching further than the thing it changed is a settings command
+            // people stop making.
+            screens::ApplyDisplaySettings();
         } else if (strcmp(key, "dim") == 0) {
-            c.display.dim_seconds = static_cast<uint16_t>(parsed);
+            c.display.dim_after_seconds = static_cast<uint16_t>(parsed);
+            screens::ApplyDisplaySettings();
+        } else if (strcmp(key, "dimlevel") == 0) {
+            c.display.dim_percent = static_cast<uint8_t>(parsed);
+            screens::ApplyDisplaySettings();
         } else if (strcmp(key, "sync") == 0) {
             c.time.sync_hours = static_cast<uint8_t>(parsed);
             // Applied at once, like the volume and the zone — and **only the
@@ -836,7 +851,8 @@ int SetConfigField(const char *key, const char *value) {
             // settings call people stop making.
             timesync::Apply();
         } else {
-            c.display.blank_seconds = static_cast<uint16_t>(parsed);
+            c.display.sleep_after_seconds = static_cast<uint16_t>(parsed);
+            screens::ApplyDisplaySettings();
         }
         printf("%s = %ld%s, in memory only — 'config save' writes it to %s\n", field.name, parsed,
                field.unit, config::kPath);
@@ -1104,10 +1120,11 @@ int CmdConfig(int argc, char **argv) {
         printf("           sntp %s every %u h\n", c.time.sntp_server,
                static_cast<unsigned>(c.time.sync_hours));
     }
-    printf("display    %u%%, dim after %us, blank after %us\n",
+    printf("display    %u%%, dim to %u%% after %us, off after %us standing up\n",
            static_cast<unsigned>(c.display.brightness),
-           static_cast<unsigned>(c.display.dim_seconds),
-           static_cast<unsigned>(c.display.blank_seconds));
+           static_cast<unsigned>(c.display.dim_percent),
+           static_cast<unsigned>(c.display.dim_after_seconds),
+           static_cast<unsigned>(c.display.sleep_after_seconds));
     printf("audio      volume %u%%\n", static_cast<unsigned>(c.audio.volume_percent));
     return 0;
 }
@@ -2592,6 +2609,19 @@ int CmdDisplay(int argc, char **argv) {
         }
         printf("\n");
         printf("lvgl       %s\n", ::display::LvglReady() ? "running" : "not started");
+
+        // **The idle timer of §10.8.1**, which is the only way to find out why a
+        // panel is at the level it is at without sitting in front of it for a
+        // quarter of an hour. `standing up` is the accelerometer's answer and
+        // the reason the blank does or does not happen — a board lying flat
+        // dims and stops there, however long it is left.
+        const screens::Status idle = screens::Get();
+        if (idle.ready) {
+            printf("idle       %s, %us since anything happened, %s\n",
+                   ui::DisplayPowerName(idle.power),
+                   static_cast<unsigned>(idle.idle_ms / 1000U),
+                   idle.upright ? "standing up" : "not standing up");
+        }
         printf("touch      %s, %" PRIu32 " missed read(s)\n",
                glass.Ready() ? "up" : "not initialised", glass.MissedReads());
         return 0;

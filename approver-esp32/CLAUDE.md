@@ -72,6 +72,7 @@ a decision with a cost that section states in a table of its own.
 | AXP2101 — `components/pmic`, brought up from `board::Init()` (§10.1, §10.13) | **configured and reading on hardware**: TS pin silenced, ADC channels, VBUS limit, rail voltages, charge currents — all cross-checked against the vendor's `pmicpower` component — plus `SetAldo2`/`SetAldo3` for the audio and panel rails. **And the power key, which used to be read and is now written** (§10.1): the press-on threshold, the press-off threshold and the long-press enable are `Config` fields that `Init` puts on the chip when what is there differs, because a driver that returns plausible numbers is not a driver that is configured — and here the failure is a button that no longer switches the board on. The write is masked so that it can never touch the soft power-off bit it shares a register with, which is a test |
 | The panel and the touch — `components/display` (§10.1, §10.8) | **lit on hardware**: the CO5300 over QSPI with the vendor's init sequence, its reset driven as a PMIC rail through a callback, the CST9220 read under the I²C lease, and LVGL 9.4 on two 480×40 buffers. `display` on the console. The placeholder it used to carry is gone: what is on the glass now is the clock of §10.8.2, two rows below |
 | The navigation state machine — `components/ui` (§10.8.1) | **wired to real input now**: which screen is up, the request card outranking everything, the bounded pending queue — and three ways to move between screens that all end at one function (a swipe through LVGL's own gesture, `KEY` held or tapped, and `screen` on the console). Its header includes `<cstdint>` and nothing else and its `CMakeLists.txt` has an empty `REQUIRES`, which together are what make it testable without a board. **One rule of it changed on the board** (§10.8.5): settings is reachable from the limits screen as well, because that screen arrives on its own and was otherwise a dead end |
+| The panel's idle timer — `components/ui/idle_policy.*` (§10.8.1) | **running on hardware, and it replaced two settings that did nothing at all.** `dimSeconds` and `blankSeconds` were parsed, saved, printed and host-tested, and no code ever read them — so the panel never dimmed and never blanked, which on an AMOLED is §10.8.1's burn-in "outcome, not a risk" going unanswered. Three fields under new names now, so a `config.json` already on a device cannot bring a 30-second dim into firmware where it means something else: dim to 30 % after fifteen minutes, off after twenty-five — **and off only with the board standing on its USB edge, buttons up**, because a clock that blanks itself on a desk says nothing at a glance. On the board: dimmed to 20 % at a shortened six-second threshold and back to full on every wake, over and over; still `dimmed` fifteen seconds past a fifteen-second blank threshold while standing on the *card-slot* edge, which is that rule performed rather than argued; and the idle counter climbing straight through two `config set` commands, because typing over USB is not somebody looking at the glass. Everything wakes it — three buttons, a finger anywhere, the board being moved, a request card, a `status` document, a notice, `screen` on the console — and the finger that wakes it out of the blank is swallowed until it lifts, since the operator cannot see what is under it. 25 host tests, 14 of 14 mutations caught |
 | The boot splash — `spiffs_image/splash.bin`, `components/display/rawimage` (§10.8) | **running on hardware**: white katakana, on the glass for two seconds before LVGL owns it. Generated on the host by `tools/make-splash.ps1`, streamed off SPIFFS as raw RGB565 with no decoder |
 | The language and the layering (§10.14) — C++ except where C is forced, no dynamic memory, library layer before logic, the I²C bus leased | **decided, and what is written follows it**: every component below is C++, none of them contains a `new`, a `malloc`, a `std::vector` or a `std::function`, the tasks and their stacks are static, and nothing outside `components/i2cbus` touches `i2c_master_*`. What is still undemonstrated is the half that has no code: `main/` composing the logic rather than drawing a placeholder |
 | The ESP-IDF dependency set (§10.4) — LVGL + `esp_lvgl_port`, the CO5300/CST9220 drivers, libsodium for Ed25519, `debsahu/espidf-nats` for the bus | **signed off** (root §1). The display half is **resolved and building**: LVGL 9.4.0, `esp_lvgl_port` 2.9.0, `esp_lcd_sh8601` 2.0.1, `waveshare/esp_lcd_touch_cst9217` 1.0.4 — two of which are not the names §10.4 guessed, see below. The **NATS client is resolved and running**: `debsahu/espidf-nats` 1.4.0, which drags `espressif/esp_websocket_client` 1.8.0 in behind it — a transitive component root §1 asks about, and the one thing on this list nobody signed off in advance. **libsodium is resolved and has signed on the board**: `espressif/libsodium` 1.0.22~1, no transitive component at all, and a signature that matches `lib/crypto.py` byte for byte — §10.4 has the numbers and §10.6 what the check settled. So the whole of §10.4's list is now resolved, and none of it is paper |
@@ -95,7 +96,7 @@ a decision with a cost that section states in a table of its own.
 | The Wi-Fi screen (§10.8.6) | specified, not started — the manager underneath it is what exists |
 | Where the configuration lives (§10.15) | **decided**: all of it in JSON on SPIFFS, nothing of ours in NVS — with the cost stated (SPIFFS cannot be encrypted at rest). `spiffs_image/config.json` + `config.init.json` are flashed, and `components/config` is what reads them |
 | The `KEY`-at-boot config restore (§10.15) | **running on hardware, three times over**: `KEY` held through a boot put `config.init.json` back over `config.json` at 5,001 ms — before the parse, which is the whole point — left `registration.json` untouched and the device still registered, and said so in three places: a log line at the time, `config restored` under the clock, and a `boot` line `config` keeps printing for the rest of the uptime. The deciding half is host-tested (9 tests, 5 of 5 mutations caught). **The screen half is where the board earned its keep**: the console said the notice was up and the glass was empty, because the label hung outside its parent and `LV_OBJ_FLAG_OVERFLOW_VISIBLE` does not do what its name suggests — §10.15 has that finding |
-| Host-tier tests (§10.11) — `host_test/` | **running**: 525 Unity tests over `ui` (the navigator, the clock face, the request card, the limits and the settings list), `protocol` (§7's signing bytes, its wire format, §6's registration exchange and §9.7's status document), `i2cbus`, `pmic`, `rtc`, `imu`, `audio`, `config`, `buttons`, `timezone`, `speaker`, `wifimgr`, `timesync`, `nats` and the parity vectors, one command, no board. The drivers are compiled **unmodified** against a fake ESP-IDF (`host_test/fakes/`), which is §10.14.3's owed fake backend arriving in a different shape than that section specified, and which now covers I²S and a filesystem as well as the I²C wire. Built by MSVC rather than by ESP-IDF's `linux` target, which does not work on a Windows host — §10.11 records why |
+| Host-tier tests (§10.11) — `host_test/` | **running**: 550 Unity tests over `ui` (the navigator, the clock face, the request card, the limits, the settings list and the panel's idle timer), `protocol` (§7's signing bytes, its wire format, §6's registration exchange and §9.7's status document), `i2cbus`, `pmic`, `rtc`, `imu`, `audio`, `config`, `buttons`, `timezone`, `speaker`, `wifimgr`, `timesync`, `nats` and the parity vectors, one command, no board. The drivers are compiled **unmodified** against a fake ESP-IDF (`host_test/fakes/`), which is §10.14.3's owed fake backend arriving in a different shape than that section specified, and which now covers I²S and a filesystem as well as the I²C wire. Built by MSVC rather than by ESP-IDF's `linux` target, which does not work on a Windows host — §10.11 records why |
 | Protocol parity vectors (§10.11 tier 2) | **done, and it has two halves in two languages**: `tools/make_vectors.py` generates `host_test/vectors/parity_vectors.h` (six §7 decisions, six §6 replies) and `components/crypto/selftest_vector.h` (§10.6's Ed25519 vector) from `approver/protocol.py` and `lib/crypto.py` themselves; both are committed, so the build needs no Python. `test_vectors.cpp` runs the firmware's assemblers over them, and **`tests/test_esp32_vectors.py` is what stops them going stale** — it regenerates on every `pytest` run and fails if the committed files are not what today's Python produces. The three pasted literals this replaced are gone from `test_signing.cpp`, `test_registration.cpp` and `device_key.cpp`. Mutation-checked from both ends: a swapped field in `protocol.py` fails the guard, a dropped separator in `signing.cpp` fails the vectors |
 | Device-tier tests (§10.11 tier 3) — `tests/test_esp32_device.py` | **written, and half of it has run against the board**: one press produces a reply `hook.verify_reply` calls trusted, and every tamper is asserted on that reply without a second press — the verdict flipped, each of §7's six echoed fields changed in turn, the `key_id` renamed, the signature removed. `scripts/esp32-approval.cmd` is the one command, and `AI_REMOTE_ESP32_DEVICE=1` is what stops an unattended `pytest` quietly testing the software responder instead. **§10.10's half is confirmed on hardware**: a card nobody pressed produced no reply at all in 20 s and the hook fell back. The pressed half needs a finger and has not been run since it was written |
 
@@ -1254,6 +1255,53 @@ where it becomes a code rule rather than an observation.
   slow timer, brightness drops on an idle timeout and the panel blanks after
   it — waking on touch, and unconditionally on a request. Burn-in on a device
   showing one layout for months is an outcome, not a risk.
+
+  **Both halves of that sentence are true now, and for a long time neither
+  was.** `dimSeconds` and `blankSeconds` were in `config.json`, were parsed into
+  `config::Data`, were written back by `config save`, were printed by `config`,
+  had three host tests each — and were **read by nothing at all**. The panel
+  never dimmed and never blanked. That is the finding §10.15 records about the
+  brightness arriving a second time on the two fields next to it, and it is the
+  worse instance of it: a brightness that does nothing is a number somebody
+  notices, and a dim that does nothing is a promise about the life of the glass.
+
+  So the two are gone, replaced by three under **new names** — `dimAfterSeconds`,
+  `dimPercent`, `sleepAfterSeconds` — because a `config.json` already on a device
+  would otherwise carry a 30-second dim into firmware where 30 seconds means
+  something else. `ui/idle_policy.h` is where the decisions live and
+  `screens.cpp` is what tells the panel; the shipped numbers are the repository
+  owner's: **dim to 30 % after fifteen minutes, off after twenty-five.**
+
+  Three rules that are not the obvious ones:
+
+  - **dimming is unconditional and the blank is not.** The panel only goes off
+    with the board standing on its USB edge, buttons up — one of §10.13's six
+    measured positions, and the one nobody reads a clock in. This device's whole
+    value is that a glance at the desk says the loop is alive (§10.8.2), and a
+    black square says nothing; so lying flat it dims and stops there, however
+    long it is left. That was checked on the board rather than reasoned about:
+    fifteen seconds past a fifteen-second threshold, standing on the *card-slot*
+    edge, and it stayed dimmed.
+  - **a `status` document is activity**, which is the operator's own definition —
+    "nobody presses anything and no messages arrive". §9.7 publishes on every
+    render, so the screen stays lit for as long as a Claude Code session is
+    spending and gives up a quarter of an hour after it stops. Visible in the
+    log of the run above: the panel came back to full brightness every few
+    seconds without anybody touching it, which is this repository's own status
+    line arriving.
+  - **`config set` is not activity.** It is typed over USB, which is not
+    somebody looking at the glass — so a `dim` shortened on a screen that has
+    already been idle ten minutes takes effect at once instead of starting the
+    wait again. Also confirmed on the board: the idle counter climbed straight
+    through two console commands.
+
+  And one hazard that needed its own answer: **the finger that wakes the panel
+  from the blank must not also press what is under it.** With the display off
+  the operator cannot see what they are touching, and the worst thing under it is
+  the reboot row of §10.8.5. `display::SwallowTouch` is a latch in LVGL's own
+  read callback — it counts the press, so the device wakes, and reports a release
+  to LVGL until the finger lifts. It is armed by the blank and never by the dim,
+  because a dimmed screen is one the operator can still read.
 - **The queued touch.** A card appears while a finger is already on its way
   down, and on a 480×480 panel Allow may be exactly where the operator was about
   to tap. Ignore presses for the first ~300 ms of any newly presented card, and
@@ -2706,8 +2754,9 @@ Three tiers, and the first one is where nearly everything belongs:
    **What is under it today is the navigator, the three screens' arithmetic, all
    of §6 and §7's wire format, four of the five chips on the I²C bus, the
    settings file, the buttons, the zone table, the speaker, the Wi-Fi policy,
-   the internet check, the clock's sync schedule and the bus link** — 525 tests,
-   and the last row of the table is tier 2 living in the same binary:
+   the internet check, the clock's sync schedule, the bus link and the panel's
+   idle timer** — 550 tests, and the last row of the table is tier 2 living in
+   the same binary:
 
    | Subject | What is pinned |
    |---|---|
@@ -2716,6 +2765,7 @@ Three tiers, and the first one is where nearly everything belongs:
    | `components/ui` (the request card) | §10.8.4's rules, and the ones where a test is worth the most. **What a card is allowed to be**: every refusal is its own case — a queue that is full, a field with no terminator in it (all seven, in one loop, so a field added later cannot skip the check), a request with no reply subject, one with no tool name — because a refused card is §10.10's fail-safe and a *shown* card is a question put to a human. **The queue**: the oldest is the one on screen, the bound is asserted equal to the navigator's, and room freed is room usable. **The press guard**: a press inside the first 300 ms is thrown away, a press that *began* before the card appeared is thrown away by the same comparison, the next card in the queue gets its own guard from scratch, and pressing nothing decides nothing. **The outcomes**: a press hands back the whole request the reply will have to echo; a card that timed out reads as a timeout and not as a deny; a request that waited past its own life is dropped without ever being shown; a missing TTL falls back to one that expires rather than to forever; the countdown floors at zero; and the ~49-day wrap lands inside a card's life. **The receipt**: it fades on its own, it is skipped when another card is waiting, and an arriving request outranks it. Plus the assertion the whole file is built around — **no amount of ticking produces a verdict** |
    | `components/ui` (the settings list) | §10.8.5's rules, and nearly all of the value is in one row: **the two destructive rows are armed before they fire**, and every way of getting a single press to reach a restart or a shutdown is a case here — including the ones the second row added: a power-off refused while the cable is in and refused *before* it arms, an arming that belongs to the selected row rather than to the list, and the two rows being last and in the order of how hard they are to undo — the first press arming rather than going, the second one inside the window going, the arming expiring and the next press arming again, walking off the row clearing it *by either route* (a tap and the button take different paths, and only one of them was covered until a mutation said so), re-selecting the row that is already selected **not** clearing it — which is what makes a tap-tap work, since a touch reports both the selection and the press — leaving the screen clearing it, and the window measured across the ~49-day wrap on both sides of it. Then the list itself: it opens at the top, reboot is asserted to be the **last** row, the walk wraps and does **not** skip the rows with nothing behind them, a tap past the end selects nothing rather than clamping to an end it did not aim at, and a row with nothing behind it answers `kNotBuilt` rather than navigating. Plus the pager: three pages, wrapping, and back to the first when the screen is reopened |
    | `components/ui` (the touch correction) | §10.8.5's, and the suite is mostly **refusals** — because a correction that is merely wrong is one the operator can see and redo, while one that is *badly* wrong takes away the screen it was made on. Every refusal is its own case and every one of them is asserted to leave the caller's calibration byte for byte as it was: an incomplete set, four presses in one place, a stretch nobody could want, a fit that would push a corner off the glass — and that they do not share a sentence, since "you tapped the same place four times" and "your screen is mounted sideways" send somebody in different directions. Then the arithmetic: identity changes nothing, a shift is recovered *and undone*, one bad tap out of four moves the answer by a few pixels rather than deciding it — which is why it is a least squares — a mirrored panel fits to a negative scale, and a corrected point is **clamped onto the panel**, because a point off the edge is one LVGL hit-tests against nothing. And the flow: the test mode records no points at all, a press too short or too long is not one, a fifth is ignored rather than overwriting a fourth, the result fades on its own across the ~49-day wrap, and abandoning a calibration leaves the one in use alone |
+   | `components/ui` (the panel's idle timer) | §10.8.1's, and the twelfth subject in this firmware that needs no fake. **The two thresholds**: a dim at its own millisecond and not one before, reported as an edge rather than a level — the caller sends a QSPI command on every `true` — anything at all putting it straight back to the configured brightness, the wait measured from the last thing that happened rather than from the last time the screen was lit, and zero disabling either wait, which is an answer rather than a missing value. **The blank, which is the half with a condition on it**: it never happens lying flat however long the device is left, it happens standing on the USB edge, laying the board down while it is dark brings the screen back, and a hand-edited file whose sleep is shorter than its dim still switches the panel off — the stronger of the two statements winning rather than whichever is checked first. **And the two readings §10.13 says to measure rather than derive**: every one of that section's six positions, with the card-slot edge given as the numbers actually read off this board; a device on a corner or in a hand being *no* position at all, since the blank needs a statement and not the absence of one; a stand that leans back still counting; the noise of a board at rest not being movement, against the 0.02 g the magnitude really wanders; and a rotation about gravity being movement, which is what makes the check the whole vector rather than an axis at a time. Plus the pair that is about the console: a shorter wait typed in applying without an activity, and configuring **not** counting as one — and both waits measured across the ~49-day wrap, which for this subject is not a hypothetical, since reaching it means nobody touched the thing |
    | `components/buttons` (short and long) | §10.8.5's `KEY`: a press released early is short; one held to the threshold reports **long while the finger is still down**, which is the decision the class exists for; it reports it **once**, and the release afterwards says nothing — without which one press would open settings and immediately activate whatever row it landed on; the next press starts over; a button nobody is touching reports nothing at all; and the hold is measured across the ~49-day wrap |
    | `components/protocol` | §7's signing bytes (§10.2), and the suite with the least room to be approximately right — every other test here protects a behaviour somebody would notice going wrong, this one protects an exact byte string whose failure is invisible from the device's side. The complete messages have **moved to tier 2's generated vectors** in the row below, which is where they should have been: they used to be three literals pasted into this file, and a pasted literal is the one kind of expectation nobody can check for staleness. What is left here is the shape independently of the content — the two always-empty fields keeping their *positions*, which is what makes the message end in a separator and is the easiest thing to lose while tidying; exactly eight separators whatever the fields hold; and every refusal writing **nothing**, because a half-assembled buffer here is something a caller could sign. And the integers on their own, `INT64_MIN` included: the value with no positive counterpart, which the obvious negate-and-divide loop gets wrong and which is the reason `AppendInt` accumulates downwards |
    | `components/protocol` (the registration exchange) | §6/§10.7's, and the suite is mostly about **one rule**: the handler's signature is checked before any field of the reply is read. That is testable at all because the verifier comes in as an argument — the one used here *records the message it was handed*, so "these are `registration_reply_signing_bytes`" is an assertion rather than a reading of the code, and every rejection that happens *before* the signature uses a verifier that fails the test if it runs. Then each refusal as its own case, because each has its own sentence on a console: not an object, another protocol version, an `ok` that is a string rather than a bool, no handler key, a **pin mismatch** (which is not a bad signature and must not be spelled as one), a nonce that answers a different request, no timestamp, a `ts` past 2^53 that cJSON would silently round, a field longer than the device will hold, and a signature that is not one. Plus the two that are about agreeing with Python rather than refusing anything: the signing bytes byte for byte, and an absent optional field signing as `""` — because the handler omits `error` on success and the other side signs it as empty |
@@ -2967,6 +3017,25 @@ Three tiers, and the first one is where nearly everything belongs:
    written into before the message was known to be good. Nine rules, nine tests,
    no survivors and no surprises. A file that is nothing but field layouts is the
    one place where that is the expected outcome rather than a suspicious one.
+
+   **The idle timer added fourteen, all caught, and no survivors** — which for
+   this subject is what it should look like, because every rule in the file is a
+   comparison and each has a test whose whole job is that comparison: the dim
+   never firing, the dim off by a millisecond, zero no longer disabling either
+   wait, the blank ignoring which way up the board is, the dim checked before the
+   blank (so a hand-edited file with the shorter sleep would only dim), the state
+   change made a level instead of an edge, the dim level left unclamped, the
+   elapsed time computed the non-wrap-safe way, standing up decided without the
+   sign, any axis being allowed to name a position, no axis having to dominate,
+   movement checked an axis at a time, and the noise floor removed.
+
+   Two of them are worth naming for what they would cost on the desk rather than
+   in a test. **The sign** is §10.13's warning made concrete: with `y > 0.0f`
+   replaced by `true`, a board lying flat on its back blanks itself, and the only
+   symptom is a clock that keeps going dark. And **the noise floor** removed makes
+   every rest-state jitter a movement, so nothing ever dims at all — a feature
+   that silently does not happen, which is the class of bug this whole section
+   exists for.
 
    **The registration exchange added nine, all caught, and one of them had to
    fix the test before it could be run.** The nine: the pin never firing, the
@@ -4044,7 +4113,10 @@ firmware has or is specified to have: the Wi-Fi block (§10.9 —
 `active`, `mode`, `rounds`, `apWindowSeconds`, `ap.{ssid,password,channel}` and
 `networks[]`, four of them; that section's table says what each is for),
 `nats.url` (§10.3), `time.zone` / `time.posix` / `time.sntp` /
-`time.syncHours` (§10.8.2), the display timeouts (§10.8.5), `audio.volume` and
+`time.syncHours` (§10.8.2), the display's brightness and the two idle
+thresholds of §10.8.1 — `dimAfterSeconds`, `dimPercent`, `sleepAfterSeconds`,
+which replaced a `dimSeconds` and a `blankSeconds` that nothing read —
+`audio.volume` and
 the `touch` block — the four numbers of §10.8.5's correction, **clamped on the
 way in as well as refused at the fit**, because this file can be edited by hand
 and a scale of 30000 typed into it is a screen nobody can press.

@@ -194,10 +194,18 @@ struct InternetCheck {
     uint8_t target_count;
 };
 
+// The panel's two idle thresholds (§10.8.1), and the level the first of them
+// goes to. `ui/idle_policy.h` is what decides with them and says why the second
+// one needs the IMU; what matters here is that these are **not** the
+// `dimSeconds` / `blankSeconds` this struct used to carry. Those two were
+// parsed, saved and read by nothing at all, and they are gone under new names so
+// that a `config.json` already on a device cannot bring a 30-second dim with it
+// into firmware where 30 seconds means something else.
 struct Display {
-    uint8_t brightness;      // percent
-    uint16_t dim_seconds;    // idle before dimming; 0 disables
-    uint16_t blank_seconds;  // idle before the panel blanks; 0 disables
+    uint8_t brightness;           // percent, what the panel is at while awake
+    uint16_t dim_after_seconds;   // idle before dimming; 0 disables
+    uint8_t dim_percent;          // and what it dims to
+    uint16_t sleep_after_seconds;  // idle before the panel goes off; 0 disables
 };
 
 struct Audio {

@@ -158,6 +158,17 @@ Whether the panel is there and lit, the LVGL state, the touch controller — and
 **missed reads**, a counter that climbs when the touch driver could not get the
 I²C bus. No other readout shows that.
 
+It also prints the **idle timer**: whether the panel is `lit`, `dimmed` or
+`off`, how long since anything last happened, and whether the board is standing
+on its USB edge — which is the condition the blank needs and the reason it does
+or does not happen. Without this line the only way to find out why a screen is
+dim is to sit in front of it for a quarter of an hour.
+
+**What counts as something happening**: a press on any of the three buttons, a
+finger anywhere on the glass, the board being moved, a request card, a `status`
+document, a notice under the clock, and `screen` on this console. Not `config
+set` — typing a setting over USB is not somebody looking at the screen.
+
 ### `display on` / `display off`
 Blanks the panel without dimming it, and brings it back.
 
@@ -424,9 +435,10 @@ In memory only. The settable fields:
 | Field | Takes | Notes |
 |---|---|---|
 | `volume` | 0..100 | applied to the codec at once |
-| `brightness` | 0..100 | stored; `display brightness` is the live one |
-| `dim` | seconds | idle before dimming, 0 disables |
-| `blank` | seconds | idle before the panel blanks, 0 disables |
+| `brightness` | 0..100 | applied at once; `display brightness` is the live one |
+| `dim` | seconds | idle before the panel dims, 0 disables. Applied at once |
+| `dimlevel` | 0..100 | what it dims **to**. Applied at once |
+| `sleep` | seconds | idle before the panel goes **off**, 0 disables — and it only ever happens with the board standing on its USB edge, buttons up. Applied at once |
 | `nats` | URL | the bus address; **parsed before it is stored**, and applied at once |
 | `tz` | zone name or POSIX rule | applied at once; see `config zones` |
 | `sntp` | hostname | **empty means the clock does not sync** |

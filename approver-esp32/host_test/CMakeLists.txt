@@ -97,6 +97,7 @@ add_executable(host_test
     test_vectors.cpp
     test_settings_menu.cpp
     test_touch_cal.cpp
+    test_idle.cpp
 
     # The fake ESP-IDF the drivers are compiled against. `fakes/` shadows the
     # framework's headers on the include path below, so the sources listed
@@ -112,6 +113,7 @@ add_executable(host_test
     ../components/ui/limits_view.cpp
     ../components/ui/settings_menu.cpp
     ../components/ui/touch_cal.cpp
+    ../components/ui/idle_policy.cpp
     ../components/i2cbus/i2c_bus.cpp
     ../components/pmic/axp2101.cpp
     ../components/rtc/pcf85063.cpp

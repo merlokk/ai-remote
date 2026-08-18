@@ -32,10 +32,12 @@
 #include "buttons.h"
 #include "clock_face.h"
 #include "esp_err.h"
+#include "idle_policy.h"
 #include "limits_view.h"
 #include "navigator.h"
 #include "qmi8658.h"
 #include "settings_menu.h"
+#include "panel.h"
 #include "touch.h"
 #include "speaker.h"
 #include "request_card.h"
@@ -96,6 +98,14 @@ struct Status {
     // makes about the heap: the minimum ever seen is the number that says
     // whether the device is safe.
     uint32_t stack_low_water = 0;
+
+    // The idle timer of §10.8.1, for `display` on the console — which is the
+    // only way to find out *why* a panel is dim without waiting fifteen minutes
+    // in front of it. `upright` is the accelerometer's answer and the reason the
+    // blank does or does not happen.
+    ui::DisplayPower power = ui::DisplayPower::kFull;
+    uint32_t idle_ms = 0;
+    bool upright = false;
 };
 
 // Which physical button means what (§10.8.4). **Indices rather than pins**, and
@@ -177,8 +187,14 @@ struct Hardware {
     // and the way that stays true is that nothing on the approval path can see it.
     ::imu::Qmi8658 *motion = nullptr;
 
-    // The panel, for the touch test of §10.8.5 — **the only consumer in this
-    // firmware that reads it directly.** Everything else takes its touch through
+    // The panel, for the idle timer of §10.8.1: dimming and blanking are panel
+    // commands, and this component is the one that knows when. Null is a device
+    // whose display did not come up, which is a device that still answers the
+    // bus — so it is not an error, and nothing here checks for one.
+    ::display::Panel *panel = nullptr;
+
+    // The touch controller, for the touch test of §10.8.5 — **the only consumer
+    // in this firmware that reads it directly.** Everything else takes its touch through
     // LVGL, which has already applied the correction; a calibration built from
     // that would be measuring its own last answer.
     ::display::Touch *touch = nullptr;
@@ -189,6 +205,16 @@ struct Hardware {
 // answered, which is a device that still shows a request and still lets it time
 // out (§10.10).
 esp_err_t Init(const Hardware &hardware, const Keys &keys);
+
+// Re-read the display settings out of `config.json` and apply them now
+// (§10.8.1). Called by `main` at boot and by the console after a `config set` —
+// the narrowest thing that actually changed, which is the habit §10.9 arrived at
+// the hard way with `wifi check`.
+//
+// **It is not activity.** Typing a setting over USB is not somebody looking at
+// the screen, so a device that has been idle ten minutes with a fresh
+// `dimAfterSeconds` of sixty dims at once rather than waiting another ten.
+void ApplyDisplaySettings();
 
 // The file played when a card goes up. In the SPIFFS image (§10.15), not compiled
 // in — `speaker.h` argues why the firmware has no decoder.

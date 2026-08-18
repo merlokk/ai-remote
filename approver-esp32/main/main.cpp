@@ -291,6 +291,11 @@ extern "C" void app_main(void) {
             // And the panel itself, for the touch test (§10.8.5) — the one
             // caller that reads it uncorrected.
             hardware.touch = &board::Touch();
+            // And the panel, for the idle timer of §10.8.1: dimming after a
+            // quarter of an hour and — standing on its USB edge — going dark
+            // after twenty-five minutes are panel commands, and the screen task
+            // is what knows when nothing has happened for that long.
+            hardware.panel = &board::Display();
 
             const esp_err_t screens_err = screens::Init(hardware, keys);
             if (screens_err != ESP_OK) {

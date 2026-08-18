@@ -305,13 +305,17 @@ esp_err_t Parse(const char *json, Data *out) {
         CopyNumber(display, "brightness", 0, 100, &value);
         out->display.brightness = static_cast<uint8_t>(value);
 
-        value = out->display.dim_seconds;
-        CopyNumber(display, "dimSeconds", 0, 65535, &value);
-        out->display.dim_seconds = static_cast<uint16_t>(value);
+        value = out->display.dim_after_seconds;
+        CopyNumber(display, "dimAfterSeconds", 0, 65535, &value);
+        out->display.dim_after_seconds = static_cast<uint16_t>(value);
 
-        value = out->display.blank_seconds;
-        CopyNumber(display, "blankSeconds", 0, 65535, &value);
-        out->display.blank_seconds = static_cast<uint16_t>(value);
+        value = out->display.dim_percent;
+        CopyNumber(display, "dimPercent", 0, 100, &value);
+        out->display.dim_percent = static_cast<uint8_t>(value);
+
+        value = out->display.sleep_after_seconds;
+        CopyNumber(display, "sleepAfterSeconds", 0, 65535, &value);
+        out->display.sleep_after_seconds = static_cast<uint16_t>(value);
     }
 
     const cJSON *audio = cJSON_GetObjectItemCaseSensitive(root, "audio");
@@ -438,8 +442,9 @@ esp_err_t Serialise(const Data &in, size_t *length) {
     cJSON *display = cJSON_AddObjectToObject(root, "display");
     if (display != nullptr) {
         cJSON_AddNumberToObject(display, "brightness", in.display.brightness);
-        cJSON_AddNumberToObject(display, "dimSeconds", in.display.dim_seconds);
-        cJSON_AddNumberToObject(display, "blankSeconds", in.display.blank_seconds);
+        cJSON_AddNumberToObject(display, "dimAfterSeconds", in.display.dim_after_seconds);
+        cJSON_AddNumberToObject(display, "dimPercent", in.display.dim_percent);
+        cJSON_AddNumberToObject(display, "sleepAfterSeconds", in.display.sleep_after_seconds);
     }
 
     cJSON *audio = cJSON_AddObjectToObject(root, "audio");
@@ -569,8 +574,13 @@ void FillDefaults(Data *out) {
     out->time.sntp_server[0] = '\0';
     out->time.sync_hours = 6;
     out->display.brightness = 80;
-    out->display.dim_seconds = 30;
-    out->display.blank_seconds = 120;
+    // Fifteen minutes to dim and twenty-five to go dark, which are the owner's
+    // numbers. The second one only ever happens standing on the USB edge —
+    // `ui/idle_policy.h` argues that, and it is the reason a clock lying on a
+    // desk never blanks however long it is left.
+    out->display.dim_after_seconds = 900;
+    out->display.dim_percent = 30;
+    out->display.sleep_after_seconds = 1500;
     out->audio.volume_percent = 80;
 
     // No correction. A device that has never been calibrated reports the

@@ -15,6 +15,14 @@ lv_display_t *lv_display = nullptr;
 lv_indev_t *lv_pointer = nullptr;
 bool started = false;
 
+// The finger, for the idle timer (`lvgl_display.h` argues both of these). Read
+// from the screen task and written from the LVGL one — a 32-bit counter and two
+// bools on a single core, where the only failure a race could produce is a wake
+// one tick late.
+volatile uint32_t touch_activity = 0;
+volatile bool swallow_armed = false;
+volatile bool swallow_until_release = false;
+
 // **This panel only accepts even coordinates, and nothing says so out loud.**
 // A flush whose window starts or ends on an odd pixel is written to the wrong
 // place — the symptom is a screen that is almost right, torn by a column, and
@@ -45,10 +53,24 @@ void TouchReadCb(lv_indev_t *indev, lv_indev_data_t *data) {
     uint16_t x = 0;
     uint16_t y = 0;
     if (touch->Read(&x, &y)) {
+        // Counted before anything decides whether LVGL gets to see it: a
+        // swallowed press is still a person touching the glass, and the idle
+        // timer of §10.8.1 wakes on exactly that.
+        // Written out rather than `++`, which C++20 deprecates on a volatile:
+        // a read and a write, which is what this was always doing.
+        touch_activity = touch_activity + 1;
+        if (swallow_armed || swallow_until_release) {
+            swallow_until_release = true;
+            data->state = LV_INDEV_STATE_RELEASED;
+            return;
+        }
         data->point.x = x;
         data->point.y = y;
         data->state = LV_INDEV_STATE_PRESSED;
     } else {
+        // The latch clears on the release, not on the disarm, so the finger that
+        // woke the panel cannot be delivered to a widget a moment later.
+        swallow_until_release = false;
         // A released state on a missed read is correct rather than convenient:
         // LVGL treats a gap as a release, and inventing a held press out of a
         // bus timeout would be a press nobody made. §10.10's rule about never
@@ -274,6 +296,14 @@ esp_err_t Capture(CaptureSink sink, void *user, uint32_t timeout_ms) {
 }
 
 lv_display_t *LvglDisplay() { return lv_display; }
+
+uint32_t TouchActivity() { return touch_activity; }
+
+void SwallowTouch(bool armed) {
+    swallow_armed = armed;
+    // Disarming with a finger still down leaves `swallow_until_release` set, and
+    // the read callback is what clears it. Arming with none down costs nothing.
+}
 
 Lock::Lock(uint32_t timeout_ms) {
     if (!started && lv_display == nullptr) {
