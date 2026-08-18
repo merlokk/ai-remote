@@ -254,12 +254,21 @@ extern "C" void app_main(void) {
             keys.buttons = &board::Buttons();
             keys.allow = board::button::kBootIndex;
             keys.deny = board::button::kPwrIndex;
+            // And `KEY`, the free one (§10.1), which is what opens the settings
+            // list of §10.8.5 when it is held and presses a row when it is not.
+            keys.menu = board::button::kKeyIndex;
 
-            // The speaker is handed over here for the same reason the PMIC is: the
-            // screens have never heard of `board.h`, and this is the one file
-            // that knows both which codec is on the bus and what a card is.
-            const esp_err_t screens_err =
-                screens::Init(&board::Pmic(), keys, &board::Sound());
+            // The chips are handed over here for the same reason the buttons
+            // are: the screens have never heard of `board.h`, and this is the one
+            // file that knows both which codec is on the bus and what a card is.
+            // The IMU joins them for the status page of §10.8.5 — a readout and
+            // nothing else, which is §10.13's rule about it unchanged.
+            screens::Hardware hardware;
+            hardware.battery = &board::Pmic();
+            hardware.alert = &board::Sound();
+            hardware.motion = &board::Imu();
+
+            const esp_err_t screens_err = screens::Init(hardware, keys);
             if (screens_err != ESP_OK) {
                 ESP_LOGE(TAG, "screens not started: %s", esp_err_to_name(screens_err));
             } else {

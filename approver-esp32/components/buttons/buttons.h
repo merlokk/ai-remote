@@ -95,6 +95,46 @@ class Debounce {
     uint32_t changed_at_ms_ = 0;
 };
 
+// A press, once it is over — or, for a long one, the moment it becomes long.
+enum class Press : uint8_t {
+    kNone = 0,
+    kShort,  // released before the threshold
+    kLong,   // held to the threshold, reported **while the finger is still down**
+};
+
+// Short press or long press, on a button somebody else is already polling
+// (§10.8.5: `KEY` held two seconds opens settings, and a tap on it activates
+// what is selected). Fed the debounced level and a clock, like `Debounce` above
+// and for the same reason — it is the only part of this with a rule in it, and
+// §10.11 can run it with no board.
+//
+// **A long press fires at the threshold rather than at the release**, and that
+// is the decision inside this class. The operator is holding a button with no
+// feedback but the screen, so the screen has to change *while they are holding*
+// — a device that waits for the finger to come up is a device somebody keeps
+// holding, wondering. The release afterwards then reports nothing: one press is
+// one action, and a long press that also delivered a short one on the way out
+// would open settings and immediately press whatever it landed on.
+class PressLength {
+   public:
+    explicit constexpr PressLength(uint32_t long_ms) : long_ms_(long_ms) {}
+
+    // Call it every poll. Times are milliseconds and are only ever subtracted,
+    // so the ~49-day wrap is arithmetic rather than a case (`Debounce` above).
+    Press Update(bool pressed, uint32_t now_ms);
+
+    // How long the current press has been going, 0 when there is none. For a
+    // screen that wants to show the hold filling up rather than surprising
+    // somebody with it.
+    uint32_t HeldMs(uint32_t now_ms) const;
+
+   private:
+    uint32_t long_ms_;
+    bool down_ = false;
+    bool fired_ = false;  // this press has already been reported as long
+    uint32_t down_at_ms_ = 0;
+};
+
 class Buttons {
    public:
     Buttons() = default;

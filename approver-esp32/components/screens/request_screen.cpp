@@ -149,6 +149,14 @@ esp_err_t RequestScreen::Create(lv_obj_t *parent) {
     lv_obj_set_style_bg_opa(root_, LV_OPA_COVER, LV_PART_MAIN);
     lv_obj_add_flag(root_, LV_OBJ_FLAG_HIDDEN);
 
+    // **Clickable so that it swallows, not so that it answers.** §10.8.4: nothing
+    // on this card is touchable, and the settings list of §10.8.5 is the first
+    // screen with anything underneath worth hitting — an overlay that is not
+    // clickable is one LVGL hit-tests straight through, so a finger aimed at a
+    // card it could not answer would press a row on the screen behind it. There
+    // is no handler on this object: a press lands here and stops.
+    lv_obj_add_flag(root_, LV_OBJ_FLAG_CLICKABLE);
+
     card_ = Bare(root_, 0, 0, 480, 480);
     receipt_ = Bare(root_, 0, 0, 480, 480);
     if (card_ == nullptr || receipt_ == nullptr) {

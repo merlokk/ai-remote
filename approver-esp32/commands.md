@@ -196,6 +196,30 @@ words. `updates` next to the count of frames given up waiting for the display is
 the load figure: a number that climbs there means something else is holding
 LVGL — and `screenshot` below is the one thing that reliably makes it climb.
 
+### `screen [clock|settings|status|page|back]`
+Which screen is up — and, with a word, a way to move between them that is not a
+finger.
+
+    screen     settings
+    selected   wi-fi (row 1 of 4)
+    press      KEY, or tap the row - the console cannot press one
+    in         swipe up or hold KEY for 2 s; out is PWR or a swipe down
+
+**The second half is what earns it a place.** Every other screen can be checked
+from a script: `clock` prints what the face decided, `limits` prints the
+document, `request test` puts a card up. The settings list is the first one
+reached by a *gesture*, and a gesture cannot be sent down a serial port — so
+without this, "does the list come up, and does it look right" is a question only
+a hand can ask and `screenshot` has nothing to photograph.
+
+It goes through the same door a swipe does, so what it reaches is what the
+operator would reach: a request card still outranks it, and settings still
+cannot be opened from inside itself. `screen page` turns a status page, which is
+navigation rather than a press.
+
+**It cannot press a row**, deliberately: the rows are where `reboot` lives, and
+the console already has its own `reboot`. One route per surface.
+
 ### `screenshot`
 The frame itself, as base64, for `tools/screenshot.py` to turn into a PNG.
 Nothing here is meant to be read by a person.

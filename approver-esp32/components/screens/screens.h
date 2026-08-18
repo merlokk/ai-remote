@@ -33,6 +33,9 @@
 #include "clock_face.h"
 #include "esp_err.h"
 #include "limits_view.h"
+#include "navigator.h"
+#include "qmi8658.h"
+#include "settings_menu.h"
 #include "speaker.h"
 #include "request_card.h"
 
@@ -114,6 +117,14 @@ struct Keys {
     buttons::Buttons *buttons = nullptr;
     size_t allow = 0;
     size_t deny = 0;
+
+    // **`KEY`, the free one** (§10.1), and the only button on this board with no
+    // job in the approval path — which is exactly why the settings screen gets
+    // it. Held two seconds it opens the list from anywhere; tapped, it presses
+    // the selected row. Neither can reach a verdict: while a card is up this
+    // button does nothing at all, because navigation is gone and there is no row
+    // to press (§10.8.1).
+    size_t menu = 0;
 };
 
 // What the card is doing, for `request` on the console. A snapshot, like
@@ -145,15 +156,32 @@ struct CardStatus {
     uint16_t ignored = 0;
 };
 
-// Builds the screens on LVGL's active screen and starts the tasks. LVGL has to be
-// up already — `main` starts it — and a null `battery` is allowed: the icon then
-// says what it always says when there is nothing to ask. A null `keys.buttons`
-// is allowed too, and means the card cannot be answered — which is a device that
-// still shows a request and still lets it time out (§10.10).
+// The chips this screen reports on, handed over rather than reached for — this
+// component has never heard of `board.h`, and `main` is the one file that knows
+// both which codec is on the bus and what a card is (§10.14.2).
 //
-// `alert` may be null as well, and then a card arrives silently. Passed in rather
-// than reached for, like the PMIC: this component has never heard of `board.h`.
-esp_err_t Init(pmic::Axp2101 *battery, const Keys &keys, audio::Speaker *alert);
+// **Every one of them may be null**, and none of them is an error: no battery is
+// the icon saying what it always says when there is nothing to ask, no speaker is
+// a card that arrives silently, and no IMU is three rows of the status page
+// reading `not present`. A device whose panel came up and whose I²C bus did not
+// is still a clock.
+//
+// It grew from three loose pointers to a struct when the third arrived, which is
+// the point at which a positional argument list stops saying what it means.
+struct Hardware {
+    pmic::Axp2101 *battery = nullptr;
+    audio::Speaker *alert = nullptr;
+    // §10.13 gives the IMU no job, and this does not give it one: it is read for
+    // the status page and for nothing else. **No gesture ever approves anything**,
+    // and the way that stays true is that nothing on the approval path can see it.
+    ::imu::Qmi8658 *motion = nullptr;
+};
+
+// Builds the screens on LVGL's active screen and starts the tasks. LVGL has to be
+// up already — `main` starts it. A null `keys.buttons` means the card cannot be
+// answered, which is a device that still shows a request and still lets it time
+// out (§10.10).
+esp_err_t Init(const Hardware &hardware, const Keys &keys);
 
 // The file played when a card goes up. In the SPIFFS image (§10.15), not compiled
 // in — `speaker.h` argues why the firmware has no decoder.
@@ -256,5 +284,39 @@ void SetReceiptNote(const char *note);
 // It does not raise a screen, take focus, or move anything: §10.8.1's rule that
 // everything except a request card is quiet.
 void SetNotice(const char *text);
+
+// --- Settings and the status pages (§10.8.5) -----------------------------
+
+// What is up and where the operator is in it, for `screen` on the console — the
+// same kind of snapshot `Get`, `Card` and `Limits` are, and here it earns its
+// place twice over: this is the first screen in the firmware that is *touched*,
+// and a tap is the one input that cannot be sent down a serial port.
+struct MenuStatus {
+    bool ready = false;
+    ui::ScreenId screen = ui::ScreenId::kClock;
+    uint8_t selected = 0;
+    bool reboot_armed = false;
+    uint8_t status_page = 0;
+    uint8_t status_pages = 0;
+};
+
+MenuStatus Menu();
+
+// Drive the navigator from somewhere other than a finger. It is what the console
+// uses, and it goes through exactly the same door a gesture does — so a screen
+// reached this way is a screen reached the way the operator would reach it, and
+// the card still outranks it (§10.8.1).
+//
+// **It cannot press anything.** There is no way in from here to a row's action,
+// which keeps `reboot` on the settings screen a thing only a finger can do; the
+// console has its own `reboot`, and one route per surface is the rule §10.7 sets
+// for a command that ends the session it is typed into.
+bool Navigate(ui::Nav nav);
+
+// Turn to the next status page. False when that screen is not up. It is here
+// rather than behind `Navigate` because a page is not a screen — and it is
+// allowed at all, where pressing a row is not, because nothing on that screen
+// does anything: turning a page of a readout cannot reach an action.
+bool NextStatusPage();
 
 }  // namespace screens

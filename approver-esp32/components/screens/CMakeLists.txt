@@ -7,6 +7,7 @@
 # is empty so that the host tests can compile it (§10.11). An entry appearing
 # below is fine; a decision appearing in a file below is the sign that something
 # was put in the wrong component.
-idf_component_register(SRCS "clock_screen.cpp" "request_screen.cpp" "limits_screen.cpp" "screens.cpp"
+idf_component_register(SRCS "clock_screen.cpp" "request_screen.cpp" "limits_screen.cpp"
+                            "settings_screen.cpp" "status_screen.cpp" "screens.cpp"
                     INCLUDE_DIRS "."
-                    REQUIRES ui display pmic buttons audio wifimgr nats lvgl__lvgl)
+                    REQUIRES ui display pmic imu buttons audio wifimgr nats app_update lvgl__lvgl)

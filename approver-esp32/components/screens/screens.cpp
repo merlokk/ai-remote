@@ -1,6 +1,7 @@
 #include "screens.h"
 
 #include <cinttypes>
+#include <cstdarg>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
@@ -8,7 +9,10 @@
 #include "clock_face.h"
 #include "clock_screen.h"
 #include "limits_screen.h"
+#include "esp_app_desc.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_system.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -19,6 +23,8 @@
 #include "navigator.h"
 #include "request_card.h"
 #include "request_screen.h"
+#include "settings_screen.h"
+#include "status_screen.h"
 #include "wifi_manager.h"
 
 namespace screens {
@@ -42,6 +48,33 @@ ui::RequestCard g_card;
 LimitsScreen g_limits_screen;
 ui::LimitsView g_limits;
 
+// Settings and the status pages (§10.8.5). Same split as everything else here:
+// `ui::SettingsMenu` and `ui::StatusPager` decide and are host-tested, the two
+// screens paint and decide nothing.
+SettingsScreen g_settings_screen;
+ui::SettingsMenu g_menu;
+StatusScreen g_status_screen;
+ui::StatusPager g_pager;
+
+// **`KEY` held two seconds opens settings**, which is the operator's way in when
+// the panel is not being touched — and the reason the threshold and the
+// short/long split live in `buttons.h` rather than here is §10.11: this file
+// cannot be tested and that one can.
+constexpr uint32_t kSettingsHoldMs = 2000;
+buttons::PressLength g_key_hold(kSettingsHoldMs);
+
+// What a finger drew across the glass, recorded by an LVGL event callback and
+// read by the task. Both run under the display lock — the callback because
+// `lv_timer_handler` holds it while it dispatches, the task because it takes it
+// to paint — so the handoff needs no lock of its own, which is the same argument
+// the two screens' `TakeTap` makes.
+lv_dir_t g_gesture = LV_DIR_NONE;
+
+// Asked for from somewhere that is not a finger: the console (`screen`). It goes
+// through the same door a gesture does and is consumed on the next pass.
+ui::Nav g_pending_nav = ui::Nav::kBack;
+bool g_has_pending_nav = false;
+
 // **The navigator is kept in step with the card rather than owning the queue.**
 // §10.8.1 gives it the rule that navigation vanishes while a card is up, and it
 // deliberately does not hold the requests themselves ("a navigator that stored
@@ -50,6 +83,7 @@ ui::LimitsView g_limits;
 // the count in each is the same count, stepped in one place.
 ui::Navigator g_nav;
 
+Hardware g_hardware;
 pmic::Axp2101 *g_battery = nullptr;
 Keys g_keys;
 
@@ -185,6 +219,196 @@ void Gather(ui::ClockInputs *in, bool *battery_valid, pmic::Status *battery) {
     }
 }
 
+// --- The status pages (§10.8.5) ------------------------------------------
+//
+// The one place in this component that gathers rather than draws, which is the
+// job §10.8.1 leaves it: an I²C read never happens inside an LVGL callback, and
+// this runs on the screen task with that lock nowhere in sight.
+//
+// Every value is bounded by `kStatusValueSize` and none of them may run off the
+// right margin — a number read wrong is worse than a number missing, which is
+// the call §10.8.4 makes about a truncated command for much higher stakes.
+
+const char *ResetReasonName(esp_reset_reason_t reason) {
+    switch (reason) {
+        case ESP_RST_POWERON:
+            return "power on";
+        case ESP_RST_EXT:
+            return "reset pin";
+        case ESP_RST_SW:
+            return "software";
+        case ESP_RST_PANIC:
+            return "panic";
+        case ESP_RST_INT_WDT:
+            return "interrupt wdt";
+        case ESP_RST_TASK_WDT:
+            return "task wdt";
+        case ESP_RST_WDT:
+            return "other wdt";
+        case ESP_RST_DEEPSLEEP:
+            return "deep sleep";
+        case ESP_RST_BROWNOUT:
+            return "brownout";
+        case ESP_RST_SDIO:
+            return "sdio";
+        case ESP_RST_USB:
+            return "usb";
+        case ESP_RST_JTAG:
+            return "jtag";
+        default:
+            break;
+    }
+    return "unknown";
+}
+
+void Row(StatusFacts *facts, const char *label, const char *format, ...) {
+    if (facts->rows >= kStatusRows) {
+        return;
+    }
+    facts->label[facts->rows] = label;
+    va_list args;
+    va_start(args, format);
+    vsnprintf(facts->value[facts->rows], kStatusValueSize, format, args);
+    va_end(args);
+    ++facts->rows;
+}
+
+void FillPower(StatusFacts *facts, bool battery_valid, const pmic::Status &battery) {
+    facts->title = "power";
+    if (!battery_valid) {
+        Row(facts, "pmic", "not answering");
+        return;
+    }
+
+    if (battery.battery_present && battery.battery_percent >= 0) {
+        Row(facts, "battery", "%d%%, %u.%02u V", battery.battery_percent,
+            battery.battery_mv / 1000U, (battery.battery_mv % 1000U) / 10U);
+    } else if (battery.battery_present) {
+        Row(facts, "battery", "%u.%02u V", battery.battery_mv / 1000U,
+            (battery.battery_mv % 1000U) / 10U);
+    } else {
+        // §10.8.2's rule about a state that is not a fault: no cell on the
+        // connector is a board on a cable, not a battery at zero.
+        Row(facts, "battery", "none, on the cable");
+    }
+
+    const char *state = "idle";
+    if (battery.charging) {
+        state = "charging";
+    } else if (battery.discharging) {
+        state = "discharging";
+    } else if (!battery.battery_present) {
+        state = "no cell";
+    }
+    Row(facts, "charge", "%s", state);
+
+    if (battery.vbus_present) {
+        Row(facts, "usb", "in, %u.%02u V", battery.vbus_mv / 1000U,
+            (battery.vbus_mv % 1000U) / 10U);
+    } else {
+        Row(facts, "usb", "out");
+    }
+    Row(facts, "system", "%u.%02u V", battery.system_mv / 1000U,
+        (battery.system_mv % 1000U) / 10U);
+    Row(facts, "aldo2", "%u.%02u V %s", battery.aldo2_mv / 1000U,
+        (battery.aldo2_mv % 1000U) / 10U, battery.aldo2_enabled ? "on" : "off");
+    Row(facts, "aldo3", "%u.%02u V %s", battery.aldo3_mv / 1000U,
+        (battery.aldo3_mv % 1000U) / 10U, battery.aldo3_enabled ? "on" : "off");
+    Row(facts, "die", "%.1f C", static_cast<double>(battery.die_celsius));
+    // Why the board is awake at all — the chip's own answer (§10.1), which is a
+    // different question from why the firmware last restarted, one page along.
+    Row(facts, "awake", "%s", pmic::PowerOnSourceName(battery.power_on_source));
+}
+
+void FillSystem(StatusFacts *facts) {
+    facts->title = "system";
+
+    Row(facts, "restart", "%s", ResetReasonName(esp_reset_reason()));
+
+    const uint32_t seconds = static_cast<uint32_t>(esp_timer_get_time() / 1000000);
+    Row(facts, "uptime", "%ud %02uh %02um %02us", seconds / 86400U, (seconds % 86400U) / 3600U,
+        (seconds % 3600U) / 60U, seconds % 60U);
+
+    Row(facts, "heap", "%u free", static_cast<unsigned>(esp_get_free_heap_size()));
+    // **The low-water mark rather than the current free heap** (§10.14.1): the
+    // minimum ever seen is the number that says whether the device is safe.
+    Row(facts, "lowest", "%u",
+        static_cast<unsigned>(heap_caps_get_minimum_free_size(MALLOC_CAP_DEFAULT)));
+
+    const esp_app_desc_t *desc = esp_app_get_description();
+    Row(facts, "firmware", "%s", desc != nullptr ? desc->version : "?");
+
+    const wifimgr::Snapshot wifi = wifimgr::Get();
+    if (wifi.radio.ssid[0] != 0) {
+        Row(facts, "wifi", "%s %s", wifimgr::Name(wifi.state), wifi.radio.ssid);
+    } else {
+        Row(facts, "wifi", "%s", wifimgr::Name(wifi.state));
+    }
+    if (wifi.radio.link == wifi::Link::kConnected) {
+        Row(facts, "signal", "%d dBm, ch %u", static_cast<int>(wifi.radio.rssi),
+            static_cast<unsigned>(wifi.radio.channel));
+        Row(facts, "ip", "%u.%u.%u.%u", static_cast<unsigned>(wifi.radio.ip & 0xFF),
+            static_cast<unsigned>((wifi.radio.ip >> 8) & 0xFF),
+            static_cast<unsigned>((wifi.radio.ip >> 16) & 0xFF),
+            static_cast<unsigned>((wifi.radio.ip >> 24) & 0xFF));
+    }
+
+    const nats::Status bus = nats::Get();
+    const char *bus_text = "no server set";
+    if (bus.configured) {
+        bus_text = bus.state == nats::State::kConnected ? "connected" : "down";
+    }
+    Row(facts, "bus", "%s", bus_text);
+}
+
+void FillMotion(StatusFacts *facts) {
+    facts->title = "motion";
+    ::imu::Qmi8658 *motion = g_hardware.motion;
+    if (motion == nullptr || !motion->Present()) {
+        Row(facts, "imu", "not present");
+        return;
+    }
+
+    ::imu::Sample sample = {};
+    if (motion->Read(&sample) != ESP_OK) {
+        // A lease it could not get, or a chip that stopped answering. Saying so
+        // beats six zeros that read as a board lying perfectly flat.
+        Row(facts, "imu", "no reading");
+        return;
+    }
+
+    Row(facts, "accel x", "%+.3f g", static_cast<double>(sample.accel_g[0]));
+    Row(facts, "accel y", "%+.3f g", static_cast<double>(sample.accel_g[1]));
+    Row(facts, "accel z", "%+.3f g", static_cast<double>(sample.accel_g[2]));
+    // The one line that says the other three mean anything: at rest the vector is
+    // 1 g, and a range bit that did not take gives six believable numbers and the
+    // wrong magnitude (§10.7).
+    // `total` rather than `magnitude`, which is nine characters and one too many
+    // for the label column — see `status_screen.cpp`. Eight is the budget.
+    Row(facts, "total", "%.3f g of 1.000",
+        static_cast<double>(::imu::Qmi8658::Magnitude(sample)));
+    Row(facts, "gyro x", "%+.1f dps", static_cast<double>(sample.gyro_dps[0]));
+    Row(facts, "gyro y", "%+.1f dps", static_cast<double>(sample.gyro_dps[1]));
+    Row(facts, "gyro z", "%+.1f dps", static_cast<double>(sample.gyro_dps[2]));
+    Row(facts, "die", "%.1f C", static_cast<double>(sample.celsius));
+}
+
+void FillStatus(StatusFacts *facts, bool battery_valid, const pmic::Status &battery) {
+    switch (g_pager.Page()) {
+        case ui::StatusPage::kPower:
+            FillPower(facts, battery_valid, battery);
+            break;
+        case ui::StatusPage::kSystem:
+            FillSystem(facts);
+            break;
+        case ui::StatusPage::kMotion:
+            FillMotion(facts);
+            break;
+        case ui::StatusPage::kCount:
+            break;
+    }
+}
+
 // One decision, handed to whoever registered for it. **This is the seam §10.6 and
 // §7 took over**, and the shape of it is the point: nothing about this screen
 // changed when they did — no key, no subject and no signature appears in this
@@ -204,6 +428,99 @@ void Decided(const ui::Request &request, ui::Verdict verdict) {
     g_handler(request, verdict, g_handler_user);
 }
 
+// --- Getting around (§10.8.1, §10.8.5) -----------------------------------
+//
+// Three ways in and they all end at the same function, which is the point: the
+// navigator is the only thing that decides what is on the glass, and a gesture,
+// a button and a console command are three ways of asking it the same question.
+
+bool Apply(ui::Nav nav) {
+    const bool leaving_limits = g_nav.Screen() == ui::ScreenId::kLimits;
+    const bool moved = g_nav.Navigate(nav);
+    if (!moved) {
+        return false;
+    }
+    if (leaving_limits && nav == ui::Nav::kBack) {
+        // §10.8.3: a back out of the limits is also a dismissal, or the numbers
+        // arriving every few seconds would put the screen straight back.
+        g_limits.Dismissed();
+    }
+    if (g_nav.Screen() == ui::ScreenId::kSettings) {
+        // Arriving at the list clears whatever the last visit left armed and puts
+        // the selection at the top — `settings_menu.h` argues why.
+        g_menu.Opened();
+    }
+    if (g_nav.Screen() == ui::ScreenId::kStatus) {
+        g_pager.Reset();
+    }
+    return true;
+}
+
+// What LVGL says a finger drew. Recorded rather than acted on: this runs inside
+// the LVGL task, and §10.8.1 keeps every decision out of there.
+void ScreenGesture(lv_event_t *) {
+    lv_indev_t *indev = lv_indev_active();
+    if (indev != nullptr) {
+        g_gesture = lv_indev_get_gesture_dir(indev);
+    }
+}
+
+ui::Nav NavForGesture(lv_dir_t dir) {
+    switch (dir) {
+        case LV_DIR_TOP:
+            return ui::Nav::kSwipeUp;
+        case LV_DIR_LEFT:
+            return ui::Nav::kSwipeLeft;
+        case LV_DIR_RIGHT:
+            return ui::Nav::kSwipeRight;
+        case LV_DIR_BOTTOM:
+        default:
+            break;
+    }
+    // A swipe down is the way back out of everything a swipe up reached. It is
+    // not in the navigator's table as its own action because "back" is already
+    // that action, arriving by a different route.
+    return ui::Nav::kBack;
+}
+
+// **A restart asked for by a finger.** The console's `reboot` argues that no
+// confirmation is needed there because a reboot undoes itself in seconds; the
+// screen's answer is `settings_menu.h`'s, and by the time this runs the second
+// press has already happened. What is left is the part §10.7 found on the board:
+// the console is the C6's own USB Serial/JTAG port and it goes down with the
+// chip, so the line has to be flushed *and given a moment* or the operator sees
+// a console that died rather than one that answered.
+void RebootNow() {
+    ESP_LOGW(TAG, "reboot from the settings screen");
+    fflush(stdout);
+    vTaskDelay(pdMS_TO_TICKS(120));
+    esp_restart();
+}
+
+// One row's action, taken on the screen task and never in a callback.
+void Activated(uint32_t now_ms) {
+    switch (g_menu.Activate(now_ms)) {
+        case ui::SettingsAction::kOpenStatus:
+            Apply(ui::Nav::kOpenStatus);
+            break;
+        case ui::SettingsAction::kOpenWifi:
+            Apply(ui::Nav::kOpenWifi);
+            break;
+        case ui::SettingsAction::kReboot:
+            RebootNow();
+            break;
+        case ui::SettingsAction::kNotBuilt:
+            // The row already says `soon` on the glass, so this is for whoever is
+            // watching the log rather than the screen.
+            ESP_LOGI(TAG, "that row has no screen behind it yet");
+            break;
+        case ui::SettingsAction::kArmed:
+        case ui::SettingsAction::kOpenTouch:
+        case ui::SettingsAction::kNone:
+            break;
+    }
+}
+
 // The buttons, once per tick. **Edges only** — a level would mean a finger resting
 // on the allow button re-approving every card that arrived under it, and
 // §10.8.1's rule about a press that began before the card exists to stop exactly
@@ -215,11 +532,23 @@ void PollKeys(uint32_t now_ms) {
     }
 
     const bool card_up = g_card.State() == ui::CardState::kCard;
+    const ui::ScreenId screen = g_nav.Screen();
 
     if (g_keys.buttons->Poll(g_keys.allow) == buttons::Event::kPressed) {
         if (g_card.Press(ui::Verdict::kAllow, now_ms, &g_answered)) {
             g_nav.RequestAnswered();
             Decided(g_answered, ui::Verdict::kAllow);
+        } else if (!card_up) {
+            // **The same button steps a list when there is no card**, which is
+            // the whole of this device's second job: three buttons, and the one
+            // that means yes is also the one that means next. It cannot mean both
+            // at once, because a card up takes the branch above and §10.8.1 has
+            // already taken navigation away.
+            if (screen == ui::ScreenId::kSettings) {
+                g_menu.Next();
+            } else if (screen == ui::ScreenId::kStatus) {
+                g_pager.Next();
+            }
         }
     }
 
@@ -234,17 +563,28 @@ void PollKeys(uint32_t now_ms) {
                 Decided(g_answered, ui::Verdict::kDeny);
             }
         } else {
-            // Otherwise it is the way home — and from the limits screen that is
-            // also a **dismissal**: §10.8.3's numbers arrive every few seconds
-            // while a session is working, so a back that only changed the screen
-            // would be undone before the finger left the button. `Dismissed`
-            // makes it last until the stream goes quiet, which is the only
-            // reading in which the button does anything (`limits_view.h`).
-            const bool leaving_limits = g_nav.Screen() == ui::ScreenId::kLimits;
-            if (g_nav.Navigate(ui::Nav::kBack) && leaving_limits) {
-                g_limits.Dismissed();
-            }
+            // Otherwise it is the way back — one level at a time, and out of the
+            // limits screen it is also a dismissal (`Apply` says why).
+            Apply(ui::Nav::kBack);
         }
+    }
+
+    // **`KEY`: held, it opens the list; tapped, it presses the selected row.**
+    // The split is `buttons::PressLength`'s, where it is tested — and the long
+    // press fires while the finger is still down, because the operator is holding
+    // a button with no feedback but the screen.
+    g_keys.buttons->Poll(g_keys.menu);
+    const buttons::Press key = g_key_hold.Update(g_keys.buttons->Pressed(g_keys.menu), now_ms);
+    if (card_up) {
+        // Nothing at all, and it costs no branch of its own above: the navigator
+        // would refuse the long press anyway, and a short one must not press a
+        // row on a screen the operator cannot see.
+        return;
+    }
+    if (key == buttons::Press::kLong) {
+        Apply(ui::Nav::kSwipeUp);
+    } else if (key == buttons::Press::kShort && screen == ui::ScreenId::kSettings) {
+        Activated(now_ms);
     }
 }
 
@@ -281,6 +621,13 @@ void Task(void *) {
             g_nav.RequestExpired();
         }
         PollKeys(now_ms);
+
+        // Asked for from the console rather than by a finger. Consumed here so
+        // that it goes through exactly the door a gesture does.
+        if (g_has_pending_nav) {
+            g_has_pending_nav = false;
+            Apply(g_pending_nav);
+        }
 
         // Most ticks are a button poll and nothing else. A card that just changed
         // is drawn immediately rather than at the next face pass: an arrival, a
@@ -322,8 +669,45 @@ void Task(void *) {
             g_nav.LimitsWentQuiet();
         }
 
+        // **Gathered outside the lock, because one of these rows is an I²C
+        // read** (§10.8.1), and only while the screen showing them is up: the
+        // status page costs a bus transaction and the clock must not pay for it.
+        // The page travels with the facts — `status_screen.h` says why.
+        StatusFacts facts;
+        if (g_nav.Screen() == ui::ScreenId::kStatus) {
+            facts.page = g_pager.Index();
+            facts.page_count = ui::StatusPager::kPageCount;
+            FillStatus(&facts, battery_valid, battery);
+        }
+
         bool applied = false;
         if (display::Lock lock(kLockTimeoutMs); lock) {
+            // **What a finger did, taken under the same lock the callback that
+            // recorded it ran under** — which is what makes the handoff need no
+            // lock of its own. Acted on here rather than there: §10.8.1 keeps
+            // every decision off the LVGL task, and one of these ends in
+            // `esp_restart`.
+            if (g_settings_screen.TakeBack() || g_status_screen.TakeBack()) {
+                Apply(ui::Nav::kBack);
+            }
+            const uint8_t tapped = g_settings_screen.TakeTap();
+            if (tapped != SettingsScreen::kNoRow && g_nav.Screen() == ui::ScreenId::kSettings &&
+                !g_nav.RequestVisible()) {
+                // A tap is both the selection and the press, which is what
+                // `settings_menu.h` means when it says re-selecting the armed row
+                // must not disarm it.
+                g_menu.Select(tapped);
+                Activated(now_ms);
+            }
+            if (g_status_screen.TakeNext() && g_nav.Screen() == ui::ScreenId::kStatus) {
+                g_pager.Next();
+            }
+            if (g_gesture != LV_DIR_NONE) {
+                const lv_dir_t drawn = g_gesture;
+                g_gesture = LV_DIR_NONE;
+                Apply(NavForGesture(drawn));
+            }
+
             g_clock.SetDate(date);
             g_clock.SetNotice(view.notice ? g_notice : "");
             g_clock.Apply(view);
@@ -331,9 +715,15 @@ void Task(void *) {
             // Which of the two full-screen objects is up is the navigator's
             // answer, and applying it is the twenty lines `navigator.h` promised
             // somebody else would write.
-            const bool limits_up = g_nav.Screen() == ui::ScreenId::kLimits;
-            g_clock.SetVisible(!limits_up);
-            g_limits_screen.SetVisible(limits_up);
+            const ui::ScreenId up = g_nav.Screen();
+            g_clock.SetVisible(up == ui::ScreenId::kClock);
+            g_limits_screen.SetVisible(up == ui::ScreenId::kLimits);
+            g_settings_screen.SetVisible(up == ui::ScreenId::kSettings);
+            g_status_screen.SetVisible(up == ui::ScreenId::kStatus);
+            g_settings_screen.Apply(g_menu, now_ms);
+            if (up == ui::ScreenId::kStatus) {
+                g_status_screen.Apply(facts);
+            }
             // The epoch, or 0 when it is not believable — which is what decides
             // whether a countdown is computed here or taken from what the
             // publisher resolved (§10.8.3).
@@ -354,7 +744,7 @@ void Task(void *) {
 
 }  // namespace
 
-esp_err_t Init(pmic::Axp2101 *battery, const Keys &keys, audio::Speaker *alert) {
+esp_err_t Init(const Hardware &hardware, const Keys &keys) {
     if (g_handle != nullptr) {
         return ESP_OK;
     }
@@ -366,9 +756,10 @@ esp_err_t Init(pmic::Axp2101 *battery, const Keys &keys, audio::Speaker *alert) 
         return ESP_ERR_INVALID_STATE;
     }
 
-    g_battery = battery;
+    g_hardware = hardware;
+    g_battery = hardware.battery;
     g_keys = keys;
-    g_alert = alert;
+    g_alert = hardware.alert;
 
     if (g_lock == nullptr) {
         g_lock = xSemaphoreCreateMutexStatic(&g_lock_storage);
@@ -403,6 +794,19 @@ esp_err_t Init(pmic::Axp2101 *battery, const Keys &keys, audio::Speaker *alert) 
             return limits;
         }
 
+        // The two of §10.8.5, still under the card and over nothing: exactly one
+        // full-screen object is visible and the navigator is what picks it.
+        const esp_err_t settings = g_settings_screen.Create(screen);
+        if (settings != ESP_OK) {
+            ESP_LOGE(TAG, "settings not built: %s", esp_err_to_name(settings));
+            return settings;
+        }
+        const esp_err_t status = g_status_screen.Create(screen);
+        if (status != ESP_OK) {
+            ESP_LOGE(TAG, "status not built: %s", esp_err_to_name(status));
+            return status;
+        }
+
         // After the clock, so it is the later sibling and therefore the one LVGL
         // draws on top (§10.8.1: the card outranks everything).
         const esp_err_t card = g_request_screen.Create(screen);
@@ -410,6 +814,16 @@ esp_err_t Init(pmic::Axp2101 *battery, const Keys &keys, audio::Speaker *alert) 
             ESP_LOGE(TAG, "request card not built: %s", esp_err_to_name(card));
             return card;
         }
+
+        // **The gesture lands on the screen object, not on ours.** LVGL sends
+        // `LV_EVENT_GESTURE` to whatever clickable object the press started on;
+        // our full-screen roots are deliberately not clickable, so a swipe over
+        // any of them finds the screen underneath — which is the one place a
+        // handler belongs, because a swipe is about *which* screen rather than
+        // about the one it started on. The rows of the settings list are
+        // clickable and therefore swallow gestures, which is exactly right:
+        // §10.8.1 forbids swipe navigation on that screen anyway.
+        lv_obj_add_event_cb(screen, ScreenGesture, LV_EVENT_GESTURE, nullptr);
     }
 
     // The chirp's task, before the screen task: a card cannot go up until the
@@ -546,6 +960,56 @@ void SetReceiptNote(const char *note) {
     // the one string on this screen where a short version still says the true
     // thing, and the alternative to truncating is a receipt with nothing on it.
     std::snprintf(g_note, sizeof g_note, "%s", note);
+}
+
+MenuStatus Menu() {
+    MenuStatus out;
+    if (g_handle == nullptr || g_lock == nullptr) {
+        return out;
+    }
+    if (xSemaphoreTake(g_lock, pdMS_TO_TICKS(50)) != pdTRUE) {
+        return out;
+    }
+    out.ready = true;
+    out.screen = g_nav.Screen();
+    out.selected = g_menu.Selected();
+    out.reboot_armed = g_menu.RebootArmed(static_cast<uint32_t>(esp_timer_get_time() / 1000));
+    out.status_page = g_pager.Index();
+    out.status_pages = ui::StatusPager::kPageCount;
+    xSemaphoreGive(g_lock);
+    return out;
+}
+
+bool Navigate(ui::Nav nav) {
+    if (g_handle == nullptr) {
+        return false;
+    }
+    // Queued rather than applied, so that the navigator is only ever moved by the
+    // one task that owns it — the same reason a tap is recorded and not acted on.
+    g_pending_nav = nav;
+    g_has_pending_nav = true;
+
+    // **And waited for, because there is one slot and callers chain.** Reaching
+    // the status pages is "up, then open" — two moves — and a second call that
+    // overwrote the first before the task had seen it would silently perform
+    // only the last one. Found on the board: `screen status` from the limits
+    // screen did nothing at all, twice, and the readout printed afterwards was
+    // the honest answer to a question nobody had asked.
+    //
+    // Bounded, and a timeout is not an error worth a branch: the caller reads
+    // the screen back afterwards, which is a better answer than this one.
+    for (int waited = 0; g_has_pending_nav && waited < 20; ++waited) {
+        vTaskDelay(pdMS_TO_TICKS(kTickMs));
+    }
+    return !g_has_pending_nav;
+}
+
+bool NextStatusPage() {
+    if (g_handle == nullptr || g_nav.Screen() != ui::ScreenId::kStatus) {
+        return false;
+    }
+    g_pager.Next();
+    return true;
 }
 
 void SetNotice(const char *text) {

@@ -2191,6 +2191,134 @@ int CmdForget(int argc, char **argv) {
     return 0;
 }
 
+// `screen` (CLAUDE.md §10.8.1, §10.8.5) — which screen is up, and a way to move
+// between them that is not a finger.
+//
+// **The second half is what earns this command its place.** Every other screen
+// in this firmware can be checked from a script: `clock` prints what the face
+// decided, `limits` prints the document, `request test` puts a card up. The
+// settings list is the first one that is reached by a *gesture*, and a gesture
+// is the one input that cannot be sent down a serial port — so without this,
+// "does the list come up, and does it look right" is a question only a hand can
+// ask, and `screenshot` has nothing to photograph.
+//
+// It goes through `screens::Navigate`, which is the same door a swipe uses, so
+// what it reaches is what the operator would reach: the card still outranks it
+// (§10.8.1), and settings still cannot be entered from the Wi-Fi screen.
+//
+// **It cannot press a row**, deliberately. The rows are where `reboot` lives,
+// and §10.7's rule is one route per surface: the console already has its own
+// `reboot`, and a second one reached by driving somebody else's screen would be
+// the kind of remote control §10.10 spends its words keeping off this device.
+void PrintScreenUsage(void) {
+    printf("usage: screen                which screen is up\n");
+    printf("       screen clock          go home\n");
+    printf("       screen settings       the settings list\n");
+    printf("       screen status         the status pages, inside settings\n");
+    printf("       screen page           the next status page\n");
+    printf("       screen back           up one level\n");
+    printf("it moves between screens the way a swipe does, and cannot press a row\n");
+}
+
+const char *ScreenName(ui::ScreenId screen) {
+    switch (screen) {
+        case ui::ScreenId::kClock:
+            return "clock";
+        case ui::ScreenId::kLimits:
+            return "limits";
+        case ui::ScreenId::kSettings:
+            return "settings";
+        case ui::ScreenId::kStatus:
+            return "status";
+        case ui::ScreenId::kWifi:
+            return "wi-fi";
+        case ui::ScreenId::kCount:
+            break;
+    }
+    return "?";
+}
+
+const char *MenuRowName(uint8_t row) {
+    switch (static_cast<ui::SettingsEntry>(row)) {
+        case ui::SettingsEntry::kWifi:
+            return "wi-fi";
+        case ui::SettingsEntry::kStatus:
+            return "status";
+        case ui::SettingsEntry::kTouch:
+            return "touch test";
+        case ui::SettingsEntry::kReboot:
+            return "reboot";
+        case ui::SettingsEntry::kCount:
+            break;
+    }
+    return "?";
+}
+
+int CmdScreen(int argc, char **argv) {
+    if (argc > 2) {
+        printf("screen takes one word, got %d\n", argc - 1);
+        PrintScreenUsage();
+        return 1;
+    }
+
+    const screens::MenuStatus menu = screens::Menu();
+    if (!menu.ready) {
+        printf("screen     not running - the panel or LVGL did not come up\n");
+        return 1;
+    }
+
+    if (argc == 2) {
+        const char *where = argv[1];
+        if (strcmp(where, "clock") == 0) {
+            // From two levels down that is two backs, so it is spelled as one.
+            screens::Navigate(ui::Nav::kBack);
+            screens::Navigate(ui::Nav::kBack);
+        } else if (strcmp(where, "settings") == 0) {
+            screens::Navigate(ui::Nav::kSwipeUp);
+        } else if (strcmp(where, "status") == 0) {
+            screens::Navigate(ui::Nav::kSwipeUp);
+            screens::Navigate(ui::Nav::kOpenStatus);
+        } else if (strcmp(where, "back") == 0) {
+            screens::Navigate(ui::Nav::kBack);
+        } else if (strcmp(where, "page") == 0) {
+            // **Paging is navigation, not a press.** The rule this command
+            // keeps is that it cannot reach a row's action - and turning a
+            // page of a readout is not one: nothing on the status screen
+            // does anything at all.
+            if (!screens::NextStatusPage()) {
+                printf("the status screen is not up\n");
+                return 1;
+            }
+        } else if (strcmp(where, "help") == 0) {
+            PrintScreenUsage();
+            return 0;
+        } else {
+            printf("no such screen as '%s'\n", where);
+            PrintScreenUsage();
+            return 1;
+        }
+        // `screens::Navigate` waits for the task to take each move, so a chain
+        // of them has already happened by the time we get here — which is what
+        // makes the readout below the answer rather than the question.
+    }
+
+    const screens::MenuStatus now = screens::Menu();
+    printf("screen     %s\n", ScreenName(now.screen));
+    if (now.screen == ui::ScreenId::kSettings) {
+        printf("selected   %s (row %u of %u)%s\n", MenuRowName(now.selected),
+               static_cast<unsigned>(now.selected + 1),
+               static_cast<unsigned>(ui::SettingsMenu::kEntryCount),
+               now.reboot_armed ? ", reboot is asking for a second press" : "");
+        printf("press      KEY, or tap the row - the console cannot press one\n");
+    } else if (now.screen == ui::ScreenId::kStatus) {
+        printf("page       %u of %u - BOOT, or tap the body\n",
+               static_cast<unsigned>(now.status_page + 1),
+               static_cast<unsigned>(now.status_pages));
+    }
+    printf("in         swipe up or hold KEY for 2 s; out is PWR or a swipe down\n");
+    return 0;
+}
+
 // The limits of §10.8.3 — what the last `status` document said, and whether the
 // screen is up. **A readout of a readout**, which is the whole of this screen's
 // job: nothing here can be acted on and nothing here reaches a responder.
@@ -2951,7 +3079,7 @@ int CmdDevStatus(int argc, char **) {
         // silence from the other end.
         {"keys", &CmdKeys},
         // And the readout that is only a readout (§10.8.3).
-        {"limits", &CmdLimits},
+        {"limits", &CmdLimits},   {"screen", &CmdScreen},
     };
 
     bool first = true;
@@ -3107,6 +3235,15 @@ const esp_console_cmd_t kCommands[] = {
         .help = "drop the registration and the pinned handler key (needs a new token after)",
         .hint = "now",
         .func = &CmdForget,
+        .argtable = nullptr,
+        .func_w_context = nullptr,
+        .context = nullptr,
+    },
+    {
+        .command = "screen",
+        .help = "which screen is up, and move between them the way a swipe does",
+        .hint = "[clock|settings|status|page|back]",
+        .func = &CmdScreen,
         .argtable = nullptr,
         .func_w_context = nullptr,
         .context = nullptr,

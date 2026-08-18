@@ -121,6 +121,32 @@ uint32_t Buttons::StableMs(size_t index) const {
     return Valid(index) ? state_[index].StableMs(NowMs()) : 0;
 }
 
+Press PressLength::Update(bool pressed, uint32_t now_ms) {
+    if (pressed) {
+        if (!down_) {
+            down_ = true;
+            fired_ = false;
+            down_at_ms_ = now_ms;
+        }
+        if (!fired_ && (now_ms - down_at_ms_) >= long_ms_) {
+            fired_ = true;
+            return Press::kLong;
+        }
+        return Press::kNone;
+    }
+
+    // Released. A press already reported as long says nothing on the way out —
+    // see the header: one press, one action.
+    const bool was_short = down_ && !fired_;
+    down_ = false;
+    fired_ = false;
+    return was_short ? Press::kShort : Press::kNone;
+}
+
+uint32_t PressLength::HeldMs(uint32_t now_ms) const {
+    return down_ ? now_ms - down_at_ms_ : 0;
+}
+
 bool Buttons::HeldFor(size_t index, uint32_t hold_ms) {
     if (!Valid(index)) {
         return false;

@@ -25,11 +25,24 @@ bool Navigator::Navigate(Nav nav) {
             break;
 
         case ScreenId::kLimits:
-            // Back the way it came. **No swipe-up to settings from here**:
-            // §10.8.5 puts the gear on the clock, and one way in is one place
-            // to look when it is not where it was expected.
             if (nav == Nav::kSwipeLeft || nav == Nav::kSwipeRight || nav == Nav::kBack) {
                 screen_ = ScreenId::kClock;
+            } else if (nav == Nav::kSwipeUp || nav == Nav::kGear) {
+                // **This used to be refused, and the board is what changed it.**
+                // The rule was "one way in is one place to look": §10.8.5 puts
+                // the gear on the clock, so settings was reachable from the clock
+                // and from nowhere else. That held while the limits screen was
+                // something the operator swiped to — and §10.8.3 made it a screen
+                // that **arrives**, every few seconds, for as long as a session is
+                // spending. So a device left on the desk while Claude Code works
+                // is a device parked on the one screen with no way into settings,
+                // and the gesture that opens them does nothing.
+                //
+                // Found by trying to reach the settings list on a board that was
+                // watching this very repository's status line. It is the same
+                // action reaching the same place, so it is not a second way in;
+                // what changed is that the first one stopped being reachable.
+                screen_ = ScreenId::kSettings;
             }
             break;
 
@@ -44,6 +57,20 @@ bool Navigator::Navigate(Nav nav) {
                 screen_ = ScreenId::kClock;
             } else if (nav == Nav::kOpenWifi) {
                 screen_ = ScreenId::kWifi;
+            } else if (nav == Nav::kOpenStatus) {
+                screen_ = ScreenId::kStatus;
+            }
+            break;
+
+        case ScreenId::kStatus:
+            // **A readout, and therefore swipeless for the reason settings is
+            // not**: this one is paged, and the page is `BOOT` rather than a
+            // gesture, so that a finger dragged across a wall of numbers moves
+            // nothing at all. `kBack` goes up one level rather than home —
+            // dropping the operator to the clock from two levels down is the
+            // "forget this screen exists" the Wi-Fi row below already refuses.
+            if (nav == Nav::kBack) {
+                screen_ = ScreenId::kSettings;
             }
             break;
 

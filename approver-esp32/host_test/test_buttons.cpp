@@ -357,6 +357,71 @@ void test_buttons_held_for_on_a_bad_index_is_false(void) {
     TEST_ASSERT_FALSE(keys.HeldFor(99, 5000));
 }
 
+// --- Short press or long press (§10.8.5) ---------------------------------
+
+void test_a_press_released_early_is_a_short_one(void) {
+    buttons::PressLength key(2000);
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(buttons::Press::kNone),
+                          static_cast<int>(key.Update(true, 1000)));
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(buttons::Press::kNone),
+                          static_cast<int>(key.Update(true, 2500)));
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(buttons::Press::kShort),
+                          static_cast<int>(key.Update(false, 2900)));
+}
+
+void test_a_long_press_fires_while_the_finger_is_still_down(void) {
+    // The decision this class exists for: the operator is holding a button with
+    // no feedback but the screen, so the screen has to change under their finger
+    // rather than when they give up and let go.
+    buttons::PressLength key(2000);
+    key.Update(true, 1000);
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(buttons::Press::kNone),
+                          static_cast<int>(key.Update(true, 2999)));
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(buttons::Press::kLong),
+                          static_cast<int>(key.Update(true, 3000)));
+}
+
+void test_a_long_press_fires_once_and_the_release_says_nothing(void) {
+    // Otherwise one press would open settings and then immediately activate
+    // whatever row it landed on.
+    buttons::PressLength key(2000);
+    key.Update(true, 1000);
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(buttons::Press::kLong),
+                          static_cast<int>(key.Update(true, 3000)));
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(buttons::Press::kNone),
+                          static_cast<int>(key.Update(true, 4000)));
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(buttons::Press::kNone),
+                          static_cast<int>(key.Update(false, 5000)));
+}
+
+void test_the_next_press_after_a_long_one_starts_over(void) {
+    buttons::PressLength key(2000);
+    key.Update(true, 1000);
+    key.Update(true, 3000);
+    key.Update(false, 3100);
+
+    key.Update(true, 4000);
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(buttons::Press::kShort),
+                          static_cast<int>(key.Update(false, 4200)));
+}
+
+void test_a_button_nobody_is_touching_reports_nothing(void) {
+    buttons::PressLength key(2000);
+    for (uint32_t t = 0; t < 10000; t += 20) {
+        TEST_ASSERT_EQUAL_INT(static_cast<int>(buttons::Press::kNone),
+                              static_cast<int>(key.Update(false, t)));
+    }
+    TEST_ASSERT_EQUAL_UINT32(0, key.HeldMs(10000));
+}
+
+void test_the_hold_is_measured_across_the_millisecond_wrap(void) {
+    buttons::PressLength key(2000);
+    key.Update(true, 0xFFFFFF00u);
+    TEST_ASSERT_EQUAL_UINT32(656, key.HeldMs(400));
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(buttons::Press::kLong),
+                          static_cast<int>(key.Update(true, 0xFFFFFF00u + 2000)));
+}
+
 void RegisterButtonsTests(void) {
     RUN_TEST(test_debounce_adopts_a_level_without_reporting_an_edge);
     RUN_TEST(test_debounce_waits_out_the_window_before_believing_a_press);
@@ -380,4 +445,11 @@ void RegisterButtonsTests(void) {
     RUN_TEST(test_buttons_held_for_gives_up_the_moment_it_is_released);
     RUN_TEST(test_buttons_held_for_is_false_when_nothing_was_pressed);
     RUN_TEST(test_buttons_held_for_on_a_bad_index_is_false);
+
+    RUN_TEST(test_a_press_released_early_is_a_short_one);
+    RUN_TEST(test_a_long_press_fires_while_the_finger_is_still_down);
+    RUN_TEST(test_a_long_press_fires_once_and_the_release_says_nothing);
+    RUN_TEST(test_the_next_press_after_a_long_one_starts_over);
+    RUN_TEST(test_a_button_nobody_is_touching_reports_nothing);
+    RUN_TEST(test_the_hold_is_measured_across_the_millisecond_wrap);
 }

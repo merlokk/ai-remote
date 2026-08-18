@@ -44,17 +44,20 @@ Wi-Fi radio with a manager above it, the clock and its SNTP half — a console o
 the USB port with a command per piece of it ([`commands.md`](commands.md) is the
 list), the bus, an Ed25519 identity (§10.6) and a registration (§10.7).
 
-Above it, three of §10.8's five screens: the clock, the limits that come up on
-their own while a session is spending, and the request card over both.
+Above it, five of §10.8's six screens: the clock, the limits that come up on
+their own while a session is spending, the request card over both, the settings
+list — reached by a swipe up or by holding `KEY` — and the three status pages
+behind it.
 
-What is **not** done, and the table below is row by row about it: settings and
-Wi-Fi, so a swipe still has nowhere to go; and §10.6's key custody shipped as its
+What is **not** done, and the table below is row by row about it: the Wi-Fi
+screen (§10.8.6) and the touch test, both of which are rows on the settings list
+drawn faint with `soon` next to them; and §10.6's key custody shipped as its
 *fallback* — the seed is in unencrypted NVS rather than behind an eFuse, which is
 a decision with a cost that section states in a table of its own.
 
 | Scope | State |
 |-------|-------|
-| The design below — the protocol roles (§10.2), key custody (§10.6), registration (§10.7), the screens (§10.8) | **mostly implemented now**, and the rows below say which parts. What is left as design-only is three screens (§10.8.3, §10.8.5, §10.8.6) and the eFuse half of §10.6 |
+| The design below — the protocol roles (§10.2), key custody (§10.6), registration (§10.7), the screens (§10.8) | **mostly implemented now**, and the rows below say which parts. What is left as design-only is one screen (§10.8.6), the touch test next to it on the list, and the eFuse half of §10.6 |
 | The project skeleton — `CMakeLists.txt`, `main/main.cpp`, `sdkconfig.defaults`, `partitions.csv` (§10.12) | **generated and building** on ESP-IDF v6.0.2; two 2.5 MB OTA slots, ~10.9 MB `storage`, `nvs_keys` reserved |
 | The pin map — `components/boards/board.h` (§10.1) | **written**, from Waveshare's own pinout sheet in `docs/`; logged at boot. Every driver below is *handed* its pins from here rather than including this file, which is §10.14.3's rule and what keeps the drivers testable on the host |
 | SPIFFS mounted + the console — `components/storage`, `components/cli` (§10.7, §10.15) | **running on hardware**: flashed over COM4, and the console answers on the USB Serial/JTAG port — [`commands.md`](commands.md) is what it knows, and `devstatus` is all of it at once |
@@ -68,7 +71,7 @@ a decision with a cost that section states in a table of its own.
 | Named time zones — `components/timezone` (§10.8.2) | **running on hardware**: 72 zones compiled in, `Europe/Kyiv` or plain `EET` rather than a POSIX rule, applied at boot from `config.json`. The clock stays UTC; a zone only changes what is printed and how a typed time is read |
 | AXP2101 — `components/pmic`, brought up from `board::Init()` (§10.1, §10.13) | **configured and reading on hardware**: TS pin silenced, ADC channels, VBUS limit, rail voltages, charge currents — all cross-checked against the vendor's `pmicpower` component — plus `SetAldo2`/`SetAldo3` for the audio and panel rails |
 | The panel and the touch — `components/display` (§10.1, §10.8) | **lit on hardware**: the CO5300 over QSPI with the vendor's init sequence, its reset driven as a PMIC rail through a callback, the CST9220 read under the I²C lease, and LVGL 9.4 on two 480×40 buffers. `display` on the console. The placeholder it used to carry is gone: what is on the glass now is the clock of §10.8.2, two rows below |
-| The navigation state machine — `components/ui` (§10.8.1) | **written and tested on the host**: which screen is up, the request card outranking everything, the bounded pending queue. Its header includes `<cstdint>` and nothing else and its `CMakeLists.txt` has an empty `REQUIRES`, which together are what make it testable without a board |
+| The navigation state machine — `components/ui` (§10.8.1) | **wired to real input now**: which screen is up, the request card outranking everything, the bounded pending queue — and three ways to move between screens that all end at one function (a swipe through LVGL's own gesture, `KEY` held or tapped, and `screen` on the console). Its header includes `<cstdint>` and nothing else and its `CMakeLists.txt` has an empty `REQUIRES`, which together are what make it testable without a board. **One rule of it changed on the board** (§10.8.5): settings is reachable from the limits screen as well, because that screen arrives on its own and was otherwise a dead end |
 | The boot splash — `spiffs_image/splash.bin`, `components/display/rawimage` (§10.8) | **running on hardware**: white katakana, on the glass for two seconds before LVGL owns it. Generated on the host by `tools/make-splash.ps1`, streamed off SPIFFS as raw RGB565 with no decoder |
 | The language and the layering (§10.14) — C++ except where C is forced, no dynamic memory, library layer before logic, the I²C bus leased | **decided, and what is written follows it**: every component below is C++, none of them contains a `new`, a `malloc`, a `std::vector` or a `std::function`, the tasks and their stacks are static, and nothing outside `components/i2cbus` touches `i2c_master_*`. What is still undemonstrated is the half that has no code: `main/` composing the logic rather than drawing a placeholder |
 | The ESP-IDF dependency set (§10.4) — LVGL + `esp_lvgl_port`, the CO5300/CST9220 drivers, libsodium for Ed25519, `debsahu/espidf-nats` for the bus | **signed off** (root §1). The display half is **resolved and building**: LVGL 9.4.0, `esp_lvgl_port` 2.9.0, `esp_lcd_sh8601` 2.0.1, `waveshare/esp_lcd_touch_cst9217` 1.0.4 — two of which are not the names §10.4 guessed, see below. The **NATS client is resolved and running**: `debsahu/espidf-nats` 1.4.0, which drags `espressif/esp_websocket_client` 1.8.0 in behind it — a transitive component root §1 asks about, and the one thing on this list nobody signed off in advance. **libsodium is resolved and has signed on the board**: `espressif/libsodium` 1.0.22~1, no transitive component at all, and a signature that matches `lib/crypto.py` byte for byte — §10.4 has the numbers and §10.6 what the check settled. So the whole of §10.4's list is now resolved, and none of it is paper |
@@ -79,17 +82,18 @@ a decision with a cost that section states in a table of its own.
 | Firmware: the key and the signing bytes (§10.2, §10.6) — `components/crypto`, `components/protocol` | **written, and the key signs on the board**: the boot self-test passes both halves, the identity is derived and survives a reboot, `keys` is on the console, and a signature this board made verifies under `lib/crypto.py`. §7's signing bytes are assembled and host-tested against Python's own output (14 tests, 7 of 7 mutations caught). **On §10.6's fallback, not its design** — no eFuse key is burned, so the seed is in unencrypted NVS and that section's table has the row that says what it costs |
 | Firmware: registration (§6, §10.7) — `components/registration`, `components/protocol` | **done, against the real handler**: `register <token>` on the console runs §6 verbatim — a nonce made after the radio is up, a private inbox, the handler's signature verified **before** a single field of the reply is read, and `registration.json` written only on a verified `ok:true`. On the board: registered, survived a reboot, refused a spent token, and **refused a perfectly valid `ok:true` signed by a handler it is not pinned to** — with the file unchanged every time. 25 host tests |
 | Firmware: the loop (§7) — `components/responder`, `components/protocol` | **closed**: `approvals.*` in the queue group `approvers`, parsed, on the glass, and a press signed and published into the request's own reply subject. It subscribes only when it has a key, a registration **and** a connection, so a device that cannot answer never takes a request from a responder that can. On the board: a request built by `hook.build_request` arrived and showed the command whole. 19 host tests over the wire format |
-| The five screens — clock, limits, request, settings, Wi-Fi (§10.8) | **three of five running**: the clock face (§10.8.2), the limits (§10.8.3) and the request card (§10.8.4), all on the board. Settings and Wi-Fi are specified and not started |
+| The screens — clock, limits, request, settings, status, Wi-Fi (§10.8) | **five of six running**: the clock face (§10.8.2), the limits (§10.8.3), the request card (§10.8.4), the settings list and the status pages (§10.8.5), all on the board. The Wi-Fi screen is specified and not started, and is a row on that list saying `soon` |
 | The request card — `components/ui/request_card.*` + `components/screens/request_screen.*` (§10.8.4) | **running on hardware**: §7's fields in a bounded queue of four, the tool and the command as the heaviest thing on the glass, a countdown that is the hook's rather than the device's, `+N waiting`, and a receipt afterwards that distinguishes a verdict from a card nobody answered. **Answered by the buttons** — `BOOT` allows, `PWR` denies and doubles as the way back to the clock — with §10.8.1's queued-touch guard in the shape a press has. Nothing on it is touchable, deliberately. The deciding half is `<cstdint>`-only and host-tested (23 tests, 16 of 16 mutations caught). **And now a bus behind it**: `components/responder` subscribes when it can actually answer, and `request test` is still there for when it cannot |
 | The clock face — `components/ui/clock_face.*` + `components/screens` (§10.8.2) | **running on hardware**: 24-hour seven-segment digits filled by a travelling wave, three indicators to the left of them (radio, bus, battery), the date under them, and the whole face drifting ±30/±40 px because the panel is an AMOLED. `--:--` rather than a plausible midnight when no believable time has arrived. `clock` on the console prints what is on the glass and why — which is how the drift and the water are checked without a camera. The deciding half is `<cstdint>`-only and host-tested (35 tests, 16 of 16 mutations caught); the painting half is LVGL and is the only file in the firmware that draws anything. It carries §10.15's one-line notice as well, under the date and for thirty seconds |
 | The Wi-Fi driver — `components/wifi` (§10.9) | **running on hardware**: two modes (access point, client), one network at a time, a latched link state, a disconnection reason turned into the three answers a person can act on, and a scan that works in both modes. It has **no opinions** — which network and when is the manager's, and that split is what makes the manager testable |
 | The internet check — `components/wifimgr/reachability.*` (§10.9) | **running on hardware**: once a minute, while there is a client link, an ICMP echo to one of a few addresses from `config.json` (8.8.8.8, 1.1.1.1, 9.9.9.9 by default). Three states — `unknown` is the honest one — two failed rounds to say offline and one reply to come back. `wifi ping` and `wifi check` on the console. **It never decides anything**: a link with no internet is reported, never a reason to change networks |
 | The Wi-Fi manager — `components/wifimgr` (§10.9) | **running on hardware, and tested on the host**: desired state (off / client / AP) against current, round-robin over the remembered networks with a growing capped backoff, sticky auth failures, and after N fruitless rounds a fallback access point that stays up for two minutes unless somebody attaches to it. `wifi` on the console. `wifi_policy.h` includes `<cstdint>` and nothing else, the way the navigator's does; the radio is lazily brought up, so a device with `wifi.active` false pays nothing for this existing. **It has joined a real network**, walked past one that refuses on the way, and come up on both DHCP and a fixed address — §10.9 has that run, and it is what makes the cycle, the fallback AP and the scan more than a proof against a network that does not exist. What no board has produced yet is a deliberate **auth failure**, which needs a network whose password is wrong on purpose |
 | The limits screen (§10.8.3) — `components/ui/limits_view.*`, `components/screens/limits_screen.*`, `components/watcher` | **running on hardware, and every rule of it checked there**: it came up on its own when this repository's own status line published, went back to the clock 73 s after the last document, was dismissed by `PWR`, held that dismissal through ten more documents, dropped it when the stream stopped, and came back on the first document after. A subscription-less payload draws `7d --` with no fill at all, which is §9.7's "absent is absent" on the glass. **It arrives rather than being swiped to**, at the repository owner's request — that section says what changed and why `PWR` dismisses a burst rather than a message. The deciding half is `<cstdint>`-only and host-tested (21 tests, 10 of 11 mutations caught, and the eleventh has an answer) |
+| The settings list and the status pages (§10.8.5) — `components/ui/settings_menu.*`, `status_pages.h`, `components/screens/settings_screen.*`, `status_screen.*` | **running on hardware, and every input confirmed by hand**: a swipe up or `KEY` held two seconds opens a four-row list — Wi-Fi and the touch test drawn faint with `soon`, status, and reboot — and `BOOT` steps it, `KEY` presses it, a tap does both, `PWR` goes back. Behind it three status pages: power (battery, rails, die temperature, and why the chip is awake), system (why it last restarted, uptime, heap low-water, radio, address, bus) and motion (six axes, the magnitude and the die), turned by `BOOT` or a tap. **Reboot asks twice** and the arming expires on its own. The deciding half is `<cstdint>`-only and host-tested (18 tests, 16 of 16 mutations caught — one of which survived until the test for the *button* route round the list existed). `screen` on the console is what photographs a list otherwise reachable only by a gesture |
 | The Wi-Fi screen (§10.8.6) | specified, not started — the manager underneath it is what exists |
 | Where the configuration lives (§10.15) | **decided**: all of it in JSON on SPIFFS, nothing of ours in NVS — with the cost stated (SPIFFS cannot be encrypted at rest). `spiffs_image/config.json` + `config.init.json` are flashed, and `components/config` is what reads them |
 | The `KEY`-at-boot config restore (§10.15) | **running on hardware, three times over**: `KEY` held through a boot put `config.init.json` back over `config.json` at 5,001 ms — before the parse, which is the whole point — left `registration.json` untouched and the device still registered, and said so in three places: a log line at the time, `config restored` under the clock, and a `boot` line `config` keeps printing for the rest of the uptime. The deciding half is host-tested (9 tests, 5 of 5 mutations caught). **The screen half is where the board earned its keep**: the console said the notice was up and the glass was empty, because the label hung outside its parent and `LV_OBJ_FLAG_OVERFLOW_VISIBLE` does not do what its name suggests — §10.15 has that finding |
-| Host-tier tests (§10.11) — `host_test/` | **running**: 459 Unity tests over `ui` (the navigator, the clock face, the request card and the limits), `protocol` (§7's signing bytes, its wire format, §6's registration exchange and §9.7's status document), `i2cbus`, `pmic`, `rtc`, `imu`, `audio`, `config`, `buttons`, `timezone`, `speaker`, `wifimgr`, `timesync`, `nats` and the parity vectors, one command, no board. The drivers are compiled **unmodified** against a fake ESP-IDF (`host_test/fakes/`), which is §10.14.3's owed fake backend arriving in a different shape than that section specified, and which now covers I²S and a filesystem as well as the I²C wire. Built by MSVC rather than by ESP-IDF's `linux` target, which does not work on a Windows host — §10.11 records why |
+| Host-tier tests (§10.11) — `host_test/` | **running**: 488 Unity tests over `ui` (the navigator, the clock face, the request card, the limits and the settings list), `protocol` (§7's signing bytes, its wire format, §6's registration exchange and §9.7's status document), `i2cbus`, `pmic`, `rtc`, `imu`, `audio`, `config`, `buttons`, `timezone`, `speaker`, `wifimgr`, `timesync`, `nats` and the parity vectors, one command, no board. The drivers are compiled **unmodified** against a fake ESP-IDF (`host_test/fakes/`), which is §10.14.3's owed fake backend arriving in a different shape than that section specified, and which now covers I²S and a filesystem as well as the I²C wire. Built by MSVC rather than by ESP-IDF's `linux` target, which does not work on a Windows host — §10.11 records why |
 | Protocol parity vectors (§10.11 tier 2) | **done, and it has two halves in two languages**: `tools/make_vectors.py` generates `host_test/vectors/parity_vectors.h` (six §7 decisions, six §6 replies) and `components/crypto/selftest_vector.h` (§10.6's Ed25519 vector) from `approver/protocol.py` and `lib/crypto.py` themselves; both are committed, so the build needs no Python. `test_vectors.cpp` runs the firmware's assemblers over them, and **`tests/test_esp32_vectors.py` is what stops them going stale** — it regenerates on every `pytest` run and fails if the committed files are not what today's Python produces. The three pasted literals this replaced are gone from `test_signing.cpp`, `test_registration.cpp` and `device_key.cpp`. Mutation-checked from both ends: a swapped field in `protocol.py` fails the guard, a dropped separator in `signing.cpp` fails the vectors |
 | Device-tier tests (§10.11 tier 3) — `tests/test_esp32_device.py` | **written, and half of it has run against the board**: one press produces a reply `hook.verify_reply` calls trusted, and every tamper is asserted on that reply without a second press — the verdict flipped, each of §7's six echoed fields changed in turn, the `key_id` renamed, the signature removed. `scripts/esp32-approval.cmd` is the one command, and `AI_REMOTE_ESP32_DEVICE=1` is what stops an unattended `pytest` quietly testing the software responder instead. **§10.10's half is confirmed on hardware**: a card nobody pressed produced no reply at all in 20 s and the hook fell back. The pressed half needs a finger and has not been run since it was written |
 
@@ -1150,14 +1154,16 @@ a plausible-looking wrong one is worse than an obviously unset one.
 
 ### 10.8 The screens
 
-Five, and one of them is not navigable to — it arrives:
+Six now, and two of them are not navigated to — one arrives with a message and
+one arrives with the numbers:
 
 | # | Screen | Reached by | Exists to |
 |---|--------|-----------|-----------|
 | 10.8.2 | **Clock** — home | the screen it returns to from everywhere | be the thing on the desk for 99 % of its life, and admit in one glyph whether it could answer a request right now |
 | 10.8.3 | **Limits** | swipe left/right from the clock | the §9.7 `status` document: which model is answering and how much of the 5h / 7d windows is spent — present only while a Claude Code session is actually publishing |
 | 10.8.4 | **Request** | **a message on `approvals.*`** | the one screen the device exists for |
-| 10.8.5 | **Settings** | swipe up, or the gear on the clock | bus, key and registration, display, time, factory reset — and the way into Wi-Fi |
+| 10.8.5 | **Settings** | a swipe up, or `KEY` held two seconds — from the clock **and from the limits**, which arrive on their own | a short list of places to go: Wi-Fi, the status pages, the touch test, and reboot |
+| 10.8.5 | **Status** | from Settings | three pages of what the board is doing — power, system, motion — for the questions a console answers and a desk object cannot |
 | 10.8.6 | **Wi-Fi settings** | from Settings | scan, pick, type a password, forget a network (the machinery is §10.9) |
 
 None of them needs a board to be drawn: §10.12.1 renders LVGL on the host and
@@ -1825,27 +1831,175 @@ afterwards, worth a log line if it does not come. A readout that lags the thing 
 describes is worse than no readout: it was the reason a working loop looked broken
 for half an hour.
 
-#### 10.8.5 Settings
+#### 10.8.5 Settings, and the status pages behind it
 
-One list, no cleverness:
+One list, no cleverness — and **the list is the repository owner's rather than
+this section's**, which is worth saying plainly because it replaced a longer one
+that had been sitting here unbuilt:
 
-| Entry | What it holds |
-|-------|---------------|
-| Wi-Fi | → §10.8.6; shows the current SSID and RSSI |
-| Bus | the NATS URL — the host's LAN address per §10.3, no credentials to enter unless that bus ever gains auth. Editing it drops the connection and reconnects |
-| Key & registration | `key_id`, this device's public key, the pinned handler key (the strings §10.7 has the operator compare), the boot self-test result — and `forget`, which unpins both |
-| Display | brightness, idle-dim and blank timeouts |
-| Time | the `TZ` string, the SNTP server and how often to ask it — plus when it last answered, which is the one line here that is a readout rather than a setting |
-| About | firmware version, chip and MAC, uptime, and the heap **low-water mark** rather than the current free heap (§10.14.1 — the minimum ever seen is the number that says whether the device is safe) |
-| Restore config | puts `config.init.json` back over `config.json` (§10.15) — the same thing holding `KEY` at boot does, with a screen to confirm on. Wi-Fi, bus and display go back to defaults; the registration survives |
-| Factory reset | that, **and** deletes `registration.json`. Two-step, and it says exactly what will be lost |
+| Entry | What it is | State |
+|-------|------------|-------|
+| Wi-Fi | → §10.8.6 | on the list, **not built** |
+| Status | three pages of what the board is doing, below | **built** |
+| Touch test | calibration and a place to check the glass | on the list, **not built** |
+| *(a few more, later)* | the owner's words: "пока непонятно, потом чтото добавим" | **deliberately not drawn** |
+| Reboot | restarts the device | **built**, and the only row that does something rather than opening something |
 
-`forget`, `Restore config` and `Factory reset` are the only destructive entries
-and the only three that confirm. Two of them cost a token and say so: after
-`forget` or `Factory reset`, `clients[key_id]` on the handler still names a key
-this device can no longer prove it has, and a new one is needed (§6).
-`Restore config` is the cheap one, and the difference between them is the whole
-reason §10.15 keeps the registration in a separate file.
+What changed against the previous list, and why each one:
+
+- **the settings that were here are gone from it.** Bus, display, time, key and
+  registration, restore, factory reset — all of them are `config set`, `nats
+  url`, `date`, `keys` and `config restore` on the console today, and a screen
+  for each is a screen with a keyboard problem attached. The list the owner
+  asked for is a list of *places*, and the settings screens can be added to it
+  one at a time when there is something to type them with;
+- **status is new and is the one the owner spelled out**: the Wi-Fi mode right
+  now, the battery and its voltage, why the chip is powered at all, why the
+  firmware last restarted, the temperatures and the accelerometer — "в общем что
+  поместится, может несколько экранов". It is three pages;
+- **an entry with nothing behind it is still drawn**, faint, with `soon` on the
+  right, and pressing it says so. Hiding them would make the list lie about what
+  this device is going to be, and §10.9's rule that `unknown` is the honest state
+  is the same rule;
+- **the placeholder rows are not drawn at all**, which is the owner's
+  instruction and also the right call: a row that says nothing and does nothing
+  is worse than a short list.
+
+##### Getting in, and the one rule that had to change
+
+Three ways, and the third is the reason the second exists:
+
+| | |
+|---|---|
+| a **swipe up** | §10.8.5's own gesture, unchanged |
+| **`KEY` held two seconds** | the free button (§10.1), and the way in when the glass is not being touched. It fires **while the finger is still down** — the operator is holding a button with no feedback but the screen, and a device that waits for the release is a device somebody keeps holding, wondering |
+| the console's `screen` | not for the operator: it is what lets a screenshot be taken of a list that is otherwise reached only by a gesture (§10.12.2) |
+
+**And settings is now reachable from the limits screen, which this document
+previously forbade.** The old rule was "one way in is one place to look": the
+gear is on the clock, so settings opened from the clock and from nowhere else,
+and `navigator.cpp` refused a swipe up from the limits. That held while the
+limits were something the operator *swiped to* — and §10.8.3 then made them a
+screen that **arrives**, every few seconds, for as long as a Claude Code session
+is spending. So a device left on the desk while the work happens is a device
+parked on the one screen with no way into settings, and the gesture that opens
+them does nothing.
+
+Found by trying to reach the list on a board that was watching this repository's
+own status line. It is the same action reaching the same place, so it is not a
+second way in; what changed is that the first one stopped being reachable.
+
+##### Reboot asks twice, and the console does not
+
+§10.7 argues that the console's `reboot` needs no confirmation: a reboot undoes
+itself in seconds, and a second word there would be friction on the most ordinary
+debugging action there is. The screen reaches the opposite answer from the same
+premise, and the difference is who is asking:
+
+- on a console somebody **typed a word**. On a 480×480 panel a stray finger is an
+  ordinary event, and this row is at the bottom of a list people scroll with
+  their thumb;
+- §10.8.5's older list already made its destructive entries two-step, and this is
+  the one that survived from it;
+- so the first press **arms** — the row turns amber and says `press again` — and
+  the second one goes. The arming **expires on its own** after five seconds,
+  because an armed reboot left sitting on the glass is the stray finger with
+  extra steps, and moving the selection off the row clears it, or the arming
+  would be a delay rather than a confirmation.
+
+All of that is `ui/settings_menu.h`, which includes `<cstdint>` and nothing else
+and is where §10.11 can reach it: every way of getting a single press to reach a
+restart is a test.
+
+##### The status pages
+
+Three, and each answers a different question rather than a third of one:
+
+| Page | What is on it |
+|------|---------------|
+| **power** | the battery and its voltage, whether it is charging, VBUS in and its voltage, the system rail, ALDO2 and ALDO3 with their states, the PMIC die temperature — and **why the board is awake**, which is the chip's own answer (§10.1) and not something the firmware participates in |
+| **system** | why the firmware last restarted (`esp_reset_reason`), uptime, free heap and the **low-water mark** rather than the current free heap (§10.14.1), the firmware version, the Wi-Fi state with its SSID, signal and channel, the address, and whether the bus is connected |
+| **motion** | the three acceleration axes, the **magnitude** — the one line that says the other three mean anything, since at rest it must be 1 g (§10.7) — the three gyroscope axes, and the IMU die temperature |
+
+Rules it keeps:
+
+- **pages rather than one scrolling wall**, at the owner's suggestion. A
+  scrollable list on this device means a finger dragging over numbers that are
+  being repainted underneath it, and a screen whose content moves while it is
+  being read is a screen nobody trusts. A page is a whole thought, and `BOOT`
+  or a tap on the body steps to the next one;
+- **the page travels with the numbers.** The rows are gathered outside the LVGL
+  lock — one of them is an I²C read (§10.8.1) — and the page can turn between
+  the gathering and the painting. A title taken from the pager at paint time
+  would name a page whose numbers are not on the glass yet, which is a readout
+  lying for a tenth of a second about the one thing it is for;
+- **it reads the IMU and that changes nothing about §10.13.** No gesture ever
+  approves anything, and the way that stays true is that nothing on the approval
+  path can see it: this is a readout, in the same class as `imu` on the console;
+- **a label has about eight characters of room**, measured on the glass rather
+  than computed — and the column is clipped, so a ninth is a cut-off word rather
+  than two words drawn on top of each other. `magnitude` was the ninth, and what
+  was on the panel was the label and the number sharing pixels. It is `total`
+  now.
+
+##### What is written, and the five decisions inside it
+
+The split is the one every screen here takes, and this is the fifth pair:
+
+| File | What it is |
+|---|---|
+| `ui/settings_menu.h/.cpp` | **`ui::SettingsMenu`** — the rows, which have something behind them, and the arming. `<cstdint>` and nothing else |
+| `ui/status_pages.h` | **`ui::StatusPager`** — three pages and a wrap. Embarrassingly small, and in `ui` for the reason the rest is |
+| `screens/settings_screen.h/.cpp` | four plates, a title that is also the way out, and a tap recorded rather than acted on |
+| `screens/status_screen.h/.cpp` | a title, a page counter and nine label/value rows |
+| `screens/screens.cpp` | where the three inputs meet: a gesture, a button and the console all end at one `Apply(ui::Nav)` |
+
+**What the board has actually done**: the list on the glass with `soon` on the
+two rows that have nothing behind them, all three status pages photographed —
+`100%, 4.18 V` and `USB plugged in` on one, `usb` and `-36 dBm, ch 1` on the
+next, `-1.012 g` on the third with the board stood on its card-slot edge, which
+is §10.13's own table read back off the panel — and every input confirmed by
+hand: `KEY` held, the swipe, `BOOT` stepping the list and the pages, a tap on a
+row, `PWR` back, and the reboot row asking twice.
+
+Five things are decisions rather than plumbing:
+
+- **the three ways in are one function.** A gesture, a button and a console
+  command all end at `Apply(ui::Nav)`, so the navigator is moved from exactly one
+  place and the card still outranks all three (§10.8.1). The console's route
+  cannot press a row, which keeps `reboot` something only a finger can reach —
+  §10.7's rule of one route per surface, and the console already has its own;
+- **a tap is recorded, never acted on.** The LVGL event callback writes a byte
+  and the screen task is what moves anything, because §10.8.1 keeps decisions off
+  the LVGL task for the same reason it keeps signatures off it — and one of these
+  decisions ends in `esp_restart`. The handoff needs no lock: both sides run
+  under the display lock, the callback because `lv_timer_handler` holds it while
+  it dispatches;
+- **the request card now swallows touch.** It is a full-screen opaque object and
+  it was not clickable, so LVGL hit-tested straight through it — which mattered
+  for the first time the moment there was a clickable row underneath. §10.8.4
+  says nothing on that card is touchable; a finger reaching a settings row behind
+  it is the same rule broken from the other side. There is no handler on it: a
+  press lands there and stops;
+- **the same button means yes and next**, and it cannot mean both at once: with a
+  card up `BOOT` is a verdict and navigation is gone, and with no card it steps
+  the list. The branch is the card's, not the screen's, which is what keeps the
+  §10.8.4 guard the only thing between a press and a verdict;
+- **`screens::Navigate` waits for the task to take each move.** There is one slot
+  and callers chain — reaching the status pages is "up, then open" — so a second
+  call that overwrote the first before the task saw it would silently perform
+  only the last one. Found on the board: `screen status` from the limits screen
+  did nothing at all, twice, and the readout printed afterwards was the honest
+  answer to a question nobody had asked.
+
+**What it costs**: `libui.a` and `libscreens.a` grew by the two screens, and the
+number worth watching is the heap rather than the flash — with the radio up, the
+bus connected and both new screens built, `status` reports **38,300 free and
+29,720 lowest ever**, against 93,632 free on the same board with the radio off
+and these screens absent. Most of that difference is Wi-Fi's ~41 KB (§10.9);
+about 14 KB of it is these two screens' widgets. The screen task's own stack went
+from 2,936 free to **2,672**, which is the `StatusFacts` local, and is still a
+margin.
 
 #### 10.8.6 Wi-Fi settings — the screen
 
@@ -2351,14 +2505,16 @@ Three tiers, and the first one is where nearly everything belongs:
    **What is under it today is the navigator, the three screens' arithmetic, all
    of §6 and §7's wire format, four of the five chips on the I²C bus, the
    settings file, the buttons, the zone table, the speaker, the Wi-Fi policy,
-   the internet check, the clock's sync schedule and the bus link** — 459 tests,
+   the internet check, the clock's sync schedule and the bus link** — 488 tests,
    and the last row of the table is tier 2 living in the same binary:
 
    | Subject | What is pinned |
    |---|---|
-   | `components/ui` | every transition of §10.8's table; swipes that must *not* navigate on the settings and Wi-Fi screens; the settings screen being reachable from the clock **and from nowhere else**, and the Wi-Fi screen only from settings; a request preempting all four screens without moving any of them; navigation vanishing entirely while the card is up; the screen underneath surviving both an answer and an expiry; the pending queue refusing a fifth arrival. Its `CMakeLists.txt` has an empty `REQUIRES`, which is not an omission — a navigator that included LVGL would be a navigator that needs a board |
+   | `components/ui` | every transition of §10.8's table; swipes that must *not* navigate on the settings and Wi-Fi screens; the settings screen being reachable from the clock **and from the limits, and from nowhere deeper** — §10.8.5 says what changed and what found it — and the Wi-Fi screen and the status pages only from settings, each backing out one level rather than to the clock; a request preempting all four screens without moving any of them; navigation vanishing entirely while the card is up; the screen underneath surviving both an answer and an expiry; the pending queue refusing a fifth arrival. Its `CMakeLists.txt` has an empty `REQUIRES`, which is not an omission — a navigator that included LVGL would be a navigator that needs a board |
    | `components/ui` (the clock face) | §10.8.2's rules, and the sixth subject in this firmware that needs no fake. **The time**: an unset clock showing dashes rather than a plausible `00:00`, a year outside the RTC's own 2024..2099 refused at each end, the digits being 24-hour with their leading zeros, and a wall clock out of range showing dashes rather than rendering an hour of 74. **The three indicators**: a connected link never showing *no* bars, because an empty icon reads as "not connected"; the connecting animation never being blank; an access point and a switched-off radio both lighting none; no server configured being a shape rather than a red light; the two-minute traffic window opening on a delivery, closing on time, surviving the ~49-day wrap, **not** opening on the first reading of a counter that was already non-zero, and **not** opening on a counter that went backwards — which is a reconnect (§10.5) rather than a message; traffic never showing through a dropped link; and a battery percentage clamped, with negative meaning "nothing to ask" rather than empty. **The panel's own two**: the drift staying inside its box, reaching all four corners of it, never standing still, and being continuous across the millisecond wrap — the last of which is the only test that catches a cycle read as `now_ms % period`; and the water bounded away from both ends of the scale, travelling with the phase, varying down the face, and free of hard edges. Plus `Wave` interpolating rather than reading its 64-entry table flat, which is here because the mutation pass showed that breaking it was invisible through `Shimmer`. **And §10.15's notice**: shown when there is one, gone at its window to the millisecond either side of the boundary, and — the test that had to be strengthened before it tested anything — still right across the ~49-day wrap on **both** sides of it, since a window written `now < since + window` passes every check taken after the counter wraps and fails only in the moments just before |
    | `components/ui` (the request card) | §10.8.4's rules, and the ones where a test is worth the most. **What a card is allowed to be**: every refusal is its own case — a queue that is full, a field with no terminator in it (all seven, in one loop, so a field added later cannot skip the check), a request with no reply subject, one with no tool name — because a refused card is §10.10's fail-safe and a *shown* card is a question put to a human. **The queue**: the oldest is the one on screen, the bound is asserted equal to the navigator's, and room freed is room usable. **The press guard**: a press inside the first 300 ms is thrown away, a press that *began* before the card appeared is thrown away by the same comparison, the next card in the queue gets its own guard from scratch, and pressing nothing decides nothing. **The outcomes**: a press hands back the whole request the reply will have to echo; a card that timed out reads as a timeout and not as a deny; a request that waited past its own life is dropped without ever being shown; a missing TTL falls back to one that expires rather than to forever; the countdown floors at zero; and the ~49-day wrap lands inside a card's life. **The receipt**: it fades on its own, it is skipped when another card is waiting, and an arriving request outranks it. Plus the assertion the whole file is built around — **no amount of ticking produces a verdict** |
+   | `components/ui` (the settings list) | §10.8.5's rules, and nearly all of the value is in one row: **reboot is armed before it fires**, and every way of getting a single press to reach a restart is a case here — the first press arming rather than going, the second one inside the window going, the arming expiring and the next press arming again, walking off the row clearing it *by either route* (a tap and the button take different paths, and only one of them was covered until a mutation said so), re-selecting the row that is already selected **not** clearing it — which is what makes a tap-tap work, since a touch reports both the selection and the press — leaving the screen clearing it, and the window measured across the ~49-day wrap on both sides of it. Then the list itself: it opens at the top, reboot is asserted to be the **last** row, the walk wraps and does **not** skip the rows with nothing behind them, a tap past the end selects nothing rather than clamping to an end it did not aim at, and a row with nothing behind it answers `kNotBuilt` rather than navigating. Plus the pager: three pages, wrapping, and back to the first when the screen is reopened |
+   | `components/buttons` (short and long) | §10.8.5's `KEY`: a press released early is short; one held to the threshold reports **long while the finger is still down**, which is the decision the class exists for; it reports it **once**, and the release afterwards says nothing — without which one press would open settings and immediately activate whatever row it landed on; the next press starts over; a button nobody is touching reports nothing at all; and the hold is measured across the ~49-day wrap |
    | `components/protocol` | §7's signing bytes (§10.2), and the suite with the least room to be approximately right — every other test here protects a behaviour somebody would notice going wrong, this one protects an exact byte string whose failure is invisible from the device's side. The complete messages have **moved to tier 2's generated vectors** in the row below, which is where they should have been: they used to be three literals pasted into this file, and a pasted literal is the one kind of expectation nobody can check for staleness. What is left here is the shape independently of the content — the two always-empty fields keeping their *positions*, which is what makes the message end in a separator and is the easiest thing to lose while tidying; exactly eight separators whatever the fields hold; and every refusal writing **nothing**, because a half-assembled buffer here is something a caller could sign. And the integers on their own, `INT64_MIN` included: the value with no positive counterpart, which the obvious negate-and-divide loop gets wrong and which is the reason `AppendInt` accumulates downwards |
    | `components/protocol` (the registration exchange) | §6/§10.7's, and the suite is mostly about **one rule**: the handler's signature is checked before any field of the reply is read. That is testable at all because the verifier comes in as an argument — the one used here *records the message it was handed*, so "these are `registration_reply_signing_bytes`" is an assertion rather than a reading of the code, and every rejection that happens *before* the signature uses a verifier that fails the test if it runs. Then each refusal as its own case, because each has its own sentence on a console: not an object, another protocol version, an `ok` that is a string rather than a bool, no handler key, a **pin mismatch** (which is not a bad signature and must not be spelled as one), a nonce that answers a different request, no timestamp, a `ts` past 2^53 that cJSON would silently round, a field longer than the device will hold, and a signature that is not one. Plus the two that are about agreeing with Python rather than refusing anything: the signing bytes byte for byte, and an absent optional field signing as `""` — because the handler omits `error` on success and the other side signs it as empty |
    | `components/protocol` (the wire format) | §7's JSON, and the fixture is **`hook.py`'s own output** rather than something written to match the parser — a request invented here would pass for a parser that agrees with this file and with nothing else. The parse: every field where §7 says, `tool_input` rendered **whole** rather than reached into (§10.8.4 forbids showing part of what is being asked for), and no TTL arriving so the card's own default is what expires one. Then every refusal as its own case, because this is the one subject anybody on the LAN can publish to: not an object, another version, a missing field one at a time, a field longer than the card holds, a `tool_input` too big to show whole — the refusal with a stated cost — a `ts` that cannot be echoed exactly, and no reply subject at all. Each of them asserted to leave the caller's card **untouched**, because the card in that struct belongs to a request somebody is still reading. The reply: the six fields `hook.py::verify_reply` compares one by one, an empty `reason`, and **no `updated_input`** — whose absence is what keeps `updated_input_sha256` empty in the signed bytes |
@@ -2531,6 +2687,38 @@ Three tiers, and the first one is where nearly everything belongs:
      the far side of the wrap and never asked the question. Both sides now, and
      the mutation fails as it should — which is §10.11's usual finding arriving
      from its less usual direction: a survivor that is a question about the test.
+
+   **The settings list added sixteen, all caught in the end, and the interesting
+   part is that three of them were badly written the first time.** The thirteen
+   that went straight through: one press on reboot restarting, a tap on the armed
+   row disarming it, the arming never expiring, the arming window written the
+   non-wrap-safe way, coming back into settings keeping it, a tap past the end
+   clamping instead of being ignored, an unbuilt row navigating anyway, the pages
+   not wrapping, the status keeping its last page when reopened, a swipe
+   navigating away from the status, the limits screen losing its way into
+   settings again, a long press waiting for the release, and a long press also
+   reporting a short one on the way out.
+
+   The three that had to be rewritten are the ritual's own failure modes, and
+   two of them this document already names:
+
+   - **"the arming never expires" would not compile.** Removing the window
+     orphans `now_ms`, and `/W4 /WX` turns that into an error — the trap §10.11
+     records three times now. A mutation has to keep consuming what it stops
+     using;
+   - **"the status opens from anywhere" changed nothing.** It added a transition
+     from the status screen *to* the status screen, which is not a behaviour. A
+     mutation that does not change behaviour is not a survivor; it is a mutation
+     that was not written yet. The real one — the clock opening the status
+     directly — is caught at once;
+   - **and one was a real survivor, which is the useful kind.** "Walking off the
+     reboot row leaves it armed" survived a correctly-written mutation, because
+     the test that covered it went through `Select` — the *tap* route — and the
+     button route goes through `Next` and never calls `Select`. So arming the
+     row, pressing `BOOT` four times to come back round to it, and pressing `KEY`
+     would have restarted the device on what the operator reads as a first press.
+     §10.11's rule is that a survivor is a question about the code; here the
+     answer was that the code was right and the test was aimed at the wrong door.
 
    **The wire format added nine, all caught, and none of them interesting** —
    which is itself worth one line: a request with nowhere to answer shown anyway,
@@ -3019,8 +3207,10 @@ back out of the segment boxes of the PNG, at a drift of `+10,-8`.
   **The IMU has a driver anyway, and that changes nothing above.**
   `components/imu` and the `imu` command exist so the chip can be read from the
   console — the same class of thing `power` and `date` are, and the only way to
-  find out that a part of the board is alive. Nothing in the approval path may
-  read it; a tilt is not a press. What reading it established, which the
+  find out that a part of the board is alive. **It has a second reader now**, the
+  status page of §10.8.5, and that changes nothing here: it is the same readout
+  on glass instead of on a console, and the rule it has to keep is the one below.
+  Nothing in the approval path may read it; a tilt is not a press. What reading it established, which the
   datasheet could not: this board's QMI8658C answers at **0x6B** (SA0 pulled
   down — and note the addresses are the inverse of the habit, 0x6A being the
   floating one) with revision 0x7c, and two of its three axes are now tied to
