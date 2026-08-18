@@ -96,6 +96,16 @@ struct ClockInputs {
     bool charging = false;
     int16_t battery_percent = -1;  // negative when there is nothing to ask
 
+    // A one-line notice under the date, and when it was first said. §10.15's
+    // "say it happened": the `KEY`-at-boot restore has no panel to report on at
+    // the time it runs, so the clock carries the sentence once there is one.
+    //
+    // **The text is the caller's and the lifetime is this file's**, which is the
+    // split everything else here takes: what to say is a string somebody wrote,
+    // how long to say it for is a decision with a test.
+    bool notice = false;
+    uint32_t notice_since_ms = 0;
+
     // `esp_timer` milliseconds. Only ever subtracted, so the ~49-day wrap is
     // arithmetic rather than a case to handle — the note `buttons.h`,
     // `wifi_policy.h` and `link_policy.h` all carry.
@@ -127,6 +137,9 @@ struct ClockView {
     // Where the water is, 0..255 for one full cycle. The renderer turns it and
     // a pixel row into a colour through `Shimmer`.
     uint8_t phase = 0;
+
+    // Is the caller's notice still worth showing.
+    bool notice = false;
 };
 
 class ClockFace {
@@ -138,6 +151,22 @@ class ClockFace {
     // "Something arrived recently" — two minutes, the same threshold §10.8.3
     // uses to call a `status` document stale, and kept equal to it on purpose.
     static constexpr uint32_t kTrafficWindowMs = 120000;
+
+    // How long a notice stays under the date, and **the reason it goes is not
+    // burn-in**: it is a child of the face, so it drifts with everything else
+    // and the panel never sees it standing still. The reason is that the home
+    // screen should stop being about the boot — the console answers "was the
+    // config restored" for as long as the device is up, which is where a fact
+    // that outlives a glance belongs.
+    //
+    // **Thirty seconds, at the repository owner's request**, having been a
+    // minute and then five: on the desk it read as a line that would not go
+    // away. The operator held a button through the boot and is looking at the
+    // device, so the window only has to outlast the glance — and everything
+    // that outlasts it is `config` on the console, which says so for the whole
+    // uptime. The cost is stated rather than hidden: somebody who walks away
+    // during the boot chime comes back to a clock and has to ask.
+    static constexpr uint32_t kNoticeMs = 30000;
 
     // What years a clock is allowed to claim. The floor is 2024-01-01 and the
     // ceiling 2100-01-01 — **the RTC's own range** (§10.8.2: it stores two

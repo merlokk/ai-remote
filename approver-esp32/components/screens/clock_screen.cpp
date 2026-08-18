@@ -255,7 +255,8 @@ esp_err_t ClockScreen::Create(lv_obj_t *parent) {
 
     percent_ = lv_label_create(face_);
     date_ = lv_label_create(face_);
-    if (percent_ == nullptr || date_ == nullptr) {
+    notice_ = lv_label_create(face_);
+    if (percent_ == nullptr || date_ == nullptr || notice_ == nullptr) {
         return ESP_ERR_NO_MEM;
     }
 
@@ -271,6 +272,21 @@ esp_err_t ClockScreen::Create(lv_obj_t *parent) {
     lv_obj_set_style_text_font(date_, &lv_font_montserrat_28, LV_PART_MAIN);
     lv_obj_set_style_text_color(date_, Hollow(), LV_PART_MAIN);
     lv_label_set_text_static(date_, date_text_);
+
+    // The notice (§10.15), aligned with the date under it and hidden until
+    // there is something to say.
+    //
+    // **The same font as the date, told apart by colour**, which is §10.8.3's
+    // lesson rather than a preference: a font enabled in `sdkconfig` costs
+    // nothing until something references it, and the first line to name a new
+    // size pays for the whole face. This one is a grey rather than the date's
+    // dim green — brighter, because it is the one thing here the operator has
+    // to act on, and still quieter than the digits they came to read.
+    lv_obj_set_pos(notice_, kColumnWidth + kColumnGap, kNoticeTop);
+    lv_obj_set_style_text_font(notice_, &lv_font_montserrat_28, LV_PART_MAIN);
+    lv_obj_set_style_text_color(notice_, Shell(), LV_PART_MAIN);
+    lv_label_set_text_static(notice_, notice_text_);
+    lv_obj_add_flag(notice_, LV_OBJ_FLAG_HIDDEN);
 
     return ESP_OK;
 }
@@ -300,6 +316,23 @@ void ClockScreen::SetDate(const char *text) {
     // re-measures and re-invalidates without allocating, which is the whole
     // reason the buffer is ours (§10.14.1).
     lv_label_set_text_static(date_, date_text_);
+}
+
+void ClockScreen::SetNotice(const char *text) {
+    if (notice_ == nullptr) {
+        return;
+    }
+    const char *wanted = text != nullptr ? text : "";
+    if (std::strncmp(notice_text_, wanted, sizeof(notice_text_)) == 0) {
+        return;
+    }
+    std::snprintf(notice_text_, sizeof(notice_text_), "%s", wanted);
+    lv_label_set_text_static(notice_, notice_text_);
+    if (notice_text_[0] == '\0') {
+        lv_obj_add_flag(notice_, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_remove_flag(notice_, LV_OBJ_FLAG_HIDDEN);
+    }
 }
 
 void ClockScreen::Apply(const ui::ClockView &view) {

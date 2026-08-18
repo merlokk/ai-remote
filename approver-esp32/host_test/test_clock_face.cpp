@@ -593,6 +593,68 @@ void test_the_phase_advances_evenly_and_wraps_without_a_jump(void) {
 
 }  // namespace
 
+// --- The notice (§10.15) ----------------------------------------------------
+//
+// One line under the date, and the only thing on this screen that is about
+// something that already happened rather than about now. §10.15 asks for it by
+// name — "the screen states `config restored` as soon as there is a screen" — and
+// what belongs here rather than next door is *how long*: the text is the
+// caller's, the lifetime is a decision.
+
+void test_a_notice_is_shown_when_there_is_one(void) {
+    ClockFace face;
+    ClockInputs in = Sane();
+    TEST_ASSERT_FALSE(face.Update(in).notice);
+
+    in.notice = true;
+    in.notice_since_ms = in.now_ms;
+    TEST_ASSERT_TRUE(face.Update(in).notice);
+}
+
+void test_a_notice_goes_away_on_its_own(void) {
+    // A permanent line is a permanent lit pixel on a panel that charges for
+    // those (§10.8.1), and an operator who held a button through a boot is
+    // watching the boot. Both sides of the boundary, because a window checked
+    // at one end is a window with an off-by-one in the other.
+    ClockFace face;
+    ClockInputs in = Sane();
+    in.notice = true;
+    in.notice_since_ms = 1000;
+
+    in.now_ms = 1000 + ClockFace::kNoticeMs - 1;
+    TEST_ASSERT_TRUE(face.Update(in).notice);
+
+    in.now_ms = 1000 + ClockFace::kNoticeMs;
+    TEST_ASSERT_FALSE(face.Update(in).notice);
+}
+
+void test_the_notice_window_survives_the_millisecond_wrap(void) {
+    // The same ~49-day arithmetic the bus dot's window is asserted against:
+    // subtraction, not a comparison of two absolute counters.
+    //
+    // **Both sides of the wrap, and the first one is what makes this a test.**
+    // A window written `now < since + window` passes every check taken *after*
+    // the counter has wrapped — the sum wraps with it — and fails only in the
+    // moments just before, where `now` is enormous and the sum is small. That is
+    // the mutation this originally let through.
+    ClockFace face;
+    ClockInputs in = Sane();
+    in.notice = true;
+    in.notice_since_ms = 0xFFFFFF00u;
+
+    in.now_ms = 0xFFFFFF10u;  // 16 ms later, and the counter has not wrapped yet
+    TEST_ASSERT_TRUE(face.Update(in).notice);
+
+    in.now_ms = 400;  // wrapped, 656 ms after the notice
+    TEST_ASSERT_TRUE(face.Update(in).notice);
+
+    in.now_ms = 0xFFFFFF00u + ClockFace::kNoticeMs;  // wrapped, exactly the window
+    TEST_ASSERT_FALSE(face.Update(in).notice);
+}
+
+
+
+
 void RegisterClockFaceTests(void) {
     RUN_TEST(test_an_unset_clock_shows_dashes_rather_than_midnight);
     RUN_TEST(test_a_year_before_the_rtc_can_hold_is_not_believed);
@@ -631,4 +693,8 @@ void RegisterClockFaceTests(void) {
     RUN_TEST(test_the_wave_is_interpolated_rather_than_stepped);
     RUN_TEST(test_the_shimmer_has_no_hard_edges_in_it);
     RUN_TEST(test_the_phase_advances_evenly_and_wraps_without_a_jump);
+
+    RUN_TEST(test_a_notice_is_shown_when_there_is_one);
+    RUN_TEST(test_a_notice_goes_away_on_its_own);
+    RUN_TEST(test_the_notice_window_survives_the_millisecond_wrap);
 }

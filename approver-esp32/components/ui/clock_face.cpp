@@ -168,6 +168,12 @@ ClockView ClockFace::Update(const ClockInputs &in) {
         view.battery = BatteryIcon::kDischarging;
     }
 
+    // --- the notice ------------------------------------------------------
+    // Subtraction rather than a comparison of two absolute counters, so the
+    // ~49-day wrap is arithmetic and not a case (the header, and every other
+    // window in this firmware).
+    view.notice = in.notice && (in.now_ms - in.notice_since_ms) < kNoticeMs;
+
     // A negative percentage is "there is nothing to ask" and must not read as an
     // empty battery — the same call §10.8.2 makes about an unset clock.
     view.battery_known = in.battery_present && in.battery_percent >= 0;

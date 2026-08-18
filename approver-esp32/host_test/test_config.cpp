@@ -889,6 +889,117 @@ void test_config_an_unknown_zone_does_not_silently_become_utc(void) {
     TEST_ASSERT_EQUAL_STRING(defaults.time.posix, config::Get().time.posix);
 }
 
+// --- `KEY` at boot (§10.15) ------------------------------------------------
+//
+// The button is not here — whether it was held is the caller's answer, because
+// this layer knows about a file and has never heard of a GPIO (§10.14.2). What
+// *is* here is everything that answer decides, and the ordering that makes the
+// button worth having at all: this runs **before** `Init()`, because the failure
+// it exists for is a config that stops the device booting, and a restore that
+// runs after the parse cannot rescue that.
+
+void test_config_key_not_held_at_boot_changes_nothing(void) {
+    // "Released early, nothing happens" — and nothing is the whole assertion:
+    // not a read, not a write, and not a line for the operator to act on.
+    FreshWithDefaults();
+    fake::PutFile("config.json", kGoodJson);
+
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(config::RestoreOutcome::kNotRequested),
+                          static_cast<int>(config::RestoreAtBoot(false)));
+    TEST_ASSERT_NULL(config::BootRestoreText());
+
+    char back[1024] = {};
+    TEST_ASSERT_TRUE(fake::GetFile("config.json", back, sizeof(back)));
+    TEST_ASSERT_EQUAL_STRING(kGoodJson, back);
+
+    TEST_ASSERT_EQUAL_INT(ESP_OK, config::Init());
+    TEST_ASSERT_EQUAL_STRING("desk", config::Get().wifi.networks[0].ssid);
+}
+
+void test_config_key_held_at_boot_puts_the_defaults_back(void) {
+    FreshWithDefaults();
+    fake::PutFile("config.json", kGoodJson);
+
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(config::RestoreOutcome::kRestored),
+                          static_cast<int>(config::RestoreAtBoot(true)));
+
+    // The boot continues, and what it reads is the file the button just wrote
+    // — which is what "boot continues on the defaults" means.
+    TEST_ASSERT_EQUAL_INT(ESP_OK, config::Init());
+    TEST_ASSERT_EQUAL_UINT8(0, config::Get().wifi.network_count);
+
+    char defaults[config::kMaxFileSize] = {};
+    TEST_ASSERT_TRUE(fake::GetFile("config.init.json", defaults, sizeof(defaults)));
+    char back[config::kMaxFileSize] = {};
+    TEST_ASSERT_TRUE(fake::GetFile("config.json", back, sizeof(back)));
+    TEST_ASSERT_EQUAL_STRING(defaults, back);
+}
+
+void test_config_the_boot_restore_leaves_the_registration_alone(void) {
+    // §10.15's whole reason for two files, reached by the button rather than by
+    // a bad parse: settings are a minute's work, a registration is a token
+    // minted on the host and typed over USB.
+    FreshWithDefaults();
+    fake::PutFile("config.json", kGoodJson);
+    fake::PutFile("registration.json", R"({"key_id":"approver-esp32","server_key":"AAAA"})");
+
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(config::RestoreOutcome::kRestored),
+                          static_cast<int>(config::RestoreAtBoot(true)));
+
+    char back[256] = {};
+    TEST_ASSERT_TRUE(fake::GetFile("registration.json", back, sizeof(back)));
+    TEST_ASSERT_NOT_NULL(std::strstr(back, "approver-esp32"));
+    TEST_ASSERT_NOT_NULL(std::strstr(back, "AAAA"));
+}
+
+void test_config_a_boot_restore_with_no_defaults_keeps_the_settings(void) {
+    // A missing `config.init.json` is a build error (§10.15) — but the honest
+    // runtime behaviour is that the restore did **not** happen, and the settings
+    // that were there are still there. Destroying a working config to report a
+    // missing one would be the worst of both.
+    Fresh();  // no `config.init.json`
+    fake::PutFile("config.json", kGoodJson);
+
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(config::RestoreOutcome::kFailed),
+                          static_cast<int>(config::RestoreAtBoot(true)));
+
+    char back[1024] = {};
+    TEST_ASSERT_TRUE(fake::GetFile("config.json", back, sizeof(back)));
+    TEST_ASSERT_EQUAL_STRING(kGoodJson, back);
+
+    TEST_ASSERT_EQUAL_INT(ESP_OK, config::Init());
+    TEST_ASSERT_EQUAL_STRING("desk", config::Get().wifi.networks[0].ssid);
+}
+
+void test_config_a_boot_restore_with_no_filesystem_is_a_failure_not_a_crash(void) {
+    fake::MountStorage();
+    fake::UnmountStorage();
+
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(config::RestoreOutcome::kFailed),
+                          static_cast<int>(config::RestoreAtBoot(true)));
+}
+
+void test_config_the_boot_restore_says_which_of_the_three_happened(void) {
+    // §10.15: "a restore the operator cannot confirm is a restore they will do
+    // twice". One string, so the screen and the console cannot drift apart.
+    FreshWithDefaults();
+    fake::PutFile("config.json", kGoodJson);
+
+    config::RestoreAtBoot(false);
+    TEST_ASSERT_NULL(config::BootRestoreText());
+
+    config::RestoreAtBoot(true);
+    TEST_ASSERT_NOT_NULL(config::BootRestoreText());
+    const char *restored = config::BootRestoreText();
+
+    Fresh();
+    fake::PutFile("config.json", kGoodJson);
+    config::RestoreAtBoot(true);
+    TEST_ASSERT_NOT_NULL(config::BootRestoreText());
+    // Two different outcomes must not read as the same sentence.
+    TEST_ASSERT_NOT_EQUAL(0, std::strcmp(restored, config::BootRestoreText()));
+}
+
 void RegisterConfigTests(void) {
     RUN_TEST(test_config_the_shipped_defaults_parse);
     RUN_TEST(test_config_the_two_shipped_files_have_the_same_shape);
@@ -945,6 +1056,13 @@ void RegisterConfigTests(void) {
     RUN_TEST(test_config_a_leftover_temp_file_is_dropped);
     RUN_TEST(test_config_a_write_interrupted_in_the_window_is_finished);
     RUN_TEST(test_config_a_restore_is_written_through_the_same_atomic_path);
+
+    RUN_TEST(test_config_key_not_held_at_boot_changes_nothing);
+    RUN_TEST(test_config_key_held_at_boot_puts_the_defaults_back);
+    RUN_TEST(test_config_the_boot_restore_leaves_the_registration_alone);
+    RUN_TEST(test_config_a_boot_restore_with_no_defaults_keeps_the_settings);
+    RUN_TEST(test_config_a_boot_restore_with_no_filesystem_is_a_failure_not_a_crash);
+    RUN_TEST(test_config_the_boot_restore_says_which_of_the_three_happened);
 
     RUN_TEST(test_config_a_named_zone_fills_in_its_posix_rule);
     RUN_TEST(test_config_an_unknown_zone_does_not_silently_become_utc);

@@ -1070,6 +1070,13 @@ int CmdConfig(int argc, char **argv) {
 
     const config::Data &c = config::Get();
     printf("source     %s%s\n", config::kPath, config::Loaded() ? "" : " (built-in defaults)");
+    // §10.15's restore, if it happened. **After the boot log has scrolled away
+    // and after the screen has taken the line down**, this is the only place
+    // left that says so — which is why it is printed every time rather than
+    // once. Nothing at all on an ordinary boot.
+    if (const char *restored = config::BootRestoreText(); restored != nullptr) {
+        printf("boot       %s (KEY was held)\n", restored);
+    }
     printf("wifi       %s, mode %s, %u network(s)\n", c.wifi.active ? "on" : "off",
            c.wifi.mode == config::WifiMode::kAp ? "ap" : "client",
            static_cast<unsigned>(c.wifi.network_count));
@@ -2575,6 +2582,14 @@ int CmdClock(int argc, char **) {
         printf(", %u%%", static_cast<unsigned>(view.battery_percent));
     }
     printf("\n");
+
+    // Only when there is one, because the ordinary state of this line is that
+    // there is nothing to say. It is here so that "the screen says the config
+    // was restored" is a fact a script can check — the same argument the drift
+    // two blocks up is printed for.
+    if (view.notice) {
+        printf("notice     one line under the date\n");
+    }
 
     printf("updates    %" PRIu32 ", %" PRIu32 " gave the frame up waiting for the display\n",
            status.updates, status.lock_misses);

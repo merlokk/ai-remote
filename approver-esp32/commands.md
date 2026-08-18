@@ -175,6 +175,7 @@ a colour without being able to say what made it that colour.
     wifi       off - hollow bars, 0 of 3 bar(s) lit
     bus        red - there is a server and we are not on it
     battery    cable in, not taking current, 100%
+    notice     one line under the date
     updates    147, 0 gave the frame up waiting for the display
     stack      2968 byte(s) never used, of 4096
 
@@ -184,6 +185,11 @@ out. **`drift` and `water` both move on their own**, so two runs a second apart
 are the check that the panel is being looked after: the face wanders around a
 box so no pixel carries an edge for long, and the digits are filled from a
 travelling wave rather than a flat green.
+
+`notice` appears only while there is one — the line the `KEY`-at-boot restore
+puts under the date for thirty seconds. It is here so that "the screen says the
+config was restored" is something a script can check, which is the same reason
+`drift` is printed.
 
 The three icon lines say which of each indicator's states is on screen, in
 words. `updates` next to the count of frames given up waiting for the display is
@@ -322,6 +328,12 @@ fallback access point, the internet check, the NATS URL, the time zone and
 SNTP server, display timeouts and the volume. Passwords show as *set* or *not
 set*, never in full.
 
+One line appears only sometimes: **`boot config restored (KEY was held)`**, when
+this boot began with `KEY` held down and the settings were put back to the
+factory ones. It is printed for the whole uptime, because by the time anybody
+asks, the log line has scrolled away and the screen has taken its own notice
+down.
+
 `config help` prints the forms, the way `wifi help` and `nats help` do, and it is
 also what anything unrecognised prints. The settable field names live in exactly
 one string in the source, so the usage block and the setter's own "unknown field"
@@ -338,6 +350,14 @@ Writes the current settings back, atomically.
 ### `config restore`
 Puts the factory defaults (`config.init.json`) back over `config.json`. The
 registration is not touched.
+
+The same thing happens with no console at all by **holding `KEY` for five seconds
+through a boot** — that is the way back for a `config.json` that stops the device
+booting, which is why it is read before the file is parsed. Five seconds because
+there is no screen and no sound that early to acknowledge a shorter press with.
+It says so afterwards in three places: a log line at the time, `config restored`
+under the clock for thirty seconds, and the `boot` line above for the rest of the
+uptime.
 
 ### `config set <field> <value>`
 In memory only. The settable fields:

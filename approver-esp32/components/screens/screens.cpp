@@ -68,7 +68,18 @@ ui::Request g_answered;
 // §10.10's "failure is visible", in the smallest place it appears: a receipt that
 // implied a reply had gone is the one lie on this screen that would matter.
 constexpr size_t kNoteSize = 48;
+
+// The notice under the date. Short: it is a headline, not a sentence.
+constexpr size_t kNoticeSize = 32;
 char g_note[kNoteSize] = "decided, not sent - nothing is listening";
+
+// §10.15's "say it happened": one line under the date, set by `main` once there
+// is a screen, and taken away by `ui::ClockFace` a minute later. Empty is the
+// ordinary state — nothing to say — and there is no lock around it because it
+// is written once, before anything reads it.
+char g_notice[kNoticeSize] = {};
+uint32_t g_notice_since_ms = 0;
+bool g_notice_set = false;
 
 // Who to tell. Null until somebody asks for it, which is the state a device with
 // no responder is in — and it is not an error, it is `request test` with nobody
@@ -157,6 +168,9 @@ void Gather(ui::ClockInputs *in, bool *battery_valid, pmic::Status *battery) {
     in->bus_configured = bus.configured;
     in->bus_connected = bus.state == nats::State::kConnected;
     in->bus_messages = bus.counters.messages_in;
+
+    in->notice = g_notice_set;
+    in->notice_since_ms = g_notice_since_ms;
 
     if (*battery_valid) {
         in->battery_present = battery->battery_present;
@@ -311,6 +325,7 @@ void Task(void *) {
         bool applied = false;
         if (display::Lock lock(kLockTimeoutMs); lock) {
             g_clock.SetDate(date);
+            g_clock.SetNotice(view.notice ? g_notice : "");
             g_clock.Apply(view);
 
             // Which of the two full-screen objects is up is the navigator's
@@ -531,6 +546,26 @@ void SetReceiptNote(const char *note) {
     // the one string on this screen where a short version still says the true
     // thing, and the alternative to truncating is a receipt with nothing on it.
     std::snprintf(g_note, sizeof g_note, "%s", note);
+}
+
+void SetNotice(const char *text) {
+    // The clock is what carries it, so a device with no panel has nothing to
+    // do here — and `main` calls this after `Init`, so there always is one when
+    // it matters.
+    if (g_handle == nullptr) {
+        return;
+    }
+    if (text == nullptr || text[0] == '\0') {
+        g_notice_set = false;
+        g_notice[0] = '\0';
+        return;
+    }
+    // Truncated rather than refused, the same call `SetReceiptNote` makes and
+    // for the same reason: a shortened headline still says the true thing, and
+    // the alternative is a boot that says nothing happened.
+    std::snprintf(g_notice, sizeof g_notice, "%s", text);
+    g_notice_since_ms = static_cast<uint32_t>(esp_timer_get_time() / 1000);
+    g_notice_set = true;
 }
 
 void ShowLimits(const ui::Limits &limits) {

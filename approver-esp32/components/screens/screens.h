@@ -241,4 +241,20 @@ void OnDecision(DecisionHandler handler, void *user);
 // pointing at freed text.
 void SetReceiptNote(const char *note);
 
+// --- Saying that something already happened (§10.15) ---------------------
+
+// One line under the clock's date. It exists for the `KEY`-at-boot config
+// restore, which runs before there is a panel to report on: "a restore the
+// operator cannot confirm is a restore they will do twice."
+//
+// **The text is the caller's, the lifetime is `ui::ClockFace`'s** — it takes it
+// away after `ui::ClockFace::kNoticeMs`, because an unmoving lit line is what
+// wears an AMOLED out (§10.8.1) and the console is where a fact that outlives a
+// glance belongs. Null or empty clears it. Copied and bounded, like the receipt
+// note above.
+//
+// It does not raise a screen, take focus, or move anything: §10.8.1's rule that
+// everything except a request card is quiet.
+void SetNotice(const char *text);
+
 }  // namespace screens

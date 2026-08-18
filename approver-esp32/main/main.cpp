@@ -89,6 +89,23 @@ extern "C" void app_main(void) {
     // bringing the hardware up first would mean setting that volume twice, and
     // the second write would be the one that mattered.
     storage::Init();
+
+    // **`KEY` at boot, and it is here rather than three lines lower because
+    // that is the whole point** (§10.15): the failure this button exists for is
+    // a `config.json` that stops the device booting, so the restore has to run
+    // *before* the parse that would fall over. It is the one thing on this board
+    // that depends on nothing — no bus, no panel, no radio — which is why
+    // `board::InitButtons` exists separately from `board::Init` below.
+    //
+    // Five blind seconds: there is no screen and no sound this early to
+    // acknowledge a shorter press with, which is the argument for a threshold
+    // nobody crosses by accident rather than for feedback that cannot be given.
+    // `HeldFor` gives up the instant the button comes back, so a boot with
+    // nobody holding anything costs one GPIO read.
+    board::InitButtons();
+    config::RestoreAtBoot(
+        board::Buttons().HeldFor(board::button::kKeyIndex, config::kRestoreHoldMs));
+
     config::Init();
 
     // **The identity, and it is this early because everything above the bus has
@@ -245,6 +262,14 @@ extern "C" void app_main(void) {
                 screens::Init(&board::Pmic(), keys, &board::Sound());
             if (screens_err != ESP_OK) {
                 ESP_LOGE(TAG, "screens not started: %s", esp_err_to_name(screens_err));
+            } else {
+                // **The other half of §10.15's "say it happened".** The button
+                // was read before any of this existed, so the log line it wrote
+                // then is the only record until here — and a restore the
+                // operator cannot confirm is a restore they will do twice. Null
+                // when nothing happened, which is the ordinary boot and shows
+                // nothing at all.
+                screens::SetNotice(config::BootRestoreText());
             }
         }
     }

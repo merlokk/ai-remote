@@ -83,15 +83,35 @@ inline constexpr int32_t kDigitsWidth = 4 * kDigitWidth + 4 * kDigitGap + kColon
 
 inline constexpr int32_t kFaceWidth = kColumnWidth + kColumnGap + kDigitsWidth;
 
-// The tallest of the two columns, then the date under it.
+// The tallest of the two columns, then the date under it. **This is what the
+// face is centred on**, and it is deliberately not the same as the object's own
+// height below: the notice is off almost always, and a line that is off must not
+// move the digits down for the life of the device.
 inline constexpr int32_t kDateTop = 172;
 inline constexpr int32_t kDateHeight = 34;
-inline constexpr int32_t kFaceHeight = kDateTop + kDateHeight;
+inline constexpr int32_t kClockHeight = kDateTop + kDateHeight;
+
+// And under that, the one line this screen has for something that already
+// happened (§10.15). It is a child of the face, so it **drifts with everything
+// else** rather than being the one static thing on the panel (§10.8.1).
+inline constexpr int32_t kNoticeTop = kClockHeight + 8;
+inline constexpr int32_t kNoticeHeight = kDateHeight;
+
+// So the face's box has to *contain* the notice, and that is a finding rather
+// than a preference. The first version left the box at `kClockHeight` and let
+// the label hang below it, on the strength of `LV_OBJ_FLAG_OVERFLOW_VISIBLE`
+// being set — and the notice never appeared on the glass, while `clock` on the
+// console said it was there. `lv_obj_pos.c` is why: with that flag the parent's
+// clip box grows by `lv_obj_get_ext_draw_size(parent)`, which is **zero** unless
+// something like a shadow enlarged it, so a child entirely outside the parent is
+// clipped away completely. The flag makes an overhang visible; it does not make
+// a box bigger. Hence two heights — one to centre on, one to contain.
+inline constexpr int32_t kFaceHeight = kNoticeTop + kNoticeHeight;
 
 // Where the face rests when the drift is at zero: centred on the *wander*, so
 // the middle of the walk is the middle of the panel rather than one corner of it.
 inline constexpr int32_t kRestX = (kPanelWidth - kFaceWidth) / 2;
-inline constexpr int32_t kRestY = (kPanelHeight - kFaceHeight) / 2;
+inline constexpr int32_t kRestY = (kPanelHeight - kClockHeight) / 2;
 
 static_assert(kRestX - ui::ClockFace::kDriftX >= 0 &&
                   kRestX + kFaceWidth + ui::ClockFace::kDriftX <= kPanelWidth,
@@ -123,6 +143,12 @@ class ClockScreen {
     // (§10.8.2), and that edge is the caller. Empty hides it.
     void SetDate(const char *text);
 
+    // §10.15's "say it happened": one line under the date, whose *text* is the
+    // caller's and whose *lifetime* is `ui::ClockFace`'s. Empty clears it. The
+    // split is the same one this whole screen is built on — a sentence somebody
+    // wrote is not a decision, and how long to show it for is.
+    void SetNotice(const char *text);
+
     // Show or hide the whole face. **The clock is not always what is up any
     // more** (§10.8.3): the limits screen is a sibling of it and exactly one of
     // the two is visible, which the navigator decides. Everything under here keeps
@@ -144,15 +170,17 @@ class ClockScreen {
     lv_obj_t *icons_ = nullptr;
     lv_obj_t *percent_ = nullptr;
     lv_obj_t *date_ = nullptr;
+    lv_obj_t *notice_ = nullptr;
 
     ui::ClockView view_ = {};
     bool painted_ = false;
     bool visible_ = true;  // has `view_` ever been applied
 
-    // Both labels are `lv_label_set_text_static` over these, so a changing
+    // All three labels are `lv_label_set_text_static` over these, so a changing
     // string costs no allocation out of LVGL's pool (§10.14.1).
     char percent_text_[8] = {};
     char date_text_[24] = {};
+    char notice_text_[32] = {};
 };
 
 }  // namespace screens

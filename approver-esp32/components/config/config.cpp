@@ -18,6 +18,11 @@ constexpr const char *TAG = "config";
 Data data = {};
 bool loaded = false;
 
+// What `KEY` decided at boot (§10.15). Kept because it has to be said twice —
+// once on the screen, once whenever the console is asked — and neither of those
+// exists yet at the moment the button is read.
+RestoreOutcome boot_restore = RestoreOutcome::kNotRequested;
+
 // One buffer, used for reading and for printing. Playback has its own; these
 // two never run at the same time, and neither allocates (§10.14.1).
 char file_buffer[kMaxFileSize];
@@ -594,6 +599,42 @@ esp_err_t Restore() {
     }
     loaded = true;
     return err;
+}
+
+RestoreOutcome RestoreAtBoot(bool key_held) {
+    boot_restore = RestoreOutcome::kNotRequested;
+    if (!key_held) {
+        return boot_restore;
+    }
+
+    // One log line at the time, because there is no panel this early (§10.15) —
+    // the screen says it again as soon as there is one.
+    ESP_LOGW(TAG, "KEY held at boot: putting %s back over %s", kDefaultsPath, kPath);
+
+    const esp_err_t err = Restore();
+    if (err == ESP_OK) {
+        boot_restore = RestoreOutcome::kRestored;
+        ESP_LOGW(TAG, "%s restored; the registration was not touched", kPath);
+    } else {
+        boot_restore = RestoreOutcome::kFailed;
+        ESP_LOGE(TAG, "%s not restored (%s); the settings are as they were", kPath,
+                 esp_err_to_name(err));
+    }
+    return boot_restore;
+}
+
+RestoreOutcome BootRestore() { return boot_restore; }
+
+const char *BootRestoreText() {
+    switch (boot_restore) {
+        case RestoreOutcome::kRestored:
+            return "config restored";
+        case RestoreOutcome::kFailed:
+            return "config restore failed";
+        case RestoreOutcome::kNotRequested:
+            break;
+    }
+    return nullptr;
 }
 
 esp_err_t Save() {

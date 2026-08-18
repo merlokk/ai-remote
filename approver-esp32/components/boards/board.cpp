@@ -131,14 +131,29 @@ bool ImuInterrupt1() { return gpio_get_level(imu::kInterrupt1) != 0; }
 
 bool ImuInterrupt2() { return gpio_get_level(imu::kInterrupt2) != 0; }
 
+esp_err_t InitButtons() {
+    // Idempotent, because there are two callers now and only one of them is
+    // `Init()`: §10.15's restore reads `KEY` before the filesystem is parsed,
+    // which is long before the bus this board's chips hang off exists. A second
+    // call would re-adopt the debounce state and lose a press that is being
+    // held right now — which is precisely the press that caller is asking about.
+    if (keys.Ready()) {
+        return ESP_OK;
+    }
+    const esp_err_t err = keys.Init(kButtonConfigs, button::kCount);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "buttons not initialised: %s", esp_err_to_name(err));
+    }
+    return err;
+}
+
 esp_err_t Init() {
     // The buttons before the bus, and deliberately: they depend on nothing, and
     // §10.15's restore is a `KEY` read that has to happen before the config is
-    // parsed — so a bus that fails must not be able to take them with it.
-    esp_err_t button_err = keys.Init(kButtonConfigs, button::kCount);
-    if (button_err != ESP_OK) {
-        ESP_LOGE(TAG, "buttons not initialised: %s", esp_err_to_name(button_err));
-    }
+    // parsed — so a bus that fails must not be able to take them with it. By
+    // now `main` has usually done it already, and this is the call that makes
+    // that optional rather than required.
+    InitButtons();
 
     // The bus next: everything below it is on it. A failure here is fatal to
     // the whole I²C half of the board, so it returns rather than continuing to

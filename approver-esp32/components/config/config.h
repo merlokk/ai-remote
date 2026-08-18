@@ -233,6 +233,47 @@ esp_err_t Save();
 // "Restore config" entry will call. `registration.json` is not touched.
 esp_err_t Restore();
 
+// --- `KEY` at boot (§10.15) ----------------------------------------------
+//
+// How long the button has to be held. **Long on purpose**: there is no panel
+// and no sound that early in the boot, so a partial press has nothing to mean
+// and nothing to give feedback with — which is the argument for five blind
+// seconds rather than a threshold somebody could cross by accident while
+// plugging a cable in.
+inline constexpr uint32_t kRestoreHoldMs = 5000;
+
+enum class RestoreOutcome : uint8_t {
+    kNotRequested = 0,  // nobody held it: nothing was read and nothing written
+    kRestored,          // `config.init.json` is now `config.json`
+    kFailed,            // asked for and did not happen — the settings are as they were
+};
+
+// The restore §10.15 gives `KEY` its job for. **Whether the button was held is
+// the caller's answer**, not this component's: a layer that knows about a file
+// and its fields has never heard of a GPIO (§10.14.2), and `main` is where the
+// two meet — the same place the codec's volume is applied.
+//
+// **It runs before `Init()`, and that ordering is the whole point.** The failure
+// this button exists for is a config that stops the device booting; a restore
+// that ran after the parse could not rescue it. So: this writes the file, and
+// `Init()` then reads it like any other boot.
+//
+// A failure changes nothing on the filesystem — a missing `config.init.json` or
+// an unmounted partition leaves the settings that are there exactly where they
+// are, because destroying a working config to report a missing default file is
+// the worst of both. It does leave the built-in defaults in memory, which the
+// `Init()` that follows overwrites with whatever the file really says.
+RestoreOutcome RestoreAtBoot(bool key_held);
+
+// What the last `RestoreAtBoot` decided, for anything that has to say so later.
+RestoreOutcome BootRestore();
+
+// That, as one line for the operator, or null when there is nothing to say.
+// **One string rather than two**: §10.15 wants it on the screen as soon as
+// there is a screen and the console has to answer the same question, and a
+// second copy of a sentence is a copy that drifts.
+const char *BootRestoreText();
+
 // The live values. Mutable on purpose: a caller changes a field and calls
 // `Save()`. There is exactly one of these, for the life of the device.
 Data &Get();

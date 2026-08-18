@@ -158,6 +158,16 @@ void LogPinout();
 // explicit Init, in an order written down rather than left to the linker
 // (§10.14.1).
 
+// **The buttons alone, and this exists because of one caller** (§10.15): the
+// `KEY`-at-boot restore has to be read *before* `config::Init()` parses the
+// file, and `Init()` below cannot run that early — it needs the I²C bus, and
+// the panel's reset is a PMIC rail. So the one piece of this board that depends
+// on nothing has its own entry point.
+//
+// Idempotent: `Init()` calls it too, so a `main` that does not care about the
+// restore still gets buttons in the same place it always did.
+esp_err_t InitButtons();
+
 // Brings up the I²C bus and the chips on it. Not fatal if a chip is missing —
 // it is reported, and `Pmic().Present()` says so afterwards.
 esp_err_t Init();
