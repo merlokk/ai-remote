@@ -36,6 +36,7 @@
 #include "navigator.h"
 #include "qmi8658.h"
 #include "settings_menu.h"
+#include "touch.h"
 #include "speaker.h"
 #include "request_card.h"
 
@@ -175,6 +176,12 @@ struct Hardware {
     // the status page and for nothing else. **No gesture ever approves anything**,
     // and the way that stays true is that nothing on the approval path can see it.
     ::imu::Qmi8658 *motion = nullptr;
+
+    // The panel, for the touch test of §10.8.5 — **the only consumer in this
+    // firmware that reads it directly.** Everything else takes its touch through
+    // LVGL, which has already applied the correction; a calibration built from
+    // that would be measuring its own last answer.
+    ::display::Touch *touch = nullptr;
 };
 
 // Builds the screens on LVGL's active screen and starts the tasks. LVGL has to be
@@ -318,5 +325,12 @@ bool Navigate(ui::Nav nav);
 // allowed at all, where pressing a row is not, because nothing on that screen
 // does anything: turning a page of a readout cannot reach an action.
 bool NextStatusPage();
+
+// Put the touch correction back to none, in memory (§10.8.5). **The second
+// escape hatch**, next to `KEY` on the touch screen: a correction that lands
+// every press in the wrong place takes away the screen it was made on, and this
+// one does not go through the glass at all. It does not write the file — `config
+// save` is what does, the way it is for every other setting (§10.15).
+void ResetTouch();
 
 }  // namespace screens

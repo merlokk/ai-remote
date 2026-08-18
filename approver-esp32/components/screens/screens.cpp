@@ -1,5 +1,7 @@
 #include "screens.h"
 
+#include "config.h"
+
 #include <cinttypes>
 #include <cstdarg>
 #include <cstdio>
@@ -25,6 +27,7 @@
 #include "request_screen.h"
 #include "settings_screen.h"
 #include "status_screen.h"
+#include "touch_screen.h"
 #include "wifi_manager.h"
 
 namespace screens {
@@ -55,6 +58,21 @@ SettingsScreen g_settings_screen;
 ui::SettingsMenu g_menu;
 StatusScreen g_status_screen;
 ui::StatusPager g_pager;
+
+// The touch test and the calibration (§10.8.5). **The one screen that reads the
+// panel itself**: everything else takes its touch through LVGL, and this has to
+// see the raw point because it is measuring the correction rather than using it.
+TouchScreen g_touch_screen;
+ui::TouchFlow g_touch_flow;
+display::Touch *g_touch = nullptr;
+
+// Where the finger was and how long it has been there, kept between passes so
+// that a release can be turned into a point. Only meaningful while that screen
+// is up; `Reset` on the flow is what clears the rest.
+bool g_touch_down = false;
+uint32_t g_touch_down_ms = 0;
+uint16_t g_touch_last_raw_x = 0;
+uint16_t g_touch_last_raw_y = 0;
 
 // **`KEY` held two seconds opens settings**, which is the operator's way in when
 // the panel is not being touched — and the reason the threshold and the
@@ -409,6 +427,101 @@ void FillStatus(StatusFacts *facts, bool battery_valid, const pmic::Status &batt
     }
 }
 
+// --- The touch test (§10.8.5) --------------------------------------------
+//
+// **Polled here rather than taken from LVGL**, and that is the point of the
+// screen: LVGL's pointer has already been through the correction, so a
+// calibration built from it would be measuring its own last answer. This reads
+// the controller directly — under the same lease every other reader takes
+// (§10.14.3) — and the two readers cost one extra transaction per pass while
+// this screen is up and nothing at all when it is not.
+void PollTouch(TouchView *view, uint32_t now_ms) {
+    uint16_t raw_x = 0;
+    uint16_t raw_y = 0;
+    bool down = false;
+
+    if (g_touch != nullptr && g_touch->Ready()) {
+        down = g_touch->ReadRaw(&raw_x, &raw_y);
+    }
+
+    if (down && g_touch != nullptr) {
+        if (!g_touch_down) {
+            g_touch_down = true;
+            g_touch_down_ms = now_ms;
+        }
+        g_touch_last_raw_x = raw_x;
+        g_touch_last_raw_y = raw_y;
+    } else if (g_touch_down && g_touch != nullptr) {
+        // **The point is taken on release, at where the finger last was.** A
+        // press is what the operator can still adjust; a release is what they
+        // meant. Taking it on the way down would record the first frame of a
+        // finger still landing.
+        g_touch_down = false;
+        const uint32_t held = now_ms - g_touch_down_ms;
+        if (g_touch_flow.Released(static_cast<int16_t>(g_touch_last_raw_x),
+                                  static_cast<int16_t>(g_touch_last_raw_y), held) &&
+            g_touch_flow.Collected() >= ui::kTouchTargets) {
+            ui::TouchCalibration fitted = g_touch->Calibration();
+            const ui::TouchFit outcome =
+                g_touch_flow.Finish(kPanelWidth, kPanelHeight, &fitted, now_ms);
+            if (outcome == ui::TouchFit::kOk) {
+                // Applied at once and **written by nobody**: `config set` and
+                // `config save` are two commands for the reason §10.15 gives,
+                // and a screen that reached the filesystem would be the one
+                // place in this firmware that did not follow it.
+                g_touch->SetCalibration(fitted);
+                config::Get().touch.scale_x = fitted.scale_x;
+                config::Get().touch.scale_y = fitted.scale_y;
+                config::Get().touch.offset_x = fitted.offset_x;
+                config::Get().touch.offset_y = fitted.offset_y;
+                ESP_LOGI(TAG, "touch calibrated: x %d/1000%+d, y %d/1000%+d - 'config save' keeps it",
+                         static_cast<int>(fitted.scale_x), static_cast<int>(fitted.offset_x),
+                         static_cast<int>(fitted.scale_y), static_cast<int>(fitted.offset_y));
+            } else {
+                ESP_LOGW(TAG, "touch calibration refused: %s", ui::TouchFitText(outcome));
+            }
+        }
+    }
+
+    // **Everything the screen shows is read after the point was handled**, so a
+    // press that completed a calibration is drawn against the correction it just
+    // produced rather than against the one it replaced.
+    view->touching = down;
+    view->raw_x = raw_x;
+    view->raw_y = raw_y;
+    view->screen_x = raw_x;
+    view->screen_y = raw_y;
+    if (g_touch != nullptr) {
+        view->calibration = g_touch->Calibration();
+    }
+    view->calibration.Apply(kPanelWidth, kPanelHeight, &view->screen_x, &view->screen_y);
+    view->stage = g_touch_flow.Stage();
+    view->collected = g_touch_flow.Collected();
+    view->outcome = g_touch_flow.Outcome();
+    if (view->stage == ui::TouchStage::kCollecting) {
+        ui::TouchTarget(view->collected, kPanelWidth, kPanelHeight, &view->target_x,
+                        &view->target_y);
+    }
+}
+
+// Put the correction back to none. **`KEY` on that screen, and the reason it is
+// a button** (`touch_screen.h`): the state this returns to is the one every
+// device ships with, so it is always safe, and it must be reachable when the
+// glass is not.
+void ResetTouchCalibration() {
+    if (g_touch == nullptr) {
+        return;
+    }
+    const ui::TouchCalibration none;
+    g_touch->SetCalibration(none);
+    config::Get().touch.scale_x = none.scale_x;
+    config::Get().touch.scale_y = none.scale_y;
+    config::Get().touch.offset_x = none.offset_x;
+    config::Get().touch.offset_y = none.offset_y;
+    g_touch_flow.Reset();
+    ESP_LOGI(TAG, "touch correction cleared - 'config save' keeps it");
+}
+
 // One decision, handed to whoever registered for it. **This is the seam §10.6 and
 // §7 took over**, and the shape of it is the point: nothing about this screen
 // changed when they did — no key, no subject and no signature appears in this
@@ -435,7 +548,8 @@ void Decided(const ui::Request &request, ui::Verdict verdict) {
 // a button and a console command are three ways of asking it the same question.
 
 bool Apply(ui::Nav nav) {
-    const bool leaving_limits = g_nav.Screen() == ui::ScreenId::kLimits;
+    const ui::ScreenId was = g_nav.Screen();
+    const bool leaving_limits = was == ui::ScreenId::kLimits;
     const bool moved = g_nav.Navigate(nav);
     if (!moved) {
         return false;
@@ -452,6 +566,12 @@ bool Apply(ui::Nav nav) {
     }
     if (g_nav.Screen() == ui::ScreenId::kStatus) {
         g_pager.Reset();
+    }
+    // Arriving *and* leaving both reset the flow: a calibration nobody finished
+    // must not be waiting for its third cross the next time this screen opens.
+    if (g_nav.Screen() == ui::ScreenId::kTouch || was == ui::ScreenId::kTouch) {
+        g_touch_flow.Reset();
+        g_touch_down = false;
     }
     return true;
 }
@@ -514,8 +634,10 @@ void Activated(uint32_t now_ms) {
             // watching the log rather than the screen.
             ESP_LOGI(TAG, "that row has no screen behind it yet");
             break;
-        case ui::SettingsAction::kArmed:
         case ui::SettingsAction::kOpenTouch:
+            Apply(ui::Nav::kOpenTouch);
+            break;
+        case ui::SettingsAction::kArmed:
         case ui::SettingsAction::kNone:
             break;
     }
@@ -548,6 +670,9 @@ void PollKeys(uint32_t now_ms) {
                 g_menu.Next();
             } else if (screen == ui::ScreenId::kStatus) {
                 g_pager.Next();
+            } else if (screen == ui::ScreenId::kTouch &&
+                       g_touch_flow.Stage() == ui::TouchStage::kTest) {
+                g_touch_flow.Start();
             }
         }
     }
@@ -585,6 +710,11 @@ void PollKeys(uint32_t now_ms) {
         Apply(ui::Nav::kSwipeUp);
     } else if (key == buttons::Press::kShort && screen == ui::ScreenId::kSettings) {
         Activated(now_ms);
+    } else if (key == buttons::Press::kShort && screen == ui::ScreenId::kTouch) {
+        // **The reset, and it is a button because the glass may be the broken
+        // thing** (`touch_screen.h`). It puts back the state every device ships
+        // with, so it is always safe to press.
+        ResetTouchCalibration();
     }
 }
 
@@ -631,8 +761,12 @@ void Task(void *) {
 
         // Most ticks are a button poll and nothing else. A card that just changed
         // is drawn immediately rather than at the next face pass: an arrival, a
-        // press and an expiry are all things the operator is looking at.
-        if ((tick % kFaceEveryTicks) != 0 && !card_changed) {
+        // press and an expiry are all things the operator is looking at — and so
+        // is a fingertip, which is why the touch screen runs at the full rate:
+        // a crosshair updated five times a second reads as a device that is not
+        // keeping up, on the one screen whose whole job is to look responsive.
+        if ((tick % kFaceEveryTicks) != 0 && !card_changed &&
+            g_nav.Screen() != ui::ScreenId::kTouch) {
             ++tick;
             vTaskDelay(pdMS_TO_TICKS(kTickMs));
             continue;
@@ -673,6 +807,18 @@ void Task(void *) {
         // read** (§10.8.1), and only while the screen showing them is up: the
         // status page costs a bus transaction and the clock must not pay for it.
         // The page travels with the facts — `status_screen.h` says why.
+        // The touch test, and it is polled outside the LVGL lock for the reason
+        // the status page is: it is an I²C read (§10.8.1).
+        TouchView touch_view;
+        if (g_nav.Screen() == ui::ScreenId::kTouch) {
+            g_touch_flow.Tick(now_ms);
+            PollTouch(&touch_view, now_ms);
+        } else if (g_touch_down) {
+            // A finger left on the glass while the screen changed under it is
+            // not a press on whatever came next.
+            g_touch_down = false;
+        }
+
         StatusFacts facts;
         if (g_nav.Screen() == ui::ScreenId::kStatus) {
             facts.page = g_pager.Index();
@@ -720,9 +866,13 @@ void Task(void *) {
             g_limits_screen.SetVisible(up == ui::ScreenId::kLimits);
             g_settings_screen.SetVisible(up == ui::ScreenId::kSettings);
             g_status_screen.SetVisible(up == ui::ScreenId::kStatus);
+            g_touch_screen.SetVisible(up == ui::ScreenId::kTouch);
             g_settings_screen.Apply(g_menu, now_ms);
             if (up == ui::ScreenId::kStatus) {
                 g_status_screen.Apply(facts);
+            }
+            if (up == ui::ScreenId::kTouch) {
+                g_touch_screen.Apply(touch_view);
             }
             // The epoch, or 0 when it is not believable — which is what decides
             // whether a countdown is computed here or taken from what the
@@ -760,6 +910,7 @@ esp_err_t Init(const Hardware &hardware, const Keys &keys) {
     g_battery = hardware.battery;
     g_keys = keys;
     g_alert = hardware.alert;
+    g_touch = hardware.touch;
 
     if (g_lock == nullptr) {
         g_lock = xSemaphoreCreateMutexStatic(&g_lock_storage);
@@ -805,6 +956,11 @@ esp_err_t Init(const Hardware &hardware, const Keys &keys) {
         if (status != ESP_OK) {
             ESP_LOGE(TAG, "status not built: %s", esp_err_to_name(status));
             return status;
+        }
+        const esp_err_t touch = g_touch_screen.Create(screen);
+        if (touch != ESP_OK) {
+            ESP_LOGE(TAG, "touch test not built: %s", esp_err_to_name(touch));
+            return touch;
         }
 
         // After the clock, so it is the later sibling and therefore the one LVGL
@@ -1003,6 +1159,8 @@ bool Navigate(ui::Nav nav) {
     }
     return !g_has_pending_nav;
 }
+
+void ResetTouch() { ResetTouchCalibration(); }
 
 bool NextStatusPage() {
     if (g_handle == nullptr || g_nav.Screen() != ui::ScreenId::kStatus) {

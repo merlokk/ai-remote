@@ -204,6 +204,25 @@ struct Audio {
     uint8_t volume_percent;  // what the codec is set to at boot
 };
 
+// The touch correction of §10.8.5, as four plain numbers.
+//
+// **Plain numbers rather than `ui::TouchCalibration`**, and that is the layering
+// rather than laziness: this component knows about a file and its fields, and it
+// has never heard of a panel. `main` is where the two meet, the same place the
+// codec's volume and the display's brightness do.
+//
+// All four at their defaults — scale 1000, offset 0 — is a device that has never
+// been calibrated, which is the ordinary state and not a missing setting. There
+// is no separate "calibrated" flag for the reason `Wifi::active` has no second
+// switch beside it: two fields that can disagree is one bug report nobody can
+// read.
+struct Touch {
+    int16_t scale_x;   // 1000 is 1.0; negative undoes a mirrored axis
+    int16_t scale_y;
+    int16_t offset_x;  // pixels
+    int16_t offset_y;
+};
+
 struct Data {
     Wifi wifi;
     InternetCheck internet;
@@ -211,6 +230,7 @@ struct Data {
     Time time;
     Display display;
     Audio audio;
+    Touch touch;
 };
 
 // Reads `config.json` into the fields, restoring it from `config.init.json`

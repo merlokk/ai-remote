@@ -34,6 +34,7 @@
 #include "esp_lcd_touch.h"
 #include "hal/gpio_types.h"
 #include "i2c_bus.h"
+#include "touch_cal.h"
 
 namespace display {
 
@@ -65,7 +66,34 @@ class Touch {
     // I²C lease for the length of the read and gives it straight back; a lease
     // it could not get is reported as "no touch", which is the same thing a
     // dropped frame's read looks like from LVGL.
+    //
+    // **The correction of §10.8.5 is applied here**, which is the one place it
+    // can be: everything above this — LVGL, every screen, every button on one —
+    // then works in screen coordinates and has never heard of the controller's
+    // idea of where the finger is.
     bool Read(uint16_t *x, uint16_t *y);
+
+    // The same read with **nothing applied**, for the one caller that is
+    // measuring the correction rather than using it. A calibration screen that
+    // read through the correction it is producing would be measuring its own
+    // last answer.
+    bool ReadRaw(uint16_t *x, uint16_t *y);
+
+    // What is being applied, and what to apply. Settable at runtime because
+    // that is the whole point — `main` hands it what `config.json` holds at
+    // boot, and the calibration screen replaces it the moment a fit succeeds.
+    void SetCalibration(const ui::TouchCalibration &calibration) { calibration_ = calibration; }
+    const ui::TouchCalibration &Calibration() const { return calibration_; }
+
+    // The orientation this was brought up with. **Read back rather than assumed**
+    // for the reason `display brightness` prints the live value next to the
+    // stored one: a calibration cannot fix an axis that is the wrong way round,
+    // so "what are the axes" is the first question when a press lands on the
+    // opposite side of the glass — and the answer belongs next to the correction
+    // that cannot help.
+    bool SwapXy() const { return swap_xy_; }
+    bool MirrorX() const { return mirror_x_; }
+    bool MirrorY() const { return mirror_y_; }
 
     // How many reads were skipped because the bus was busy. Not a statistic for
     // its own sake: a number that climbs is contention worth looking at, and
@@ -73,9 +101,17 @@ class Touch {
     uint32_t MissedReads() const { return missed_; }
 
    private:
+    bool ReadPoint(uint16_t *x, uint16_t *y);
+
     i2cbus::Bus *bus_ = nullptr;
     esp_lcd_touch_handle_t handle_ = nullptr;
     uint32_t missed_ = 0;
+    uint16_t width_ = 480;
+    uint16_t height_ = 480;
+    bool swap_xy_ = false;
+    bool mirror_x_ = false;
+    bool mirror_y_ = false;
+    ui::TouchCalibration calibration_;
 };
 
 }  // namespace display

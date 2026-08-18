@@ -43,6 +43,7 @@ enum class ScreenId : uint8_t {
     kLimits,
     kSettings,
     kStatus,
+    kTouch,
     kWifi,
     kCount,
 };
@@ -59,6 +60,7 @@ enum class Nav : uint8_t {
     kBack,
     kOpenWifi,
     kOpenStatus,
+    kOpenTouch,
 };
 
 class Navigator {

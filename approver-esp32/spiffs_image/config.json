@@ -49,6 +49,12 @@
         "dimSeconds": 30,
         "blankSeconds": 120
     },
+    "touch": {
+        "scaleX": 1000,
+        "scaleY": 1000,
+        "offsetX": 0,
+        "offsetY": 0
+    },
     "audio": {
         "volume": 70
     }

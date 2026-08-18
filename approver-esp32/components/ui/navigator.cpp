@@ -59,6 +59,8 @@ bool Navigator::Navigate(Nav nav) {
                 screen_ = ScreenId::kWifi;
             } else if (nav == Nav::kOpenStatus) {
                 screen_ = ScreenId::kStatus;
+            } else if (nav == Nav::kOpenTouch) {
+                screen_ = ScreenId::kTouch;
             }
             break;
 
@@ -69,6 +71,18 @@ bool Navigator::Navigate(Nav nav) {
             // nothing at all. `kBack` goes up one level rather than home —
             // dropping the operator to the clock from two levels down is the
             // "forget this screen exists" the Wi-Fi row below already refuses.
+            if (nav == Nav::kBack) {
+                screen_ = ScreenId::kSettings;
+            }
+            break;
+
+        case ScreenId::kTouch:
+            // **Swipeless, and here that is a safety property rather than a
+            // preference.** This is the screen that tests the thing a swipe is
+            // made of: a gesture that navigated would mean a device with a bad
+            // correction leaves the one screen that can fix it, by accident,
+            // while the operator is dragging a finger across it to see where the
+            // points land. `PWR` is the way out, and it is a button.
             if (nav == Nav::kBack) {
                 screen_ = ScreenId::kSettings;
             }

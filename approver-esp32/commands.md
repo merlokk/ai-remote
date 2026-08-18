@@ -196,7 +196,29 @@ words. `updates` next to the count of frames given up waiting for the display is
 the load figure: a number that climbs there means something else is holding
 LVGL — and `screenshot` below is the one thing that reliably makes it climb.
 
-### `screen [clock|settings|status|page|back]`
+### `touch [reset]`
+The touch correction being applied, the one stored, and the axes underneath both.
+
+    correction none — the controller's own coordinates are used
+    config     x 1000/1000 +0, y 1000/1000 +0
+    axes       swap_xy=1 mirror_x=0 mirror_y=1, compiled in
+    dropped    0 read(s) gave the bus up to somebody else
+
+`touch reset` puts the correction back to none, in memory only — `config save`
+writes it. **It is here because it must not go through the glass**: a correction
+that lands every press in the wrong place takes away the screen it was made on,
+and this one works with the panel unplugged. `KEY` on the touch screen is the
+other escape hatch.
+
+The `axes` line is what a calibration **cannot** fix, and is the first thing to
+look at when a press lands on the opposite side of the panel: they are compiled
+in from the vendor's example and change in `board.h`, not here.
+
+Calibrating needs the screen — `screen touch`, then `BOOT` and four presses.
+Four crosses need four fingers in four places, and there is no honest way to send
+that down a serial port.
+
+### `screen [clock|settings|status|touch|page|back]`
 Which screen is up — and, with a word, a way to move between them that is not a
 finger.
 
@@ -214,8 +236,8 @@ a hand can ask and `screenshot` has nothing to photograph.
 
 It goes through the same door a swipe does, so what it reaches is what the
 operator would reach: a request card still outranks it, and settings still
-cannot be opened from inside itself. `screen page` turns a status page, which is
-navigation rather than a press.
+cannot be opened from inside itself. `screen page` turns a status page and
+`screen touch` opens the touch test — both navigation rather than a press.
 
 **It cannot press a row**, deliberately: the rows are where `reboot` lives, and
 the console already has its own `reboot`. One route per surface.

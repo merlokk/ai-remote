@@ -2215,6 +2215,7 @@ void PrintScreenUsage(void) {
     printf("       screen clock          go home\n");
     printf("       screen settings       the settings list\n");
     printf("       screen status         the status pages, inside settings\n");
+    printf("       screen touch          the touch test and calibration\n");
     printf("       screen page           the next status page\n");
     printf("       screen back           up one level\n");
     printf("it moves between screens the way a swipe does, and cannot press a row\n");
@@ -2230,6 +2231,8 @@ const char *ScreenName(ui::ScreenId screen) {
             return "settings";
         case ui::ScreenId::kStatus:
             return "status";
+        case ui::ScreenId::kTouch:
+            return "touch";
         case ui::ScreenId::kWifi:
             return "wi-fi";
         case ui::ScreenId::kCount:
@@ -2280,6 +2283,9 @@ int CmdScreen(int argc, char **argv) {
             screens::Navigate(ui::Nav::kOpenStatus);
         } else if (strcmp(where, "back") == 0) {
             screens::Navigate(ui::Nav::kBack);
+        } else if (strcmp(where, "touch") == 0) {
+            screens::Navigate(ui::Nav::kSwipeUp);
+            screens::Navigate(ui::Nav::kOpenTouch);
         } else if (strcmp(where, "page") == 0) {
             // **Paging is navigation, not a press.** The rule this command
             // keeps is that it cannot reach a row's action - and turning a
@@ -2316,6 +2322,84 @@ int CmdScreen(int argc, char **argv) {
                static_cast<unsigned>(now.status_pages));
     }
     printf("in         swipe up or hold KEY for 2 s; out is PWR or a swipe down\n");
+    return 0;
+}
+
+// `touch` (CLAUDE.md §10.8.5) — the correction being applied, and a way to clear
+// it that does not go through the glass.
+//
+// **`reset` is here for the same reason `KEY` is on that screen**: a correction
+// that puts every press in the wrong place takes away the screen it was made on.
+// Two escape hatches, neither of them touch — and this one works with the panel
+// unplugged.
+//
+// What it cannot do is *calibrate*: four crosses need four fingers on four
+// places, and there is no honest way to send that down a serial port. `screen
+// touch` opens the screen; the presses are the operator's.
+void PrintTouchUsage(void) {
+    printf("usage: touch                  the correction being applied, and the panel\n");
+    printf("       touch reset            put it back to none, in memory only\n");
+    printf("calibrating needs the screen: 'screen touch', then BOOT and four presses\n");
+}
+
+int CmdTouch(int argc, char **argv) {
+    if (argc > 2) {
+        printf("touch takes one word, got %d\n", argc - 1);
+        PrintTouchUsage();
+        return 1;
+    }
+
+    ::display::Touch &panel = board::Touch();
+
+    if (argc == 2) {
+        if (strcmp(argv[1], "help") == 0) {
+            PrintTouchUsage();
+            return 0;
+        }
+        if (strcmp(argv[1], "reset") != 0) {
+            printf("no such thing as 'touch %s'\n", argv[1]);
+            PrintTouchUsage();
+            return 1;
+        }
+        screens::ResetTouch();
+        printf("correction cleared, in memory only — 'config save' writes it to %s\n",
+               config::kPath);
+    }
+
+    if (!panel.Ready()) {
+        printf("panel      the touch controller did not come up\n");
+        return 1;
+    }
+
+    const ui::TouchCalibration &cal = panel.Calibration();
+    if (cal.Identity()) {
+        printf("correction none — the controller's own coordinates are used\n");
+    } else {
+        printf("correction x = raw * %d/1000 %+d\n", static_cast<int>(cal.scale_x),
+               static_cast<int>(cal.offset_x));
+        printf("           y = raw * %d/1000 %+d\n", static_cast<int>(cal.scale_y),
+               static_cast<int>(cal.offset_y));
+    }
+    // The stored one next to the live one, which is the reading form `display
+    // brightness` already has and the reason it exists: a calibration that
+    // survives a reboot and one that is being used are two facts.
+    const config::Touch &stored = config::Get().touch;
+    printf("config     x %d/1000 %+d, y %d/1000 %+d%s\n", static_cast<int>(stored.scale_x),
+           static_cast<int>(stored.offset_x), static_cast<int>(stored.scale_y),
+           static_cast<int>(stored.offset_y),
+           (stored.scale_x == cal.scale_x && stored.offset_x == cal.offset_x &&
+            stored.scale_y == cal.scale_y && stored.offset_y == cal.offset_y)
+               ? ""
+               : "  (not saved)");
+
+    // **The axes, which a calibration cannot fix and this is the place to look
+    // for.** They are compiled in from the vendor's example; if a press lands on
+    // the opposite side of the glass, this line is the suspect and `board.h` is
+    // where it is changed.
+    printf("axes       swap_xy=%d mirror_x=%d mirror_y=%d, compiled in\n",
+           panel.SwapXy(), panel.MirrorX(), panel.MirrorY());
+    printf("dropped    %" PRIu32 " read(s) gave the bus up to somebody else\n",
+           panel.MissedReads());
     return 0;
 }
 
@@ -3079,7 +3163,7 @@ int CmdDevStatus(int argc, char **) {
         // silence from the other end.
         {"keys", &CmdKeys},
         // And the readout that is only a readout (§10.8.3).
-        {"limits", &CmdLimits},   {"screen", &CmdScreen},
+        {"limits", &CmdLimits},   {"screen", &CmdScreen},  {"touch", &CmdTouch},
     };
 
     bool first = true;
@@ -3240,9 +3324,18 @@ const esp_console_cmd_t kCommands[] = {
         .context = nullptr,
     },
     {
+        .command = "touch",
+        .help = "the touch correction being applied, and 'touch reset' to clear it",
+        .hint = "[reset]",
+        .func = &CmdTouch,
+        .argtable = nullptr,
+        .func_w_context = nullptr,
+        .context = nullptr,
+    },
+    {
         .command = "screen",
         .help = "which screen is up, and move between them the way a swipe does",
-        .hint = "[clock|settings|status|page|back]",
+        .hint = "[clock|settings|status|touch|page|back]",
         .func = &CmdScreen,
         .argtable = nullptr,
         .func_w_context = nullptr,

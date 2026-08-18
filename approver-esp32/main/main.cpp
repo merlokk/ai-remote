@@ -192,6 +192,27 @@ extern "C" void app_main(void) {
         board::Display().SetBrightness(config::Get().display.brightness);
     }
 
+    // **And the touch correction** (§10.8.5), which is the third setting that
+    // has hardware to reach and the first one that can make the device
+    // unusable if it is wrong. Applied here for the same reason as the two
+    // above: `config` knows about a file and `board` knows about a panel, and
+    // this is where they meet.
+    {
+        ui::TouchCalibration calibration;
+        calibration.scale_x = config::Get().touch.scale_x;
+        calibration.scale_y = config::Get().touch.scale_y;
+        calibration.offset_x = config::Get().touch.offset_x;
+        calibration.offset_y = config::Get().touch.offset_y;
+        board::Touch().SetCalibration(calibration);
+        if (!calibration.Identity()) {
+            ESP_LOGI(TAG, "touch correction from %s: x %d/1000%+d, y %d/1000%+d", config::kPath,
+                     static_cast<int>(calibration.scale_x),
+                     static_cast<int>(calibration.offset_x),
+                     static_cast<int>(calibration.scale_y),
+                     static_cast<int>(calibration.offset_y));
+        }
+    }
+
     // **The splash and the boot sound are one event, and the order below is
     // what makes them one.** The picture goes on the glass first, the chime
     // plays under it, and LVGL takes the panel over only afterwards — a device
@@ -267,6 +288,9 @@ extern "C" void app_main(void) {
             hardware.battery = &board::Pmic();
             hardware.alert = &board::Sound();
             hardware.motion = &board::Imu();
+            // And the panel itself, for the touch test (§10.8.5) — the one
+            // caller that reads it uncorrected.
+            hardware.touch = &board::Touch();
 
             const esp_err_t screens_err = screens::Init(hardware, keys);
             if (screens_err != ESP_OK) {

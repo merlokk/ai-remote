@@ -72,12 +72,28 @@ esp_err_t Touch::Init(i2cbus::Bus &bus, const TouchConfig &config) {
         return err;
     }
 
+    width_ = static_cast<uint16_t>(config.width);
+    height_ = static_cast<uint16_t>(config.height);
+    swap_xy_ = config.swap_xy;
+    mirror_x_ = config.mirror_x;
+    mirror_y_ = config.mirror_y;
+
     ESP_LOGI(TAG, "CST9220 up: %dx%d, swap_xy=%d mirror_x=%d mirror_y=%d", config.width,
              config.height, config.swap_xy, config.mirror_x, config.mirror_y);
     return ESP_OK;
 }
 
 bool Touch::Read(uint16_t *x, uint16_t *y) {
+    if (!ReadPoint(x, y)) {
+        return false;
+    }
+    calibration_.Apply(width_, height_, x, y);
+    return true;
+}
+
+bool Touch::ReadRaw(uint16_t *x, uint16_t *y) { return ReadPoint(x, y); }
+
+bool Touch::ReadPoint(uint16_t *x, uint16_t *y) {
     if (handle_ == nullptr || bus_ == nullptr) {
         return false;
     }

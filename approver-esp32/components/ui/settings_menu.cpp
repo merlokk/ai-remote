@@ -5,10 +5,10 @@ namespace ui {
 bool SettingsMenu::Built(SettingsEntry entry) {
     switch (entry) {
         case SettingsEntry::kStatus:
+        case SettingsEntry::kTouch:
         case SettingsEntry::kReboot:
             return true;
         case SettingsEntry::kWifi:
-        case SettingsEntry::kTouch:
         case SettingsEntry::kCount:
             break;
     }

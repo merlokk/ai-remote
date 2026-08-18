@@ -32,6 +32,10 @@ void GoTo(Navigator &nav, ScreenId screen) {
             nav.Navigate(Nav::kGear);
             nav.Navigate(Nav::kOpenStatus);
             break;
+        case ScreenId::kTouch:
+            nav.Navigate(Nav::kGear);
+            nav.Navigate(Nav::kOpenTouch);
+            break;
         case ScreenId::kWifi:
             nav.Navigate(Nav::kGear);
             nav.Navigate(Nav::kOpenWifi);
@@ -139,7 +143,7 @@ void test_settings_is_reached_from_the_two_screens_that_are_home(void) {
     // it again — the way out of those is `kBack`, and a gesture that took the
     // operator sideways into a list they are already inside is a gesture that
     // loses their place.
-    const ScreenId inside[] = {ScreenId::kStatus, ScreenId::kWifi};
+    const ScreenId inside[] = {ScreenId::kStatus, ScreenId::kTouch, ScreenId::kWifi};
     for (ScreenId screen : inside) {
         Navigator nav;
         GoTo(nav, screen);
@@ -178,8 +182,8 @@ void test_back_on_the_clock_does_nothing(void) {
 // --- The card outranks everything (§10.8.1) ------------------------------
 
 void test_a_request_appears_over_every_screen_without_moving_it(void) {
-    const ScreenId screens[] = {ScreenId::kClock, ScreenId::kLimits, ScreenId::kSettings,
-                                ScreenId::kStatus, ScreenId::kWifi};
+    const ScreenId screens[] = {ScreenId::kClock,  ScreenId::kLimits, ScreenId::kSettings,
+                                ScreenId::kStatus, ScreenId::kTouch,  ScreenId::kWifi};
 
     for (ScreenId screen : screens) {
         Navigator nav;
@@ -193,8 +197,8 @@ void test_a_request_appears_over_every_screen_without_moving_it(void) {
 }
 
 void test_navigation_is_gone_while_the_card_is_up(void) {
-    const Nav every[] = {Nav::kSwipeLeft, Nav::kSwipeRight, Nav::kSwipeUp,   Nav::kGear,
-                         Nav::kBack,      Nav::kOpenWifi,   Nav::kOpenStatus};
+    const Nav every[] = {Nav::kSwipeLeft, Nav::kSwipeRight, Nav::kSwipeUp,    Nav::kGear,
+                         Nav::kBack,      Nav::kOpenWifi,   Nav::kOpenStatus, Nav::kOpenTouch};
 
     Navigator nav;
     GoTo(nav, ScreenId::kSettings);
@@ -345,6 +349,34 @@ void test_arriving_limits_do_not_take_the_operator_out_of_the_status(void) {
     TEST_ASSERT_EQUAL_INT(static_cast<int>(ScreenId::kStatus), static_cast<int>(nav.Screen()));
 }
 
+void test_the_touch_test_is_reached_from_settings_and_is_swipeless(void) {
+    // **Swipeless is a safety property here, not a preference**: this is the
+    // screen that tests the thing a swipe is made of, so a gesture that
+    // navigated would take a device with a bad correction off the one screen
+    // that can fix it — by accident, while a finger is being dragged across it.
+    Navigator nav;
+    GoTo(nav, ScreenId::kTouch);
+
+    const Nav swipes[] = {Nav::kSwipeLeft, Nav::kSwipeRight, Nav::kSwipeUp};
+    for (Nav swipe : swipes) {
+        TEST_ASSERT_FALSE(nav.Navigate(swipe));
+        TEST_ASSERT_EQUAL_INT(static_cast<int>(ScreenId::kTouch), static_cast<int>(nav.Screen()));
+    }
+
+    TEST_ASSERT_TRUE(nav.Navigate(Nav::kBack));
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(ScreenId::kSettings), static_cast<int>(nav.Screen()));
+}
+
+void test_the_touch_test_is_only_opened_from_settings(void) {
+    const ScreenId elsewhere[] = {ScreenId::kClock, ScreenId::kLimits, ScreenId::kStatus};
+    for (ScreenId screen : elsewhere) {
+        Navigator nav;
+        GoTo(nav, screen);
+        TEST_ASSERT_FALSE(nav.Navigate(Nav::kOpenTouch));
+        TEST_ASSERT_EQUAL_INT(static_cast<int>(screen), static_cast<int>(nav.Screen()));
+    }
+}
+
 void RegisterNavigatorTests(void) {
     RUN_TEST(test_starts_on_the_clock_with_nothing_pending);
 
@@ -359,6 +391,8 @@ void RegisterNavigatorTests(void) {
 
     RUN_TEST(test_status_is_reached_from_settings_and_backs_out_one_step);
     RUN_TEST(test_status_is_only_opened_from_settings);
+    RUN_TEST(test_the_touch_test_is_reached_from_settings_and_is_swipeless);
+    RUN_TEST(test_the_touch_test_is_only_opened_from_settings);
     RUN_TEST(test_swipes_do_not_navigate_away_from_the_status);
     RUN_TEST(test_arriving_limits_do_not_take_the_operator_out_of_the_status);
     RUN_TEST(test_back_on_the_clock_does_nothing);

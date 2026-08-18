@@ -64,7 +64,7 @@ void test_next_does_not_skip_the_rows_with_nothing_behind_them(void) {
     TEST_ASSERT_EQUAL_UINT8(kStatus, menu.Selected());
     menu.Next();
     TEST_ASSERT_EQUAL_UINT8(kTouch, menu.Selected());
-    TEST_ASSERT_FALSE(SettingsMenu::Built(SettingsEntry::kTouch));
+    TEST_ASSERT_FALSE(SettingsMenu::Built(SettingsEntry::kWifi));
 }
 
 void test_a_tap_between_rows_selects_nothing(void) {
@@ -88,13 +88,17 @@ void test_a_row_with_nothing_behind_it_says_so_rather_than_navigating(void) {
     // §10.9's "unknown is the honest state", applied to a menu: the row is on the
     // list because the device is going to have it, and pressing it must not look
     // like a screen that failed to open.
-    const uint8_t unbuilt[] = {kWifi, kTouch};
-    for (uint8_t row : unbuilt) {
-        SettingsMenu menu;
-        menu.Select(row);
-        TEST_ASSERT_EQUAL_INT(static_cast<int>(SettingsAction::kNotBuilt),
-                              static_cast<int>(menu.Activate(1000)));
-    }
+    SettingsMenu menu;
+    menu.Select(kWifi);
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(SettingsAction::kNotBuilt),
+                          static_cast<int>(menu.Activate(1000)));
+}
+
+void test_the_touch_row_opens_the_touch_test(void) {
+    SettingsMenu menu;
+    menu.Select(kTouch);
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(SettingsAction::kOpenTouch),
+                          static_cast<int>(menu.Activate(1000)));
 }
 
 // --- Reboot, which is the whole reason this file is worth having ---------
@@ -235,6 +239,7 @@ void RegisterSettingsMenuTests(void) {
 
     RUN_TEST(test_the_status_row_opens_the_status);
     RUN_TEST(test_a_row_with_nothing_behind_it_says_so_rather_than_navigating);
+    RUN_TEST(test_the_touch_row_opens_the_touch_test);
 
     RUN_TEST(test_one_press_on_reboot_does_not_reboot);
     RUN_TEST(test_a_second_press_inside_the_window_reboots);

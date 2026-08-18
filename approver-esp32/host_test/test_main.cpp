@@ -22,6 +22,7 @@
 
 void RegisterNavigatorTests(void);
 void RegisterSettingsMenuTests(void);
+void RegisterTouchCalTests(void);
 void RegisterClockFaceTests(void);
 void RegisterRequestCardTests(void);
 void RegisterI2cBusTests(void);
@@ -74,6 +75,7 @@ int main(int argc, char **argv) {
 
     if (Wanted("navigator")) RegisterNavigatorTests();
     if (Wanted("settings")) RegisterSettingsMenuTests();
+    if (Wanted("touch")) RegisterTouchCalTests();
     if (Wanted("clock") || Wanted("face")) RegisterClockFaceTests();
     if (Wanted("request") || Wanted("card")) RegisterRequestCardTests();
     if (Wanted("i2c")) RegisterI2cBusTests();

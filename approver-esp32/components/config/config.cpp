@@ -321,6 +321,29 @@ esp_err_t Parse(const char *json, Data *out) {
         out->audio.volume_percent = static_cast<uint8_t>(value);
     }
 
+    // The touch correction (§10.8.5). **Clamped here as well as refused at the
+    // fit**, because this file can be edited by hand: a scale of 30000 typed
+    // into it would be a screen nobody can press, and the calibration screen
+    // that fixes it is reached by pressing something.
+    const cJSON *touch = cJSON_GetObjectItemCaseSensitive(root, "touch");
+    if (cJSON_IsObject(touch)) {
+        long value = out->touch.scale_x;
+        CopyNumber(touch, "scaleX", -2000, 2000, &value);
+        out->touch.scale_x = static_cast<int16_t>(value);
+
+        value = out->touch.scale_y;
+        CopyNumber(touch, "scaleY", -2000, 2000, &value);
+        out->touch.scale_y = static_cast<int16_t>(value);
+
+        value = out->touch.offset_x;
+        CopyNumber(touch, "offsetX", -480, 480, &value);
+        out->touch.offset_x = static_cast<int16_t>(value);
+
+        value = out->touch.offset_y;
+        CopyNumber(touch, "offsetY", -480, 480, &value);
+        out->touch.offset_y = static_cast<int16_t>(value);
+    }
+
     cJSON_Delete(root);
     return ESP_OK;
 }
@@ -422,6 +445,14 @@ esp_err_t Serialise(const Data &in, size_t *length) {
     cJSON *audio = cJSON_AddObjectToObject(root, "audio");
     if (audio != nullptr) {
         cJSON_AddNumberToObject(audio, "volume", in.audio.volume_percent);
+    }
+
+    cJSON *touch = cJSON_AddObjectToObject(root, "touch");
+    if (touch != nullptr) {
+        cJSON_AddNumberToObject(touch, "scaleX", in.touch.scale_x);
+        cJSON_AddNumberToObject(touch, "scaleY", in.touch.scale_y);
+        cJSON_AddNumberToObject(touch, "offsetX", in.touch.offset_x);
+        cJSON_AddNumberToObject(touch, "offsetY", in.touch.offset_y);
     }
 
     const cJSON_bool ok =
@@ -541,6 +572,14 @@ void FillDefaults(Data *out) {
     out->display.dim_seconds = 30;
     out->display.blank_seconds = 120;
     out->audio.volume_percent = 80;
+
+    // No correction. A device that has never been calibrated reports the
+    // controller's own coordinates, which on this panel are the screen's — the
+    // CST9220's grid is 480x480 and so is the glass.
+    out->touch.scale_x = 1000;
+    out->touch.scale_y = 1000;
+    out->touch.offset_x = 0;
+    out->touch.offset_y = 0;
 }
 
 bool Loaded() { return loaded; }
