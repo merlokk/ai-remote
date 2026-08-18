@@ -47,8 +47,22 @@ inline constexpr int32_t kStatusValueLeft = 176;
 inline constexpr uint8_t kStatusRows = 9;
 
 // The longest value that fits between `kStatusValueLeft` and the right margin at
-// Montserrat 28. Counted rather than guessed, and generous by one: a value that
-// runs off the edge is a number read wrong.
+// Montserrat 28. Counted rather than guessed: a value that runs off the edge is
+// a number read wrong.
+//
+// **"Generous by one" is what this comment used to say, and it was wrong.** The
+// count was taken over digits and units — `+0.067 g`, `1.015 g of 1.000` — which
+// are narrow. The first *word* written to that budget, `on the card-slot edge`
+// at exactly 21 characters, was photographed with §10.12.2 and its rightmost lit
+// pixel was column **479 of 479**: the last letter cut off by the edge of the
+// glass. It is the finding §10.8.5 already records about the label column
+// (`magnitude` being one character too many) arriving on the other column, and
+// the general form of it is that **a character budget is only true for the
+// characters it was counted with.**
+//
+// So this stays 22 because it is a buffer, and prose written into it is kept to
+// nineteen — which is where `ui::OrientationName` is pinned, by a host test that
+// says why.
 inline constexpr size_t kStatusValueSize = 22;
 
 static_assert(kStatusFirstRowTop + (kStatusRows - 1) * kStatusRowStride + 34 <= 480,

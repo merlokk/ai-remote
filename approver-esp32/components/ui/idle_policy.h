@@ -87,14 +87,45 @@ struct IdleSettings {
     uint8_t dim_percent = 30;
 };
 
-// **Is the board standing on its USB edge, buttons up** — §10.13's table, and
-// the one function in this firmware that turns three accelerometer numbers into
-// a position. Free rather than a member because it is the IMU's answer and not
-// the policy's state, which keeps `screens.cpp` from having to know which axis
-// is which.
+// **Which way up the board is** — §10.13's table, and the one place in this
+// firmware that turns three accelerometer numbers into a position. Every row of
+// that table was established by putting the board in that position and reading
+// it, never derived from a drawing, which is the only way a sign is ever right.
 //
-// Nothing dominant is `false`: on a corner, in a hand, or being carried is not a
-// position, and the blank needs a statement rather than the absence of one.
+// It has two readers, and that is the point of it living here: the blank of
+// §10.8.1 asks whether this is `kUsbEdge`, and the motion status page of §10.8.5
+// prints the name. A screen saying the board is standing while the panel refused
+// to go dark would be a disagreement nobody could diagnose from the outside.
+enum class Orientation : uint8_t {
+    // Nothing dominant: on a corner, in a hand, or being carried. §10.9's rule
+    // that `unknown` is the honest state, arriving on a different subject — and
+    // the blank needs a statement rather than the absence of one.
+    kUnknown = 0,
+    kScreenUp,     // flat on the desk, which is how it spends its life
+    kScreenDown,
+    kUsbEdge,      // standing on the connector, buttons up: the one that blanks
+    kButtonEdge,
+    kSpeakerEdge,
+    kCardSlotEdge,
+};
+
+Orientation OrientationOf(float x, float y, float z);
+
+// For a screen. Short on purpose: the status page's value column holds 21
+// characters, counted against the font rather than guessed, and a host test pins
+// that here because this layer cannot see the constant.
+const char *OrientationName(Orientation orientation);
+
+// The axis gravity acts along, for the console, which prints
+// `gravity along +X (standing on the card-slot edge)`. Empty for `kUnknown`,
+// which is what lets that one caller take its other branch rather than print an
+// empty pair of parentheses.
+const char *OrientationAxis(Orientation orientation);
+
+// **Is the board standing on its USB edge, buttons up** — the question the blank
+// asks, and a reading of the table above rather than a second opinion about it.
+// Free rather than a member because it is the IMU's answer and not the policy's
+// state, which keeps `screens.cpp` from having to know which axis is which.
 bool StandingButtonsUp(float x, float y, float z);
 
 // Two accelerometer samples far enough apart to call it movement. Measured on

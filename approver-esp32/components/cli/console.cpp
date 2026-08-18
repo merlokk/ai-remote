@@ -616,27 +616,20 @@ int CmdButtons(int argc, char **argv) {
 // not the pull — so the axis gravity acts along is the negation of the dominant
 // reading. Getting this wrong is invisible on a desk and exactly wrong when the
 // board is turned over.
-const char *GravityAxis(const imu::Sample &sample) {
-    const float x = sample.accel_g[0];
-    const float y = sample.accel_g[1];
-    const float z = sample.accel_g[2];
-    const float ax = fabsf(x), ay = fabsf(y), az = fabsf(z);
-
-    // Below this, no axis is dominant enough to name one — the device is on a
-    // corner, or moving.
-    constexpr float kDominant = 0.7f;
-    if (az >= ax && az >= ay && az >= kDominant) {
-        return z > 0 ? "along -Z (screen down)" : "along +Z (screen up)";
+// **The table lives in `ui/idle_policy.h` now, and this reads it.** It used to
+// be here, and then the blank of §10.8.1 needed the same question answered — at
+// which point two copies of the six positions was two chances to get a sign
+// wrong, on the one subject §10.13 says can only be established by putting the
+// board in each position and reading it. The status page of §10.8.5 is the third
+// reader.
+void PrintGravity(const imu::Sample &sample) {
+    const ui::Orientation where =
+        ui::OrientationOf(sample.accel_g[0], sample.accel_g[1], sample.accel_g[2]);
+    if (where == ui::Orientation::kUnknown) {
+        printf("spread across axes — %s\n", ui::OrientationName(where));
+        return;
     }
-    if (ay >= ax && ay >= az && ay >= kDominant) {
-        return y > 0 ? "along -Y (standing on the USB edge)"
-                     : "along +Y (standing on the button edge)";
-    }
-    if (ax >= ay && ax >= az && ax >= kDominant) {
-        return x > 0 ? "along -X (standing on the speaker edge)"
-                     : "along +X (standing on the card-slot edge)";
-    }
-    return "spread across axes — tilted or moving";
+    printf("along %s (%s)\n", ui::OrientationAxis(where), ui::OrientationName(where));
 }
 
 void PrintImuSample(const imu::Sample &sample) {
@@ -649,8 +642,9 @@ void PrintImuSample(const imu::Sample &sample) {
     float pitch = 0.0f;
     float roll = 0.0f;
     imu::Qmi8658::Tilt(sample, &pitch, &roll);
-    printf("tilt       pitch %+.1f, roll %+.1f degrees; gravity %s\n",
-           static_cast<double>(pitch), static_cast<double>(roll), GravityAxis(sample));
+    printf("tilt       pitch %+.1f, roll %+.1f degrees; gravity ",
+           static_cast<double>(pitch), static_cast<double>(roll));
+    PrintGravity(sample);
 
     // At rest this is 1.000 g. It is the cheapest statement that the six
     // numbers above mean anything — a scale factor off by a range setting, or a

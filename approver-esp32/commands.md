@@ -98,6 +98,15 @@ which is the point of the command. Six plausible numbers say nothing on their
 own; at rest the acceleration vector must be 1 g, so `magnitude 0.964 g (1.000
 at rest)` is the single line that says the other six mean something.
 
+The tilt line names the position in words — `gravity along +X (card-slot edge
+down)` — out of the same table the status page prints and the panel's blank
+reads (`ui/idle_policy.h`), so the three can never disagree about which way up
+the board is.
+
+**There is no magnetometer on this board**, so there is no heading and no
+magnetic field to print: the QMI8658C is a six-axis part (accelerometer and
+gyroscope), and the schematic's whole net list has no such device on it.
+
 Nothing in the approval path may read the IMU. A tilt is not a press.
 
 ### `imu watch [seconds]`

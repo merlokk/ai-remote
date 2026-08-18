@@ -23,23 +23,76 @@ const char *DisplayPowerName(DisplayPower state) {
     return "?";
 }
 
-bool StandingButtonsUp(float x, float y, float z) {
+Orientation OrientationOf(float x, float y, float z) {
     const float ax = Abs(x);
     const float ay = Abs(y);
     const float az = Abs(z);
 
-    // Y has to be the axis gravity is on, and it has to be enough of one. Below
-    // the threshold no axis names a position — the board is on a corner or in
-    // somebody's hand, and neither is a reason to switch the panel off.
-    if (ay < kDominantG || ay < ax || ay < az) {
-        return false;
+    // One axis has to carry enough of the vector to name a position at all.
+    // Below the threshold the board is on a corner or in somebody's hand, and
+    // neither is a reason to switch the panel off or to claim a position on a
+    // screen.
+    //
+    // **The sign is the half §10.13 says to measure rather than derive.** An
+    // accelerometer at rest reads +1 g along the axis pointing *up*, because it
+    // measures the support force and not the pull — so a positive reading names
+    // the edge that is up, and the board is standing on the opposite one.
+    if (az >= ax && az >= ay && az >= kDominantG) {
+        return z > 0.0f ? Orientation::kScreenDown : Orientation::kScreenUp;
     }
+    if (ay >= ax && ay >= az && ay >= kDominantG) {
+        return y > 0.0f ? Orientation::kUsbEdge : Orientation::kButtonEdge;
+    }
+    if (ax >= ay && ax >= az && ax >= kDominantG) {
+        return x > 0.0f ? Orientation::kSpeakerEdge : Orientation::kCardSlotEdge;
+    }
+    return Orientation::kUnknown;
+}
 
-    // **And the sign, which is the half §10.13 says to measure rather than
-    // derive.** An accelerometer at rest reads +1 g along the axis pointing up,
-    // so gravity acts along −Y here: the connector is down, the button edge is
-    // up, and the board is standing.
-    return y > 0.0f;
+const char *OrientationName(Orientation orientation) {
+    switch (orientation) {
+        case Orientation::kScreenUp:
+            return "flat, screen up";
+        case Orientation::kScreenDown:
+            return "flat, screen down";
+        case Orientation::kUsbEdge:
+            return "USB edge down";
+        case Orientation::kButtonEdge:
+            return "button edge down";
+        case Orientation::kSpeakerEdge:
+            return "speaker edge down";
+        case Orientation::kCardSlotEdge:
+            return "card-slot edge down";
+        case Orientation::kUnknown:
+            break;
+    }
+    return "tilted or moving";
+}
+
+const char *OrientationAxis(Orientation orientation) {
+    switch (orientation) {
+        case Orientation::kScreenUp:
+            return "+Z";
+        case Orientation::kScreenDown:
+            return "-Z";
+        case Orientation::kUsbEdge:
+            return "-Y";
+        case Orientation::kButtonEdge:
+            return "+Y";
+        case Orientation::kSpeakerEdge:
+            return "-X";
+        case Orientation::kCardSlotEdge:
+            return "+X";
+        case Orientation::kUnknown:
+            break;
+    }
+    // Empty rather than a placeholder, so the console can tell there is no axis
+    // to print instead of printing one that means nothing.
+    return "";
+}
+
+bool StandingButtonsUp(float x, float y, float z) {
+    return OrientationOf(x, y, z) == Orientation::kUsbEdge;
 }
 
 bool Moved(const float previous[3], const float current[3]) {

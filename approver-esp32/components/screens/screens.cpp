@@ -441,6 +441,15 @@ void FillMotion(StatusFacts *facts) {
     // for the label column — see `status_screen.cpp`. Eight is the budget.
     Row(facts, "total", "%.3f g of 1.000",
         static_cast<double>(::imu::Qmi8658::Magnitude(sample)));
+    // **What those four numbers mean, in words** — and the same table the blank
+    // of §10.8.1 reads, never a second opinion about it, so a page saying the
+    // board is standing on its USB edge and a panel refusing to go dark cannot
+    // both be true. There is no magnetometer on this board (§10.1: the IMU is
+    // six-axis, and the schematic has no such part), so this is what an
+    // orientation readout can honestly be.
+    Row(facts, "position", "%s",
+        ui::OrientationName(ui::OrientationOf(sample.accel_g[0], sample.accel_g[1],
+                                              sample.accel_g[2])));
     Row(facts, "gyro x", "%+.1f dps", static_cast<double>(sample.gyro_dps[0]));
     Row(facts, "gyro y", "%+.1f dps", static_cast<double>(sample.gyro_dps[1]));
     Row(facts, "gyro z", "%+.1f dps", static_cast<double>(sample.gyro_dps[2]));

@@ -15,6 +15,8 @@
 //     device left alone for the ~49 days a millisecond counter takes to wrap is
 //     exactly the device this feature is about.
 
+#include <cstring>
+
 #include "idle_policy.h"
 #include "unity.h"
 
@@ -299,6 +301,81 @@ void test_a_board_being_carried_is_no_position_at_all(void) {
     TEST_ASSERT_FALSE(ui::StandingButtonsUp(0.0f, 0.0f, 0.0f));
 }
 
+// --- The six positions, which are one table with two readers ---------------
+
+void test_every_measured_position_is_named(void) {
+    // §10.13's table, and it is the table itself: each row was established by
+    // putting the board in that position and reading it, never derived from a
+    // drawing. The numbers here are that section's, with the card-slot row given
+    // as what this board actually reports.
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(ui::Orientation::kScreenUp),
+                          static_cast<int>(ui::OrientationOf(0.0f, 0.0f, -1.0f)));
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(ui::Orientation::kScreenDown),
+                          static_cast<int>(ui::OrientationOf(0.0f, 0.0f, 1.0f)));
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(ui::Orientation::kUsbEdge),
+                          static_cast<int>(ui::OrientationOf(0.0f, 1.0f, 0.0f)));
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(ui::Orientation::kButtonEdge),
+                          static_cast<int>(ui::OrientationOf(0.0f, -1.0f, 0.0f)));
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(ui::Orientation::kSpeakerEdge),
+                          static_cast<int>(ui::OrientationOf(1.0f, 0.0f, 0.0f)));
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(ui::Orientation::kCardSlotEdge),
+                          static_cast<int>(ui::OrientationOf(-1.012f, 0.067f, 0.007f)));
+}
+
+void test_no_position_is_its_own_answer(void) {
+    // On a corner, in a hand, or being carried. §10.9's rule that `unknown` is
+    // the honest state, arriving on a different subject.
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(ui::Orientation::kUnknown),
+                          static_cast<int>(ui::OrientationOf(0.5f, 0.5f, 0.5f)));
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(ui::Orientation::kUnknown),
+                          static_cast<int>(ui::OrientationOf(0.0f, 0.0f, 0.0f)));
+}
+
+void test_standing_up_is_the_same_table(void) {
+    // **One source of truth, and this is what says so.** The blank of §10.8.1
+    // and the line on the status page must never disagree about which way up the
+    // board is — a screen saying it is standing while the panel refuses to go
+    // dark is a bug nobody could diagnose from the outside.
+    const float samples[][3] = {
+        {0.0f, 1.0f, 0.0f},   {0.0f, -1.0f, 0.0f},  {0.0f, 0.0f, 1.0f},
+        {0.0f, 0.0f, -1.0f},  {1.0f, 0.0f, 0.0f},   {-1.0f, 0.0f, 0.0f},
+        {0.5f, 0.5f, 0.5f},   {0.1f, 0.85f, -0.4f}, {0.0f, 0.0f, 0.0f},
+    };
+    for (const auto &s : samples) {
+        const bool named = ui::OrientationOf(s[0], s[1], s[2]) == ui::Orientation::kUsbEdge;
+        TEST_ASSERT_EQUAL_INT(named, ui::StandingButtonsUp(s[0], s[1], s[2]));
+    }
+}
+
+void test_every_name_fits_the_status_page(void) {
+    // **Nineteen, and the number was measured on the glass rather than counted.**
+    // `screens/status_screen.h` sizes the value buffer at 22 and used to claim
+    // that made 21 characters safe; the first name written to that budget — `on
+    // the card-slot edge`, exactly 21 — was photographed with §10.12.2 and its
+    // rightmost lit pixel was column **479 of 479**, which is a word cut off by
+    // the edge of the panel. A character budget is only true for the characters
+    // it was counted with, and these are wide ones.
+    //
+    // So the names are shorter than the buffer, and this is where that is
+    // enforced: `ui` cannot see the layout, and the layout cannot see the names.
+    constexpr size_t kMeasuredBudget = 19;
+    for (int i = 0; i <= static_cast<int>(ui::Orientation::kCardSlotEdge); ++i) {
+        const char *name = ui::OrientationName(static_cast<ui::Orientation>(i));
+        TEST_ASSERT_NOT_NULL(name);
+        TEST_ASSERT_TRUE_MESSAGE(strlen(name) <= kMeasuredBudget, name);
+        // And the axis, which is what the console prints in front of it.
+        TEST_ASSERT_NOT_NULL(ui::OrientationAxis(static_cast<ui::Orientation>(i)));
+    }
+}
+
+void test_the_unknown_position_has_no_axis(void) {
+    // The console prints `gravity along <axis> (<name>)`, and there is no axis
+    // to name when nothing dominates — an empty string is what lets that one
+    // caller take the other branch rather than printing `along  (…)`.
+    TEST_ASSERT_EQUAL_STRING("", ui::OrientationAxis(ui::Orientation::kUnknown));
+    TEST_ASSERT_TRUE(ui::OrientationAxis(ui::Orientation::kUsbEdge)[0] != 0);
+}
+
 void test_a_tilted_stand_still_counts(void) {
     // A stand holds the board leaning back; 0.85 g on Y with the rest spread is
     // still somebody's desk ornament standing up.
@@ -354,6 +431,12 @@ void RegisterIdleTests(void) {
     RUN_TEST(test_every_other_position_is_not);
     RUN_TEST(test_a_board_being_carried_is_no_position_at_all);
     RUN_TEST(test_a_tilted_stand_still_counts);
+
+    RUN_TEST(test_every_measured_position_is_named);
+    RUN_TEST(test_no_position_is_its_own_answer);
+    RUN_TEST(test_standing_up_is_the_same_table);
+    RUN_TEST(test_every_name_fits_the_status_page);
+    RUN_TEST(test_the_unknown_position_has_no_axis);
 
     RUN_TEST(test_the_noise_of_a_board_at_rest_is_not_movement);
     RUN_TEST(test_picking_it_up_is_movement);
