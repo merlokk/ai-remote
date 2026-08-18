@@ -23,6 +23,9 @@ constexpr uint8_t kRegCommonConfig = 0x10;  // bit 0 is the soft power-off
 constexpr uint8_t kRegVbusCurrentLimit = 0x16;
 constexpr uint8_t kRegPwronStatus = 0x20;
 constexpr uint8_t kRegKeyLevelCtrl = 0x27;  // press-on time 1:0, press-off time 3:2
+// The four bits of 0x27 this driver owns. Everything above them is the chip's
+// and is read back and preserved, which is the rule every write here follows.
+constexpr uint8_t kKeyTimeMask = 0x0F;
 constexpr uint8_t kRegTsPinCtrl = 0x50;
 constexpr uint8_t kRegPrechargeCurrent = 0x61;
 constexpr uint8_t kRegChargeCurrent = 0x62;
@@ -90,6 +93,63 @@ esp_err_t Update(i2cbus::Lease &lease, uint8_t reg, uint8_t keep, uint8_t value)
     }
     return lease.WriteRegister(kAddress, reg,
                                static_cast<uint8_t>((current & keep) | value));
+}
+
+// **The power key, asserted rather than read.** Two registers decide whether the
+// button on the case can switch this board on and off (§10.1), and until this
+// existed the driver printed what it found in them and believed it.
+//
+// The one thing this must never do is write COMMON_CONFIG bit 0. That bit is the
+// soft power-off, and a read-modify-write that preserved it would switch the
+// board off while configuring it — a device that goes dark during `Init` and
+// comes back only to do it again. So the write **clears** it explicitly, and
+// `PowerOff` stays the only thing in this driver that ever sets it.
+esp_err_t SetPowerKey(i2cbus::Lease &lease, uint8_t press_on, uint8_t press_off,
+                      bool long_press_shutdown) {
+    uint8_t key = 0;
+    esp_err_t err = lease.ReadRegister(kAddress, kRegKeyLevelCtrl, &key, 1);
+    if (err != ESP_OK) {
+        return err;
+    }
+    const uint8_t wanted_key =
+        static_cast<uint8_t>((key & ~kKeyTimeMask) | (press_on & 0x03) |
+                             static_cast<uint8_t>((press_off & 0x03) << 2));
+    if (wanted_key != key) {
+        // Loud, because it means the chip came up holding something this
+        // firmware did not put there — which is the whole reason to look.
+        ESP_LOGW(TAG, "power key was 0x%02x, setting 0x%02x (on %s, off %s)", key, wanted_key,
+                 PressOnTimeName(press_on & 0x03), PressOffTimeName(press_off & 0x03));
+        err = lease.WriteRegister(kAddress, kRegKeyLevelCtrl, wanted_key);
+        if (err != ESP_OK) {
+            return err;
+        }
+    }
+
+    uint8_t common = 0;
+    err = lease.ReadRegister(kAddress, kRegCommonConfig, &common, 1);
+    if (err != ESP_OK) {
+        return err;
+    }
+    const bool acts = (common & kPwronShutsPmicBit) != 0;
+    const bool power_off_pending = (common & kSoftPowerOffBit) != 0;
+    if (acts == long_press_shutdown && !power_off_pending) {
+        return ESP_OK;
+    }
+    if (power_off_pending) {
+        // Reading this bit set at boot is odd enough to say out loud: it should
+        // have taken the board off, so finding it here means the write did not
+        // happen or the chip was powered through it.
+        ESP_LOGW(TAG, "the soft power-off bit was set at boot; clearing it");
+    }
+    uint8_t wanted_common = static_cast<uint8_t>(common & ~kSoftPowerOffBit);
+    wanted_common = long_press_shutdown
+                        ? static_cast<uint8_t>(wanted_common | kPwronShutsPmicBit)
+                        : static_cast<uint8_t>(wanted_common & ~kPwronShutsPmicBit);
+    if (acts != long_press_shutdown) {
+        ESP_LOGW(TAG, "long press %s the chip down; setting it to %s",
+                 acts ? "shut" : "did not shut", long_press_shutdown ? "shut" : "not shut");
+    }
+    return lease.WriteRegister(kAddress, kRegCommonConfig, wanted_common);
 }
 
 // Sets a rail's voltage only when it is not already there — the vendor's
@@ -203,6 +263,17 @@ esp_err_t Axp2101::Init(i2cbus::Bus &bus, const Config &config) {
         // below should be believed.
         ESP_LOGE(TAG, "chip id 0x%02x, expected 0x%02x", id, kChipId);
         return ESP_ERR_NOT_SUPPORTED;
+    }
+
+    // **The power key first, before anything else is configured.** Everything
+    // below this can fail and leave a board that boots and complains; this is
+    // the one register whose being wrong means the button on the case does not
+    // bring the board back at all, so it is written while the bus is known good
+    // and before any other write can return early.
+    err = SetPowerKey(lease, static_cast<uint8_t>(config.press_on),
+                      static_cast<uint8_t>(config.press_off), config.long_press_shutdown);
+    if (err != ESP_OK) {
+        return err;
     }
 
     // **Silence the TS pin.** XPowersLib does this inside `begin()`, and its own

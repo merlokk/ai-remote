@@ -69,7 +69,7 @@ a decision with a cost that section states in a table of its own.
 | PCF85063 RTC — `components/rtc` (§10.8.2) | **running on hardware**: read, written and surviving a reboot; the system clock is adopted from it at boot, **in UTC** |
 | SNTP — `components/timesync` (§10.8.2) | **running on hardware**: on this board the radio walked its list, joined at 6.3 s, held an address at 8.4 s and the clock was set from `pool.ntp.org` at **13.1 s** — the boot case and the internet-appears case being the same one, as designed. `date` and `date sync` on the console, the RTC written back each time. `sync_policy.h` includes `<cstdint>` and nothing else, the way the navigator and the Wi-Fi policy do, so the schedule, the flap guard and the backoff run under Unity. What no board has reached is the **six-hour** interval and the backoff — a device has to be up that long to prove them |
 | Named time zones — `components/timezone` (§10.8.2) | **running on hardware**: 72 zones compiled in, `Europe/Kyiv` or plain `EET` rather than a POSIX rule, applied at boot from `config.json`. The clock stays UTC; a zone only changes what is printed and how a typed time is read |
-| AXP2101 — `components/pmic`, brought up from `board::Init()` (§10.1, §10.13) | **configured and reading on hardware**: TS pin silenced, ADC channels, VBUS limit, rail voltages, charge currents — all cross-checked against the vendor's `pmicpower` component — plus `SetAldo2`/`SetAldo3` for the audio and panel rails |
+| AXP2101 — `components/pmic`, brought up from `board::Init()` (§10.1, §10.13) | **configured and reading on hardware**: TS pin silenced, ADC channels, VBUS limit, rail voltages, charge currents — all cross-checked against the vendor's `pmicpower` component — plus `SetAldo2`/`SetAldo3` for the audio and panel rails. **And the power key, which used to be read and is now written** (§10.1): the press-on threshold, the press-off threshold and the long-press enable are `Config` fields that `Init` puts on the chip when what is there differs, because a driver that returns plausible numbers is not a driver that is configured — and here the failure is a button that no longer switches the board on. The write is masked so that it can never touch the soft power-off bit it shares a register with, which is a test |
 | The panel and the touch — `components/display` (§10.1, §10.8) | **lit on hardware**: the CO5300 over QSPI with the vendor's init sequence, its reset driven as a PMIC rail through a callback, the CST9220 read under the I²C lease, and LVGL 9.4 on two 480×40 buffers. `display` on the console. The placeholder it used to carry is gone: what is on the glass now is the clock of §10.8.2, two rows below |
 | The navigation state machine — `components/ui` (§10.8.1) | **wired to real input now**: which screen is up, the request card outranking everything, the bounded pending queue — and three ways to move between screens that all end at one function (a swipe through LVGL's own gesture, `KEY` held or tapped, and `screen` on the console). Its header includes `<cstdint>` and nothing else and its `CMakeLists.txt` has an empty `REQUIRES`, which together are what make it testable without a board. **One rule of it changed on the board** (§10.8.5): settings is reachable from the limits screen as well, because that screen arrives on its own and was otherwise a dead end |
 | The boot splash — `spiffs_image/splash.bin`, `components/display/rawimage` (§10.8) | **running on hardware**: white katakana, on the glass for two seconds before LVGL owns it. Generated on the host by `tools/make-splash.ps1`, streamed off SPIFFS as raw RGB565 with no decoder |
@@ -90,12 +90,12 @@ a decision with a cost that section states in a table of its own.
 | The Wi-Fi manager — `components/wifimgr` (§10.9) | **running on hardware, and tested on the host**: desired state (off / client / AP) against current, round-robin over the remembered networks with a growing capped backoff, sticky auth failures, and after N fruitless rounds a fallback access point that stays up for two minutes unless somebody attaches to it. `wifi` on the console. `wifi_policy.h` includes `<cstdint>` and nothing else, the way the navigator's does; the radio is lazily brought up, so a device with `wifi.active` false pays nothing for this existing. **It has joined a real network**, walked past one that refuses on the way, and come up on both DHCP and a fixed address — §10.9 has that run, and it is what makes the cycle, the fallback AP and the scan more than a proof against a network that does not exist. What no board has produced yet is a deliberate **auth failure**, which needs a network whose password is wrong on purpose |
 | The limits screen (§10.8.3) — `components/ui/limits_view.*`, `components/screens/limits_screen.*`, `components/watcher` | **running on hardware, and every rule of it checked there**: it came up on its own when this repository's own status line published, went back to the clock 73 s after the last document, was dismissed by `PWR`, held that dismissal through ten more documents, dropped it when the stream stopped, and came back on the first document after. A subscription-less payload draws `7d --` with no fill at all, which is §9.7's "absent is absent" on the glass. **It arrives rather than being swiped to**, at the repository owner's request — that section says what changed and why `PWR` dismisses a burst rather than a message. The deciding half is `<cstdint>`-only and host-tested (21 tests, 10 of 11 mutations caught, and the eleventh has an answer) |
 | The touch test and the calibration (§10.8.5) — `components/ui/touch_cal.*`, `components/screens/touch_screen.*` | **written, and the on-glass half is not confirmed by hand yet.** A crosshair follows the raw point with both coordinates on screen, `BOOT` runs four crosses, the fit is applied at once and `config save` keeps it. Every refusal has its own sentence and leaves the correction in use alone. **Nothing on that screen is touchable and swipes do not navigate away from it**, because a bad correction would otherwise take away the screen that fixes it — `KEY` on the screen and `touch reset` on the console are the two escape hatches. The deciding half is `<cstdint>`-only and host-tested (22 tests, 16 of 16 mutations caught, one of which found a guard that had made another one unreachable). The panel it corrects is a *capacitive* one, so what this fixes is an offset and, if the film is on the other way round, a mirror — never the axes, which are `board.h`'s |
-| The power-off row (§10.8.5, §10.1) | **built, and the half that can be checked has been**: the row draws faint with `usb in` while the cable is connected, refuses a press before it arms, and the console's `screen` prints the same fact. Two presses when the cable is out, sharing the reboot row's arming flag — which belongs to the *selected* row, and that is a test. **The shutdown itself is unverified and cannot be from here**, exactly as §10.7 records for the console's `poweroff`: it needs the cable out, and with the cable out there is no console to watch it from |
+| The power-off row (§10.8.5, §10.1) | **built, used once, and it led straight to §10.8.5's account of a board that would not come back** — which turned out to be the chip latched into the ROM's download boot rather than anything the row did, and which is cleared by holding `PWR` for six seconds and pressing it again. **Built, and the half that can be checked has been**: the row draws faint with `usb in` while the cable is connected, refuses a press before it arms, and the console's `screen` prints the same fact. Two presses when the cable is out, sharing the reboot row's arming flag — which belongs to the *selected* row, and that is a test. **The shutdown itself is unverified and cannot be from here**, exactly as §10.7 records for the console's `poweroff`: it needs the cable out, and with the cable out there is no console to watch it from |
 | The settings list and the status pages (§10.8.5) — `components/ui/settings_menu.*`, `status_pages.h`, `components/screens/settings_screen.*`, `status_screen.*` | **running on hardware, and every input confirmed by hand**: a swipe up or `KEY` held two seconds opens a four-row list — Wi-Fi and the touch test drawn faint with `soon`, status, and reboot — and `BOOT` steps it, `KEY` presses it, a tap does both, `PWR` goes back. Behind it three status pages: power (battery, rails, die temperature, and why the chip is awake), system (why it last restarted, uptime, heap low-water, radio, address, bus) and motion (six axes, the magnitude and the die), turned by `BOOT` or a tap. **Reboot asks twice** and the arming expires on its own. The deciding half is `<cstdint>`-only and host-tested (18 tests, 16 of 16 mutations caught — one of which survived until the test for the *button* route round the list existed). `screen` on the console is what photographs a list otherwise reachable only by a gesture |
 | The Wi-Fi screen (§10.8.6) | specified, not started — the manager underneath it is what exists |
 | Where the configuration lives (§10.15) | **decided**: all of it in JSON on SPIFFS, nothing of ours in NVS — with the cost stated (SPIFFS cannot be encrypted at rest). `spiffs_image/config.json` + `config.init.json` are flashed, and `components/config` is what reads them |
 | The `KEY`-at-boot config restore (§10.15) | **running on hardware, three times over**: `KEY` held through a boot put `config.init.json` back over `config.json` at 5,001 ms — before the parse, which is the whole point — left `registration.json` untouched and the device still registered, and said so in three places: a log line at the time, `config restored` under the clock, and a `boot` line `config` keeps printing for the rest of the uptime. The deciding half is host-tested (9 tests, 5 of 5 mutations caught). **The screen half is where the board earned its keep**: the console said the notice was up and the glass was empty, because the label hung outside its parent and `LV_OBJ_FLAG_OVERFLOW_VISIBLE` does not do what its name suggests — §10.15 has that finding |
-| Host-tier tests (§10.11) — `host_test/` | **running**: 518 Unity tests over `ui` (the navigator, the clock face, the request card, the limits and the settings list), `protocol` (§7's signing bytes, its wire format, §6's registration exchange and §9.7's status document), `i2cbus`, `pmic`, `rtc`, `imu`, `audio`, `config`, `buttons`, `timezone`, `speaker`, `wifimgr`, `timesync`, `nats` and the parity vectors, one command, no board. The drivers are compiled **unmodified** against a fake ESP-IDF (`host_test/fakes/`), which is §10.14.3's owed fake backend arriving in a different shape than that section specified, and which now covers I²S and a filesystem as well as the I²C wire. Built by MSVC rather than by ESP-IDF's `linux` target, which does not work on a Windows host — §10.11 records why |
+| Host-tier tests (§10.11) — `host_test/` | **running**: 525 Unity tests over `ui` (the navigator, the clock face, the request card, the limits and the settings list), `protocol` (§7's signing bytes, its wire format, §6's registration exchange and §9.7's status document), `i2cbus`, `pmic`, `rtc`, `imu`, `audio`, `config`, `buttons`, `timezone`, `speaker`, `wifimgr`, `timesync`, `nats` and the parity vectors, one command, no board. The drivers are compiled **unmodified** against a fake ESP-IDF (`host_test/fakes/`), which is §10.14.3's owed fake backend arriving in a different shape than that section specified, and which now covers I²S and a filesystem as well as the I²C wire. Built by MSVC rather than by ESP-IDF's `linux` target, which does not work on a Windows host — §10.11 records why |
 | Protocol parity vectors (§10.11 tier 2) | **done, and it has two halves in two languages**: `tools/make_vectors.py` generates `host_test/vectors/parity_vectors.h` (six §7 decisions, six §6 replies) and `components/crypto/selftest_vector.h` (§10.6's Ed25519 vector) from `approver/protocol.py` and `lib/crypto.py` themselves; both are committed, so the build needs no Python. `test_vectors.cpp` runs the firmware's assemblers over them, and **`tests/test_esp32_vectors.py` is what stops them going stale** — it regenerates on every `pytest` run and fails if the committed files are not what today's Python produces. The three pasted literals this replaced are gone from `test_signing.cpp`, `test_registration.cpp` and `device_key.cpp`. Mutation-checked from both ends: a swapped field in `protocol.py` fails the guard, a dropped separator in `signing.cpp` fails the vectors |
 | Device-tier tests (§10.11 tier 3) — `tests/test_esp32_device.py` | **written, and half of it has run against the board**: one press produces a reply `hook.verify_reply` calls trusted, and every tamper is asserted on that reply without a second press — the verdict flipped, each of §7's six echoed fields changed in turn, the `key_id` renamed, the signature removed. `scripts/esp32-approval.cmd` is the one command, and `AI_REMOTE_ESP32_DEVICE=1` is what stops an unattended `pytest` quietly testing the software responder instead. **§10.10's half is confirmed on hardware**: a card nobody pressed produced no reply at all in 20 s and the hook fell back. The pressed half needs a finger and has not been run since it was written |
 
@@ -145,6 +145,24 @@ Read off this board rather than off a datasheet — `power` prints all three:
 | Power **on** | a short press: the threshold is **128 ms**, the shortest of the chip's four (128 ms / 512 ms / 1 s / 2 s, register `0x27` bits 1:0) — **or** plugging USB in, since VBUS insert is a power-on source in its own right, as is inserting a battery |
 | Power **off** | a **6 s** long press (register `0x27` bits 3:2, of 4/6/8/10 s) — and it works only because `COMMON_CONFIG` (`0x10`) bit 2 is set. With that bit clear the chip measures the long press and does nothing. On this board it is set |
 | Why it is awake | `PWRON_STATUS` (`0x20`), one bit per reason. A freshly cabled board reports `USB plugged in` |
+
+**And the three rows above are written by `Init` now, not merely read.** The
+driver used to print what it found in `0x27` and `COMMON_CONFIG` and call that
+"how this board is configured"; `pmic::Config` carries them and `Axp2101::Init`
+puts them there when what is on the chip differs. It is the same lesson this
+section already draws about the TS pin and the charge currents — *a driver that
+returns plausible numbers is not a driver that is configured* — and here the cost
+of being wrong is the largest on the board: a chip holding a two-second press-on
+threshold is a device whose button looks dead to anybody who presses it the way
+a button is pressed, and one with `COMMON_CONFIG` bit 2 clear cannot be switched
+off by its own button at all.
+
+One rule inside that write, and it is the one worth stating twice: **configuring
+the key must never write `COMMON_CONFIG` bit 0.** That bit is the soft power-off
+and it shares a register with the long-press enable, so a read-modify-write that
+preserved it would take the board down inside `Init` — a device that goes dark
+every boot. The write clears it explicitly, `PowerOff` stays the only thing in
+the driver that ever sets it, and both halves are tests.
 
 Two consequences. **Power on and off are not features to implement** — they are
 behaviour to avoid breaking, and GPIO18 exists so the firmware can *see* the
@@ -1970,6 +1988,63 @@ Rules it keeps:
   was on the panel was the label and the number sharing pixels. It is `total`
   now.
 
+##### The board that would not come back, and what it actually was
+
+A `power off` from the settings screen was followed by a board that appeared not
+to switch on: dark panel, silent console. It is worth writing down in full,
+because almost every step of the diagnosis pointed somewhere else and the answer
+is a state no code of ours can reach.
+
+What was true:
+
+| Observation | What it ruled out |
+|---|---|
+| the USB device enumerated — `VID_303A PID_1001`, this board's MAC | the chip had power, so the PMIC had not left its rails off |
+| `esptool` talked to it, and **without resetting it first** (`--before no-reset`) | it was sitting in the ROM, not running the app |
+| the console answered nothing, at any baud, after any wait | the app was not running, rather than running quietly |
+| the `BOOT` button was not held, and the app image was intact | the two ordinary causes of a download boot |
+
+The ROM said it plainly, once there was a way to read it:
+
+```
+rst:0x15 (USB_UART_HPSYS), boot:0x15 (DOWNLOAD(USB/UART0/SDIO_FEI_REO))
+waiting for download
+```
+
+**The chip was latched into download boot**, and every reset available over USB
+lands as `USB_UART_HPSYS` — which does not clear the latch. `esptool --after
+hard-reset` does not, and `--after watchdog-reset` answers *"Watchdog hard reset
+is not supported on ESP32-C6"* and falls back to the one that does not work. Only
+a **power-on reset** clears it.
+
+**The way out is the button, and it is the AXP2101's own behaviour**: hold `PWR`
+for six seconds — the chip switches the board off — then press it briefly. That
+is a genuine power-on reset for the C6, the latch is gone, and the app boots.
+Which is also the shortest possible answer to "the device will not turn on": *hold
+it, then press it.*
+
+Two things that follow, and neither is the fix that was asked for:
+
+- **reading the port is not free on this chip.** `serial.Serial("COM4")` asserts
+  DTR and RTS when it opens, and on the C6's native USB Serial/JTAG those two
+  line states are how a host asks for reset and download boot — so the obvious
+  way to open the port is a request to enter the ROM downloader. Every script in
+  [`working-with-code.md`](working-with-code.md) sets them **before** `open()` for
+  this reason, and the one place that did it the other way round is what made a
+  latched board look like a permanently latched board;
+- **and a hardware reset drops the USB device**, so a boot log cannot be captured
+  on a handle opened before it. Catching one means reopening the port in a loop
+  until it comes back — which is how the two ROM lines above were finally read,
+  after three wrong theories.
+
+**What the power key had to do with it: nothing, and the hardening is right
+anyway.** The registers were checked on the board afterwards and held exactly
+what §10.1 says they should — 128 ms on, 6 s off, long press enabled — so nothing
+had drifted. But the driver was *trusting* that, and the day it is not true is a
+day the button stops working with no way to tell why. `Init` writes them now, and
+says so when what it found was different.
+
+
 ##### The touch test and the calibration
 
 **The first question is whether a capacitive panel needs calibrating at all, and
@@ -2631,7 +2706,7 @@ Three tiers, and the first one is where nearly everything belongs:
    **What is under it today is the navigator, the three screens' arithmetic, all
    of §6 and §7's wire format, four of the five chips on the I²C bus, the
    settings file, the buttons, the zone table, the speaker, the Wi-Fi policy,
-   the internet check, the clock's sync schedule and the bus link** — 518 tests,
+   the internet check, the clock's sync schedule and the bus link** — 525 tests,
    and the last row of the table is tier 2 living in the same binary:
 
    | Subject | What is pinned |
@@ -2647,6 +2722,7 @@ Three tiers, and the first one is where nearly everything belongs:
    | `components/protocol` (the wire format) | §7's JSON, and the fixture is **`hook.py`'s own output** rather than something written to match the parser — a request invented here would pass for a parser that agrees with this file and with nothing else. The parse: every field where §7 says, `tool_input` rendered **whole** rather than reached into (§10.8.4 forbids showing part of what is being asked for), and no TTL arriving so the card's own default is what expires one. Then every refusal as its own case, because this is the one subject anybody on the LAN can publish to: not an object, another version, a missing field one at a time, a field longer than the card holds, a `tool_input` too big to show whole — the refusal with a stated cost — a `ts` that cannot be echoed exactly, and no reply subject at all. Each of them asserted to leave the caller's card **untouched**, because the card in that struct belongs to a request somebody is still reading. The reply: the six fields `hook.py::verify_reply` compares one by one, an empty `reason`, and **no `updated_input`** — whose absence is what keeps `updated_input_sha256` empty in the signed bytes |
    | `components/ui` + `components/protocol` (the limits) | §9.2, §9.7 and §10.8.3, and the fixture is §9.7's own example document. **The two traffic-light scales**, both boundaries of each, and the assertion §10.8.3 asks for by name — that they cannot drift into each other, checked at every percentage from 0 to 100 rather than at a sample. `countdown()` against `render.rs`'s own cases, a reset in the past reading `now` rather than underflowing. **Absent is absent**: a document with no `rate_limits` is ordinary, and one window without the other is read. `ts` as the only required field, junk keeping the last good document, a percentage clamped and *rounded*, and a field too long **truncated** rather than refused — the one place in this firmware where that is right, and the test says so. Then the arrival rules: a document raises the screen, the minute is checked at both sides of its boundary and across the ~49-day wrap, a stream that keeps arriving keeps the screen, and a dismissal survives ten more documents but not the silence after them |
    | `components/i2cbus` | §10.14.3's three: contention, an acquire that **times out rather than blocks** (asserted as the tick count it asked for, which is why the fake mutex never sleeps), and a recovery that clocks SCL nine times and drops the device handles with the old bus. Plus the device table's per-device clock, its reopen-on-speed-change, and its refusal when full. And **the non-recursive mutex, from both sides**: `AddDevice` called while a lease is held is refused rather than granted — the trap `es8311.h` records — and `Recover`, which used to skip the lease entirely, now waits for it and tears nothing down if it cannot have it |
+   | `components/pmic` (the power key) | §10.1's, and the newest of them: `Init` **writes** the press-on and press-off thresholds and the long-press enable when the chip holds something else, leaves them alone when it does not — the vendor's rail guard applied to a second register — and keeps the bits of `0x27` that are not its own. Then the one this suite exists for: **configuring the key never writes `COMMON_CONFIG` bit 0**, which is the soft power-off it shares a register with, so a read-modify-write that preserved it would take the board down inside `Init`; and a bit found already set at boot is *cleared*, because leaving it would arm the next write of that register. Plus the whole thing being a `Config` field, so a board wanting a longer press does not need this driver edited |
    | `components/pmic` | the 13-bit battery field against the 14-bit ones — the width that gives a *plausible* wrong voltage when wrong; the TS-pin silencing and the ADC read-modify-write; VBUS needing both status bits; `PowerOff` refusing over USB **and writing nothing**; `Read` being one snapshot rather than a dozen moments; and the two halves of the vendor's rail guard — a rail already at 3.3 V is not rewritten (DCDC1 supplies the C6, so a pointless write is a risk with no upside) and one at the wrong voltage is, with the bits above the field kept |
    | `components/rtc` | BCD both ways; the seven counters in one burst; the OS flag making a *successful* read untrustworthy, and being masked out of the seconds it shares a register with; the clock stopped and restarted around a write — including after a write that failed; and the century this chip does not have, so 2100 and 1999 are refused before the bus is touched while 2099 goes through |
    | `components/imu` | 0x6B, the inverse of the habit — and a *stranger* answering there not stopping the search at 0x6A, which is a different problem from silence and only one of them is a reason to give up; CTRL1's auto-increment, without which fourteen bytes are TEMP_L fourteen times; the range actually changing the scale; signed counts; tilt |

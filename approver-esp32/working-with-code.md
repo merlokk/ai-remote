@@ -193,6 +193,46 @@ s.close()
 Nothing else may hold the port while this runs — a monitor left open in another
 window is the usual reason it returns silence.
 
+**`s.dtr = False; s.rts = False` before `open()` is not decoration, and getting
+it wrong costs an evening.** On the C6's native USB Serial/JTAG those two line
+states are how a host asks the chip for a reset and for download boot — and
+`serial.Serial("COM4")`, the one-line constructor form, asserts *both* when it
+opens. So the obvious way to open this port is a request to enter the ROM
+downloader, and the board that answers afterwards is the ROM rather than the
+firmware. Always the three-line form above: build the object, set the lines,
+then open.
+
+**And a board that has ended up there does not come out over USB.** The ROM
+prints `boot:0x15 (DOWNLOAD…)` and `waiting for download`; every reset esptool
+can send arrives as `rst:0x15 (USB_UART_HPSYS)`, which does not clear the latch,
+and `--after watchdog-reset` answers *"not supported on ESP32-C6"*. What clears
+it is a power-on reset: **hold `PWR` for six seconds, then press it briefly.**
+`CLAUDE.md` §10.8.5 has the whole diagnosis.
+
+**To capture a boot log you have to reopen the port**, because a hardware reset
+drops the USB device and takes any open handle with it. Loop on `serial.Serial()`
+until it comes back — the app's own logging starts about 700 ms in, so nothing
+of it is missed:
+
+```python
+deadline = time.time() + 20
+seen, s = [], None
+while time.time() < deadline:
+    if s is None:
+        try:
+            s = serial.Serial(); s.port = "COM4"; s.timeout = 0.1
+            s.dtr = False; s.rts = False
+            s.open()
+        except Exception:
+            s = None; time.sleep(0.05); continue
+    try:
+        chunk = s.read(4096)
+    except Exception:
+        s = None; continue          # it went away again
+    if chunk:
+        seen.append(chunk.decode("utf-8", "replace"))
+```
+
 **A killed `idf.py monitor` leaves orphans holding COM4.** Timing one out (or
 Ctrl-C'ing the wrapper) can leave `idf.py`, `idf_monitor.py` and
 `esp_idf_monitor` processes alive, and the next flash fails with *"Could not

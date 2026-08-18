@@ -627,7 +627,11 @@ void PowerOffNow() {
         ESP_LOGW(TAG, "no PMIC, so nothing to switch off");
         return;
     }
-    ESP_LOGW(TAG, "power off from the settings screen");
+    // **And how to come back**, because this is the last thing anybody watching
+    // the console will see from this board and the answer is not obvious: a
+    // short press on `PWR` powers the chip on (§10.1), and a *long* one is what
+    // gets it back if it ever comes up in the ROM's download mode.
+    ESP_LOGW(TAG, "power off from the settings screen - a short press on PWR brings it back");
     fflush(stdout);
     vTaskDelay(pdMS_TO_TICKS(120));
     const esp_err_t err = g_battery->PowerOff();

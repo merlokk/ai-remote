@@ -76,12 +76,49 @@ enum class TerminationCurrent : uint8_t {
 // What `Init` writes. The defaults are Waveshare's for this board, from
 // `Custom_PmicRegisterInit()` in their `pmicpower` component — not this
 // author's judgement about someone else's battery.
+// How long `PWRON` has to be held to switch the board **on** (register 0x27,
+// bits 1:0). The shortest is what this board shipped with and what an operator
+// expects from a button on a case: press it and it comes up.
+enum class PressOnTime : uint8_t {
+    k128ms = 0,
+    k512ms = 1,
+    k1s = 2,
+    k2s = 3,
+};
+
+// And to switch it **off** (bits 3:2). Long enough that it is not a slip, short
+// enough that somebody who means it does not give up.
+enum class PressOffTime : uint8_t {
+    k4s = 0,
+    k6s = 1,
+    k8s = 2,
+    k10s = 3,
+};
+
 struct Config {
     uint16_t rail_mv = 3300;  // DC1 and ALDO1..4, written only if they differ
     VbusCurrentLimit vbus_limit = VbusCurrentLimit::k2000mA;
     PrechargeCurrent precharge = PrechargeCurrent::k50mA;
     ChargeCurrent charge = ChargeCurrent::k500mA;
     TerminationCurrent termination = TerminationCurrent::k50mA;
+
+    // **The power key, and these are settings now rather than readings.** The
+    // driver used to print what it found in 0x27 and COMMON_CONFIG and trust it;
+    // §10.1 recorded the values this board happened to hold and called them "how
+    // this board is configured". That is the same mistake the TS pin and the
+    // charge currents were: *a driver that returns plausible numbers is not a
+    // driver that is configured*, and here it is worse than a wrong charge
+    // current — a chip that comes back from a soft power-off with these at
+    // something else is a device whose button no longer switches it on.
+    //
+    // Written at `Init`, and only when what is there differs.
+    PressOnTime press_on = PressOnTime::k128ms;
+    PressOffTime press_off = PressOffTime::k6s;
+
+    // COMMON_CONFIG bit 2: whether a long press on `PWRON` actually shuts the
+    // chip down. With it clear the AXP2101 measures the long press and does
+    // nothing — which is a board that cannot be switched off by its own button.
+    bool long_press_shutdown = true;
 };
 
 // The low three bits of STATUS2. The raw code is kept in `Status` next to the

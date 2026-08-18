@@ -72,6 +72,13 @@ cable in is one the hardware immediately undoes — what you would see is not a
 device switching off but a device rebooting. Unplug first. The confirmation word
 `now` is required.
 
+**To bring it back: press `PWR`.** A short press powers the chip on — 128 ms is
+the threshold, and the firmware writes that threshold at every boot rather than
+trusting what it finds. And if the board ever comes up dark with a silent
+console, **hold `PWR` for six seconds and then press it**: that is a real
+power-on reset, and it is the only thing that clears the ROM's download-boot
+latch. `CLAUDE.md` §10.8.5 has the account of the day that mattered.
+
 ---
 
 ## The hardware, one command per chip

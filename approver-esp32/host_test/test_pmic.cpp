@@ -484,6 +484,128 @@ void test_pmic_power_off_before_init_is_refused(void) {
     TEST_ASSERT_EQUAL_UINT(0, fake::P().transfer_count);
 }
 
+// --- The power key, written rather than read (§10.1) ---------------------
+//
+// **The registers that decide whether the button on the case can switch this
+// board on.** The driver used to print what it found in them; these say it puts
+// them there. The one that matters most is the last but one: configuring the key
+// must never write COMMON_CONFIG bit 0, because that bit is the soft power-off
+// and a device that switches itself off inside `Init` is a device that goes dark
+// and stays there.
+
+void test_pmic_init_writes_the_power_key_when_the_chip_holds_something_else(void) {
+    i2cbus::Bus bus;
+    BringUp(bus);
+    fake::Device *chip = PutOnWire();
+    // Press-on 2 s, press-off 10 s: a board whose button looks dead to anybody
+    // who presses it the way a button is pressed.
+    chip->regs[kRegKeyLevelCtrl] = 0b0000'1111;
+
+    pmic::Axp2101 axp;
+    TEST_ASSERT_EQUAL_INT(ESP_OK, axp.Init(bus));
+
+    // 128 ms on, 6 s off.
+    TEST_ASSERT_EQUAL_HEX8(0b0000'0100, chip->regs[kRegKeyLevelCtrl]);
+}
+
+void test_pmic_init_leaves_a_power_key_that_is_already_right_alone(void) {
+    // The vendor's rail guard, applied here: a write that changes nothing is a
+    // write that cannot go wrong, and the count is how that is checked.
+    i2cbus::Bus bus;
+    BringUp(bus);
+    fake::Device *chip = PutOnWire();
+    chip->regs[kRegKeyLevelCtrl] = 0b0000'0100;
+    chip->regs[kRegCommonConfig] = 0b0000'0100;
+
+    pmic::Axp2101 axp;
+    TEST_ASSERT_EQUAL_INT(ESP_OK, axp.Init(bus));
+
+    TEST_ASSERT_NULL(fake::FindWrite(kAddr, kRegKeyLevelCtrl));
+    TEST_ASSERT_NULL(fake::FindWrite(kAddr, kRegCommonConfig));
+}
+
+void test_pmic_init_keeps_the_bits_of_0x27_it_does_not_own(void) {
+    // Four bits of that register are this driver's and the rest are the chip's.
+    // A blind write is how a field nobody thought about gets cleared.
+    i2cbus::Bus bus;
+    BringUp(bus);
+    fake::Device *chip = PutOnWire();
+    chip->regs[kRegKeyLevelCtrl] = 0b1011'0011;
+
+    pmic::Axp2101 axp;
+    TEST_ASSERT_EQUAL_INT(ESP_OK, axp.Init(bus));
+
+    // The cast is Unity's fault rather than the test's: `TEST_ASSERT_EQUAL_HEX8`
+    // takes a signed byte, and anything above 127 is a truncation warning that
+    // `/W4 /WX` turns into a build error.
+    TEST_ASSERT_EQUAL_HEX8(static_cast<uint8_t>(0b1011'0100), chip->regs[kRegKeyLevelCtrl]);
+}
+
+void test_pmic_init_turns_the_long_press_shutdown_on(void) {
+    // Without this bit the chip measures the six-second press and does nothing,
+    // which is a board that cannot be switched off by its own button.
+    i2cbus::Bus bus;
+    BringUp(bus);
+    fake::Device *chip = PutOnWire();
+    chip->regs[kRegCommonConfig] = 0b0010'0000;  // some other bit set, and not ours
+
+    pmic::Axp2101 axp;
+    TEST_ASSERT_EQUAL_INT(ESP_OK, axp.Init(bus));
+
+    TEST_ASSERT_EQUAL_HEX8(0b0010'0100, chip->regs[kRegCommonConfig]);
+}
+
+void test_pmic_init_never_writes_the_soft_power_off_bit(void) {
+    // **The one that matters.** COMMON_CONFIG bit 0 switches the board off, and
+    // it shares its register with the long-press enable this now writes. A
+    // read-modify-write that preserved it would take the device down inside
+    // `Init` — and the operator would see a board that goes dark on every boot.
+    i2cbus::Bus bus;
+    BringUp(bus);
+    fake::Device *chip = PutOnWire();
+    chip->regs[kRegCommonConfig] = 0;  // the long-press bit is clear, so it writes
+
+    pmic::Axp2101 axp;
+    TEST_ASSERT_EQUAL_INT(ESP_OK, axp.Init(bus));
+
+    TEST_ASSERT_EQUAL_HEX8(0, chip->regs[kRegCommonConfig] & 0x01);
+}
+
+void test_pmic_init_clears_a_soft_power_off_bit_it_finds_set(void) {
+    // Finding it set at boot should not happen — it should have taken the board
+    // off. Leaving it there would arm the next write of that register.
+    i2cbus::Bus bus;
+    BringUp(bus);
+    fake::Device *chip = PutOnWire();
+    chip->regs[kRegCommonConfig] = 0b0000'0101;  // long press already right, plus the bit
+
+    pmic::Axp2101 axp;
+    TEST_ASSERT_EQUAL_INT(ESP_OK, axp.Init(bus));
+
+    TEST_ASSERT_EQUAL_HEX8(0b0000'0100, chip->regs[kRegCommonConfig]);
+}
+
+void test_pmic_the_power_key_can_be_configured_the_other_way(void) {
+    // It is a `Config` field rather than a constant, so a board that wants a
+    // longer press does not need this driver edited.
+    i2cbus::Bus bus;
+    BringUp(bus);
+    fake::Device *chip = PutOnWire();
+    chip->regs[kRegKeyLevelCtrl] = 0;
+    chip->regs[kRegCommonConfig] = 0b0000'0100;
+
+    pmic::Config config;
+    config.press_on = pmic::PressOnTime::k1s;
+    config.press_off = pmic::PressOffTime::k10s;
+    config.long_press_shutdown = false;
+
+    pmic::Axp2101 axp;
+    TEST_ASSERT_EQUAL_INT(ESP_OK, axp.Init(bus, config));
+
+    TEST_ASSERT_EQUAL_HEX8(0b0000'1110, chip->regs[kRegKeyLevelCtrl]);
+    TEST_ASSERT_EQUAL_HEX8(0, chip->regs[kRegCommonConfig]);
+}
+
 void RegisterPmicTests(void) {
     RUN_TEST(test_pmic_init_identifies_the_chip);
     RUN_TEST(test_pmic_refuses_a_chip_that_is_not_an_axp2101);
@@ -510,4 +632,12 @@ void RegisterPmicTests(void) {
     RUN_TEST(test_pmic_power_off_is_refused_over_usb_and_writes_nothing);
     RUN_TEST(test_pmic_power_off_arms_the_bit_on_battery);
     RUN_TEST(test_pmic_power_off_before_init_is_refused);
+
+    RUN_TEST(test_pmic_init_writes_the_power_key_when_the_chip_holds_something_else);
+    RUN_TEST(test_pmic_init_leaves_a_power_key_that_is_already_right_alone);
+    RUN_TEST(test_pmic_init_keeps_the_bits_of_0x27_it_does_not_own);
+    RUN_TEST(test_pmic_init_turns_the_long_press_shutdown_on);
+    RUN_TEST(test_pmic_init_never_writes_the_soft_power_off_bit);
+    RUN_TEST(test_pmic_init_clears_a_soft_power_off_bit_it_finds_set);
+    RUN_TEST(test_pmic_the_power_key_can_be_configured_the_other_way);
 }
