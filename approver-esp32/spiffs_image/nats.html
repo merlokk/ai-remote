@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#0b0d0c">
+<title>bus</title>
+<style>html,body{margin:0;background:#0b0d0c;color:#d6ded8;
+font:16px/1.5 system-ui,-apple-system,sans-serif}
+body{padding:0 16px 40px}</style>
+</head>
+<body data-page="nats">
+<div class="wrap">
+<header>
+  <h1>Bus</h1>
+  <span class="lamp" id="lamp">reading&hellip;</span>
+</header>
+
+<p class="lead">The NATS server the permission requests arrive from. One address:
+there is exactly one bus here, and it has no credentials &mdash; the network it is
+on is the trust boundary.</p>
+
+<nav>
+  <a class="btn" href="/">
+    <span class="chev">&lsaquo;</span>
+    <span class="grow"><span class="name">Back</span></span>
+  </a>
+</nav>
+
+<h2>Server</h2>
+<div class="field wide">
+  <label for="url">Address</label>
+  <input id="url" type="text" inputmode="url" autocapitalize="off" autocomplete="off"
+         spellcheck="false" placeholder="nats://192.168.1.10:4222">
+</div>
+<p class="hint">Four spellings are accepted: <code>host</code>,
+<code>host:port</code>, <code>nats://host</code> and <code>nats://host:port</code>
+&mdash; port 4222 when none is given. <b>Empty switches the bus off</b>, which is
+how a device becomes a clock that approves nothing. A URL that will not parse is
+refused here rather than becoming a connection that silently never happens.</p>
+
+<div class="sticky">
+  <div class="notice" id="said" hidden></div>
+  <button class="btn" type="button" id="apply">Apply</button>
+  <button class="btn" type="button" id="save">Apply and save</button>
+  <button class="btn small" type="button" id="reconnect">Reconnect now</button>
+</div>
+
+<h2>What it is doing</h2>
+<table>
+  <tr><th>state</th><td id="state">&hellip;</td></tr>
+  <tr><th>this device</th><td id="who">&hellip;</td></tr>
+  <tr><th>requests seen</th><td id="received">&hellip;</td></tr>
+  <tr><th>answered</th><td id="answered">&hellip;</td></tr>
+</table>
+
+<footer>
+  This is the one setting that changes <em>who</em> this device listens to, so it is
+  worth being sure of: a device pointed at another server stops answering the
+  requests from this one. It still cannot approve anything on its own &mdash; a
+  verdict is a press on the device, and the hook checks the signature against its
+  own list of trusted keys.
+</footer>
+</div>
+<script src="/app.js"></script>
+</body>
+</html>

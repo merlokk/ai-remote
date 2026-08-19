@@ -18,6 +18,18 @@ constexpr const char *TAG = "config";
 Data data = {};
 bool loaded = false;
 
+// Who to tell when every field moved at once (`config.h` argues why this is a
+// hook rather than three copies of a list at three call sites). Null until `main`
+// registers one, and deliberately not called by `Init`: at boot nothing it would
+// tell exists yet.
+ChangeHandler changed_handler = nullptr;
+
+void Changed() {
+    if (changed_handler != nullptr) {
+        changed_handler();
+    }
+}
+
 // What `KEY` decided at boot (§10.15). Kept because it has to be said twice —
 // once on the screen, once whenever the console is asked — and neither of those
 // exists yet at the moment the button is read.
@@ -318,6 +330,35 @@ esp_err_t Parse(const char *json, Data *out) {
         out->display.sleep_after_seconds = static_cast<uint16_t>(value);
     }
 
+    // The configuration web server (§10.16). **Three spellings and nothing
+    // else**, and an unknown one is left at the default rather than guessed — the
+    // same call the Wi-Fi mode above makes, and for the same reason: a device that
+    // read "yes" as "on" would be a device serving pages nobody asked it to.
+    const cJSON *web = cJSON_GetObjectItemCaseSensitive(root, "web");
+    if (cJSON_IsObject(web)) {
+        const cJSON *mode = cJSON_GetObjectItemCaseSensitive(web, "mode");
+        if (cJSON_IsString(mode) && mode->valuestring != nullptr) {
+            if (strcmp(mode->valuestring, "off") == 0) {
+                out->web.mode = WebMode::kOff;
+            } else if (strcmp(mode->valuestring, "on") == 0) {
+                out->web.mode = WebMode::kOn;
+            } else if (strcmp(mode->valuestring, "auto") == 0) {
+                out->web.mode = WebMode::kAuto;
+            } else {
+                ESP_LOGW(TAG, "web.mode '%s' is not off, on or auto; left alone",
+                         mode->valuestring);
+            }
+        }
+        // Whether the pages may write. Anything that is not a boolean leaves the
+        // default alone, which is the same call the mode above makes — and here the
+        // default is the permissive one, so a device that means to refuse writes
+        // has to say `false` in as many words.
+        const cJSON *writable = cJSON_GetObjectItemCaseSensitive(web, "write");
+        if (cJSON_IsBool(writable)) {
+            out->web.write = cJSON_IsTrue(writable);
+        }
+    }
+
     const cJSON *audio = cJSON_GetObjectItemCaseSensitive(root, "audio");
     if (cJSON_IsObject(audio)) {
         long value = out->audio.volume_percent;
@@ -360,6 +401,15 @@ esp_err_t Serialise(const Data &in, size_t *length) {
     cJSON *root = cJSON_CreateObject();
     if (root == nullptr) {
         return ESP_ERR_NO_MEM;
+    }
+
+    cJSON *web = cJSON_AddObjectToObject(root, "web");
+    if (web != nullptr) {
+        cJSON_AddStringToObject(web, "mode",
+                                in.web.mode == WebMode::kOff
+                                    ? "off"
+                                    : (in.web.mode == WebMode::kOn ? "on" : "auto"));
+        cJSON_AddBoolToObject(web, "write", in.web.write);
     }
 
     cJSON *wifi = cJSON_AddObjectToObject(root, "wifi");
@@ -533,6 +583,14 @@ void FillDefaults(Data *out) {
         return;
     }
     *out = Data{};
+    // **`auto` rather than off**, and it is the cheap default: the server comes up
+    // only while this device is its own access point, which is the one state in
+    // which somebody has no other way to reach it (§10.16).
+    out->web.mode = WebMode::kAuto;
+    // Permissive by default: a configuration site that cannot configure anything
+    // is not what §10.16 was asked for, and the switch exists for the device on a
+    // network its owner does not trust.
+    out->web.write = true;
     out->wifi.active = false;
     out->wifi.mode = WifiMode::kClient;
     out->wifi.network_count = 0;
@@ -609,9 +667,15 @@ esp_err_t Reload() {
 
     err = Parse(file_buffer, &data);
     if (err != ESP_OK) {
+        // **Nothing has been told, because a reload that failed changed nothing
+        // it could tell them about** — `Parse` writes into the caller's struct
+        // and this one is `data` itself, so a partial parse is the one case
+        // worth being careful about here. It refuses before it writes; the
+        // fields are as they were.
         return err;
     }
     loaded = true;
+    Changed();
     return ESP_OK;
 }
 
@@ -630,6 +694,7 @@ esp_err_t Restore() {
                  esp_err_to_name(err));
         FillDefaults(&data);
         loaded = true;
+        Changed();
         return err;
     }
 
@@ -647,8 +712,15 @@ esp_err_t Restore() {
         FillDefaults(&data);
     }
     loaded = true;
+    // **Told even when the write failed**, because what decides this is whether
+    // the *fields* moved rather than whether the file did: a device running on
+    // the defaults with a stale volume on the codec is worse than one whose
+    // restore is only in memory.
+    Changed();
     return err;
 }
+
+void OnChanged(ChangeHandler handler) { changed_handler = handler; }
 
 RestoreOutcome RestoreAtBoot(bool key_held) {
     boot_restore = RestoreOutcome::kNotRequested;

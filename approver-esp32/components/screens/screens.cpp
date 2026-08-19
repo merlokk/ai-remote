@@ -30,6 +30,9 @@
 #include "status_screen.h"
 #include "touch_screen.h"
 #include "wifi_manager.h"
+#include "web_server.h"
+#include "wifi_scan_screen.h"
+#include "wifi_screen.h"
 
 namespace screens {
 namespace {
@@ -74,6 +77,56 @@ bool g_touch_down = false;
 uint32_t g_touch_down_ms = 0;
 uint16_t g_touch_last_raw_x = 0;
 uint16_t g_touch_last_raw_y = 0;
+
+// The Wi-Fi screen and the list behind it (§10.8.6). Same split as everything
+// else here: `ui::WifiView` decides and is host-tested, the two screens paint.
+WifiScreen g_wifi_screen;
+WifiScanScreen g_scan_screen;
+ui::WifiView g_wifi;
+
+// **Three numbers this component is the only place that can check.** `ui` includes
+// nothing and `config` has never heard of a screen, so the day one of them moves,
+// this is where it has to fail.
+static_assert(ui::kWifiSsidSize == config::kSsidSize, "the screen and the file disagree on an SSID");
+static_assert(ui::kWifiPasswordSize == config::kPasswordSize,
+              "the screen and the file disagree on a passphrase");
+static_assert(static_cast<size_t>(ui::kWifiScanMax) == wifi::kMaxScanResults,
+              "the list would drop networks the radio found");
+
+// **The scan runs on a task of its own, and that is `AlertTask`'s argument
+// again**: `wifimgr::Scan` blocks for a second or two while the radio leaves its
+// channel, and the screen task cannot afford that — it polls the buttons, and a
+// press is the one input on this device with a deadline behind it.
+//
+// **The stack is measured rather than guessed**, which is what the log line at
+// the end of each scan is for (§10.14.1: the low-water mark is the number that
+// says whether the device is safe). It started at 5,120 and this board answered
+// twice: **604 bytes** used for a scan with the radio already up, and **1,356**
+// for the one that matters — a scan with `wifi.active` off, where `wifimgr::Scan`
+// brings the whole Wi-Fi stack up inside this task and puts it back. 3,072 keeps
+// more than twice the measured peak and gives 2 KB of RAM back on a device that
+// runs with about 30 KB free.
+StackType_t g_scan_stack[3072 / sizeof(StackType_t)];
+StaticTask_t g_scan_tcb = {};
+SemaphoreHandle_t g_scan_signal = nullptr;
+StaticSemaphore_t g_scan_signal_storage = {};
+
+// What the driver hands back, and what the view takes. Both static, because
+// nothing here allocates and because 16 records is 1.5 KB that has no business
+// on a 5 KB stack.
+wifi::ScanResult g_scan_raw[wifi::kMaxScanResults] = {};
+ui::WifiScanEntry g_scan_entries[ui::kWifiScanMax] = {};
+volatile uint8_t g_scan_entry_count = 0;
+volatile bool g_scan_ok = false;
+
+// **Which scan the buffer holds, so that an old one cannot be shown as a new
+// one.** `ui::WifiView` already ignores a result with no scan in flight; this is
+// the other half — a result from the *previous* visit to the list arriving just
+// after a fresh `ScanOpened`. The rule `link_policy.h` and `sync_policy.h` both
+// keep, and the counters are the smallest way to keep it.
+volatile uint32_t g_scan_wanted = 0;
+volatile uint32_t g_scan_answered = 0;
+uint32_t g_scan_consumed = 0;  // the screen task's, and only its
 
 // **`KEY` held two seconds opens settings**, which is the operator's way in when
 // the panel is not being touched — and the reason the threshold and the
@@ -217,6 +270,52 @@ StaticSemaphore_t g_lock_storage;
 //   * `kWaiting` is `connecting`. A backoff is an attempt that has not started
 //     yet, and an icon that went blank between tries would flicker between "off"
 //     and "trying" for as long as a network was refusing us.
+// One scan, on a task that is allowed to block. Woken by `RequestScan`, and it
+// publishes its answer last so the consumer never reads a half-filled buffer.
+void ScanTask(void *) {
+    for (;;) {
+        xSemaphoreTake(g_scan_signal, portMAX_DELAY);
+        const uint32_t generation = g_scan_wanted;
+
+        size_t found = 0;
+        const esp_err_t err = wifimgr::Scan(g_scan_raw, wifi::kMaxScanResults, &found);
+        uint8_t count = 0;
+        if (err == ESP_OK) {
+            for (size_t i = 0; i < found && count < ui::kWifiScanMax; ++i) {
+                // `%.32s` rather than `%s`: an SSID field is 32 bytes and nothing
+                // on the air promises a terminator after them.
+                std::snprintf(g_scan_entries[count].ssid, sizeof g_scan_entries[count].ssid,
+                              "%.32s", g_scan_raw[i].ssid);
+                g_scan_entries[count].rssi = g_scan_raw[i].rssi;
+                g_scan_entries[count].secured = g_scan_raw[i].secured;
+                ++count;
+            }
+        } else {
+            ESP_LOGW(TAG, "the radio would not scan: %s", esp_err_to_name(err));
+        }
+
+        g_scan_entry_count = count;
+        g_scan_ok = err == ESP_OK;
+        // Last, so that the screen task never reads a buffer being filled.
+        g_scan_answered = generation;
+
+        ESP_LOGI(TAG, "scan: %u on the air, %u bytes of stack never used",
+                 static_cast<unsigned>(count),
+                 static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr) * sizeof(StackType_t)));
+    }
+}
+
+// Ask for one. **Not waited for**: the screen says it is looking and the list
+// arrives when it arrives, which is what keeps the press that opened it
+// instantaneous.
+void RequestScan() {
+    if (g_scan_signal == nullptr) {
+        return;
+    }
+    g_scan_wanted = static_cast<uint32_t>(g_scan_wanted + 1);
+    xSemaphoreGive(g_scan_signal);
+}
+
 ui::WifiIcon MapWifi(const wifimgr::Snapshot &wifi) {
     switch (wifi.state) {
         case wifimgr::State::kOnline:
@@ -383,10 +482,12 @@ void FillSystem(StatusFacts *facts) {
     Row(facts, "uptime", "%ud %02uh %02um %02us", seconds / 86400U, (seconds % 86400U) / 3600U,
         (seconds % 3600U) / 60U, seconds % 60U);
 
-    Row(facts, "heap", "%u free", static_cast<unsigned>(esp_get_free_heap_size()));
-    // **The low-water mark rather than the current free heap** (§10.14.1): the
-    // minimum ever seen is the number that says whether the device is safe.
-    Row(facts, "lowest", "%u",
+    // **One row for the two heap numbers, because the page was full.** This page
+    // holds nine lines (`kStatusRows`) and had exactly nine; the web server needed
+    // a tenth. They belong together anyway — §10.14.1's point is that the free
+    // heap only means something next to the lowest it has ever been — and it is
+    // what `status` on the console has always printed on one line.
+    Row(facts, "heap", "%u, low %u", static_cast<unsigned>(esp_get_free_heap_size()),
         static_cast<unsigned>(heap_caps_get_minimum_free_size(MALLOC_CAP_DEFAULT)));
 
     const esp_app_desc_t *desc = esp_app_get_description();
@@ -413,6 +514,31 @@ void FillSystem(StatusFacts *facts) {
         bus_text = bus.state == nats::State::kConnected ? "connected" : "down";
     }
     Row(facts, "bus", "%s", bus_text);
+
+    // **The configuration web server (§10.16), and the first word is always what
+    // is actually happening.** It used to read `off` / `auto, no ap` / `on, no
+    // network` when it was down, which names the *wish* first — and the repository
+    // owner read the row and said so: there was no state on it, only a desired
+    // state. `auto` is a setting; `stopped` is a fact.
+    //
+    // So: `up` with the port, because that is what somebody holding a phone needs
+    // and the address is two rows above; or `stopped` with *which* of the three
+    // reasons, because a server nobody asked for and a server waiting for a network
+    // are different problems and one of them is not a problem at all. Both halves
+    // in one row, since this page is full (`kStatusRows`).
+    const web::Status server = web::Get();
+    char server_text[24] = {};
+    if (server.running) {
+        std::snprintf(server_text, sizeof server_text, "up, port %u",
+                      static_cast<unsigned>(server.port));
+    } else if (server.desired == web::Desired::kOff) {
+        std::snprintf(server_text, sizeof server_text, "stopped, off");
+    } else if (server.desired == web::Desired::kAuto) {
+        std::snprintf(server_text, sizeof server_text, "stopped, no ap");
+    } else {
+        std::snprintf(server_text, sizeof server_text, "stopped, no net");
+    }
+    Row(facts, "web", "%s", server_text);
 }
 
 void FillMotion(StatusFacts *facts) {
@@ -592,6 +718,11 @@ void Decided(const ui::Request &request, ui::Verdict verdict) {
 // navigator is the only thing that decides what is on the glass, and a gesture,
 // a button and a console command are three ways of asking it the same question.
 
+// Defined below, with the rest of the Wi-Fi screen. Declared here because
+// arriving at that screen has to put the view in step **before** anything reads
+// it, and `Apply` is the one door every route goes through.
+void SyncWifi();
+
 bool Apply(ui::Nav nav) {
     const ui::ScreenId was = g_nav.Screen();
     const bool leaving_limits = was == ui::ScreenId::kLimits;
@@ -611,6 +742,36 @@ bool Apply(ui::Nav nav) {
     }
     if (g_nav.Screen() == ui::ScreenId::kStatus) {
         g_pager.Reset();
+    }
+    // **Arriving at the Wi-Fi screen from settings is a fresh visit; arriving
+    // from the list is not.** A name picked off the air belongs to the record
+    // that was on the glass when the list was opened, so the index has to
+    // survive the trip back — `wifi_view.h` argues it, and this is the one line
+    // that keeps it true.
+    if (g_nav.Screen() == ui::ScreenId::kWifi && was != ui::ScreenId::kWifiScan) {
+        g_wifi.Opened();
+    }
+    // **And what the file says, now rather than on the next pass.** The board
+    // found this one: `SyncWifi` runs near the top of the task loop, so on the
+    // pass that *arrives* here the screen was still the settings list and the
+    // sync had already declined to run — which left the view on its own defaults
+    // for a frame. What that reads as is a Wi-Fi screen that says `off` and
+    // `no networks` for a tenth of a second before correcting itself, and a
+    // `screen wifi` typed straight afterwards that prints exactly that: a mode
+    // and a count from nowhere, next to an SSID read live out of the config.
+    // Every route in — a gesture, `KEY`, the console — comes through here, so
+    // here is where it belongs.
+    if (g_nav.Screen() == ui::ScreenId::kWifi || g_nav.Screen() == ui::ScreenId::kWifiScan) {
+        SyncWifi();
+    }
+    if (g_nav.Screen() == ui::ScreenId::kWifiScan) {
+        // Opening the list *is* asking for a scan: nobody comes here to look at
+        // what was on the air last time. 10.8.6 forbids scanning on a timer, and
+        // this is the only thing that ever starts one from a screen.
+        g_wifi.ScanOpened();
+        RequestScan();
+    } else if (was == ui::ScreenId::kWifiScan) {
+        g_wifi.ScanClosed();
     }
     // Arriving *and* leaving both reset the flow: a calibration nobody finished
     // must not be waiting for its third cross the next time this screen opens.
@@ -687,6 +848,41 @@ void PowerOffNow() {
     }
 }
 
+// **A row that reaches the filesystem, and the reason it is not done here.**
+// `Activated` is called from two places — the button poll, and the tap handler,
+// which runs *inside* the display lock — and `config::Save` writes a file while
+// `config::Reload` reads one and then hands every subsystem holding a copy of a
+// field its new value (`config::OnChanged`, which reaches I²C for the codec's
+// volume). Tens of milliseconds either way, and §10.8.1 keeps that off the LVGL
+// task: a screen task holding the lock is a frame nobody sees and, worse, a press
+// nobody reads.
+//
+// So the press records what to do and the task loop does it, one tick later, with
+// no lock held — the shape `g_scan_wanted` already has next door.
+enum class PendingConfig : uint8_t { kNone = 0, kSave, kReload };
+PendingConfig g_config_pending = PendingConfig::kNone;
+
+void RunPendingConfig(uint32_t now_ms) {
+    const PendingConfig wanted = g_config_pending;
+    g_config_pending = PendingConfig::kNone;
+    if (wanted == PendingConfig::kNone) {
+        return;
+    }
+
+    const bool save = wanted == PendingConfig::kSave;
+    const esp_err_t err = save ? config::Save() : config::Reload();
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "%s from the settings screen", save ? "config saved" : "config reloaded");
+    } else {
+        ESP_LOGW(TAG, "config %s from the settings screen failed: %s", save ? "save" : "reload",
+                 esp_err_to_name(err));
+    }
+    // **The row is where it is said**, because the row is where the operator is
+    // looking — the log line above is for whoever has a cable in.
+    g_menu.SetResult(save ? ui::SettingsEntry::kConfigSave : ui::SettingsEntry::kConfigReload,
+                     err == ESP_OK, now_ms);
+}
+
 // One row's action, taken on the screen task and never in a callback.
 void Activated(uint32_t now_ms) {
     switch (g_menu.Activate(now_ms)) {
@@ -715,8 +911,153 @@ void Activated(uint32_t now_ms) {
         case ui::SettingsAction::kOpenTouch:
             Apply(ui::Nav::kOpenTouch);
             break;
+        case ui::SettingsAction::kConfigSave:
+            g_config_pending = PendingConfig::kSave;
+            break;
+        case ui::SettingsAction::kConfigReload:
+            g_config_pending = PendingConfig::kReload;
+            break;
         case ui::SettingsAction::kArmed:
         case ui::SettingsAction::kNone:
+            break;
+    }
+}
+
+// --- The Wi-Fi screen (CLAUDE.md 10.8.6) ---------------------------------
+
+// What the file says, mirrored into the view. **Before the buttons rather than
+// after**, so a press acts on the record the operator is looking at rather than
+// on the one that was there a tick ago — the console can edit the network list
+// while this screen is up.
+void SyncWifi() {
+    const ui::ScreenId up = g_nav.Screen();
+    if (up != ui::ScreenId::kWifi && up != ui::ScreenId::kWifiScan) {
+        return;
+    }
+    const config::Wifi &settings = config::Get().wifi;
+    g_wifi.SetRecords(settings.active, settings.mode == config::WifiMode::kAp,
+                      settings.network_count);
+
+    if (g_scan_answered == g_scan_consumed) {
+        return;
+    }
+    g_scan_consumed = g_scan_answered;
+    if (g_scan_answered != g_scan_wanted) {
+        // A scan that came back after another had been asked for. Dropped rather
+        // than shown: a list of what was on the air a minute ago, presented as
+        // what is on it now, is the worst of both.
+        ESP_LOGI(TAG, "a stale scan came back; dropped");
+        return;
+    }
+    if (g_scan_ok) {
+        g_wifi.ScanFound(g_scan_entries, g_scan_entry_count);
+    } else {
+        g_wifi.ScanFailed();
+    }
+}
+
+// The record's own two strings, and one line about what the radio is doing.
+// Gathered outside the LVGL lock, like the status page: `wifimgr::Get` takes a
+// lock of its own, and 10.8.1 keeps anything that can wait out of the frame.
+void GatherWifi(WifiFacts *out) {
+    const config::Wifi &settings = config::Get().wifi;
+    const char *ssid = "";
+    const char *password = "";
+    if (g_wifi.ShowingAp()) {
+        ssid = settings.ap_ssid;
+        password = settings.ap_password;
+    } else if (g_wifi.Index() < settings.network_count) {
+        ssid = settings.networks[g_wifi.Index()].ssid;
+        password = settings.networks[g_wifi.Index()].password;
+    }
+    std::snprintf(out->ssid, sizeof out->ssid, "%s", ssid);
+    std::snprintf(out->password, sizeof out->password, "%s", password);
+
+    // **Desired above, current here** — 10.9's whole shape, on one screen. And
+    // when the last attempt failed, the failure is printed instead of the state:
+    // "wrong password" and "no such network" are what a person can act on, and
+    // that section forbids spelling them the same way.
+    const wifimgr::Snapshot wifi = wifimgr::Get();
+    if (wifi.failure != wifimgr::Failure::kNone && wifi.state != wifimgr::State::kOnline) {
+        std::snprintf(out->state, sizeof out->state, "%s", wifimgr::Name(wifi.failure));
+    } else if (wifi.state == wifimgr::State::kOnline && wifi.radio.rssi != 0) {
+        std::snprintf(out->state, sizeof out->state, "%s  %d dBm", wifimgr::Name(wifi.state),
+                      static_cast<int>(wifi.radio.rssi));
+    } else {
+        std::snprintf(out->state, sizeof out->state, "%s", wifimgr::Name(wifi.state));
+    }
+}
+
+// The mode row was pressed. **Two config fields, and only one of them when the
+// answer is off**: off says nothing about whether this device is a client or an
+// access point, so it leaves `wifi.mode` alone — which is what keeps the record
+// on the glass from changing under a press that was about the radio.
+//
+// Nothing reaches the filesystem, and nothing has to be told: `wifimgr` reads
+// the desired mode off the config on every pass.
+void ApplyWifiMode(uint32_t now_ms) {
+    config::Wifi &settings = config::Get().wifi;
+    const ui::WifiMode mode = g_wifi.Mode();
+    settings.active = ui::WifiModeActive(mode);
+    if (settings.active) {
+        settings.mode = ui::WifiModeIsAp(mode) ? config::WifiMode::kAp : config::WifiMode::kClient;
+    }
+    g_wifi.Noted(now_ms);
+    ESP_LOGI(TAG, "wifi mode %s - in memory only, 'config save' keeps it", ui::WifiModeName(mode));
+}
+
+// A name off the air, into the record that was on the glass. **The password is
+// not touched**, which is the honest half of a screen with no keyboard: a network
+// picked here is joined only if the passphrase already in that record happens to
+// be its own.
+void WifiPick(uint32_t now_ms) {
+    const char *ssid = g_wifi.PickSelected(now_ms);
+    if (ssid == nullptr) {
+        // Still looking, nothing on the air, or the radio refused — all three are
+        // on the screen already, so this line is for whoever reads the log.
+        ESP_LOGI(TAG, "nothing to pick from that list yet");
+        return;
+    }
+
+    config::Wifi &settings = config::Get().wifi;
+    if (g_wifi.ShowingAp()) {
+        std::snprintf(settings.ap_ssid, sizeof settings.ap_ssid, "%s", ssid);
+        ESP_LOGI(TAG, "the access point is now '%s' - in memory only, 'config save' keeps it",
+                 ssid);
+    } else if (g_wifi.Index() < settings.network_count) {
+        const uint8_t at = g_wifi.Index();
+        std::snprintf(settings.networks[at].ssid, sizeof settings.networks[at].ssid, "%s", ssid);
+        ESP_LOGI(TAG,
+                 "network %u is now '%s', password unchanged - in memory only, 'config save' keeps "
+                 "it and 'wifi retry' tries it",
+                 static_cast<unsigned>(at + 1), ssid);
+    } else {
+        // The console forgot that network between the list opening and the press
+        // landing. Nothing is written to a record that is not there.
+        ESP_LOGW(TAG, "the network that list was opened for is gone");
+    }
+    Apply(ui::Nav::kBack);
+}
+
+// One row's action, on the screen task and never in a callback — the same shape
+// `Activated` has next door.
+void WifiActivated(uint32_t now_ms) {
+    switch (g_wifi.Activate()) {
+        case ui::WifiAction::kModeChanged:
+            ApplyWifiMode(now_ms);
+            break;
+        case ui::WifiAction::kOpenScan:
+            Apply(ui::Nav::kOpenScan);
+            break;
+        case ui::WifiAction::kNoRecord:
+            // The row says `no record` and has said so since before the press.
+            ESP_LOGI(TAG, "no network to put a name in - 'wifi join' on the console adds one");
+            break;
+        case ui::WifiAction::kNothingToStep:
+            ESP_LOGI(TAG, "there is only one of these to look at");
+            break;
+        case ui::WifiAction::kStepped:
+        case ui::WifiAction::kNone:
             break;
     }
 }
@@ -775,6 +1116,10 @@ void PollKeys(uint32_t now_ms) {
                 g_menu.Next();
             } else if (screen == ui::ScreenId::kStatus) {
                 g_pager.Next();
+            } else if (screen == ui::ScreenId::kWifi) {
+                g_wifi.Next();
+            } else if (screen == ui::ScreenId::kWifiScan) {
+                g_wifi.ScanNext();
             } else if (screen == ui::ScreenId::kTouch &&
                        g_touch_flow.Stage() == ui::TouchStage::kTest) {
                 g_touch_flow.Start();
@@ -814,6 +1159,13 @@ void PollKeys(uint32_t now_ms) {
         Apply(ui::Nav::kSwipeUp);
     } else if (key == buttons::Press::kShort && screen == ui::ScreenId::kSettings) {
         Activated(now_ms);
+    } else if (key == buttons::Press::kShort && screen == ui::ScreenId::kWifi) {
+        WifiActivated(now_ms);
+    } else if (key == buttons::Press::kShort && screen == ui::ScreenId::kWifiScan) {
+        // **`KEY` picks, and `PWR` leaves without picking.** Two buttons for two
+        // outcomes, so there is no press on this screen that both chooses a
+        // network and cannot be undone by leaving.
+        WifiPick(now_ms);
     } else if (key == buttons::Press::kShort && screen == ui::ScreenId::kTouch) {
         // **The reset, and it is a button because the glass may be the broken
         // thing** (`touch_screen.h`). It puts back the state every device ships
@@ -899,7 +1251,15 @@ void Task(void *) {
         for (uint16_t i = expired_before; i < g_card.TimedOut(); ++i) {
             g_nav.RequestExpired();
         }
+        // **What the file says, before the buttons that act on it.** Cheap — two
+        // reads of a struct already in RAM — and it is what makes a press land on
+        // the record that is on the glass.
+        SyncWifi();
         PollKeys(now_ms);
+        // **Off the display lock, deliberately** — the argument is above
+        // `RunPendingConfig`. A press recorded last pass lands here, ~100 ms
+        // later, and the note it produces is painted in this same pass.
+        RunPendingConfig(now_ms);
 
         // **A finger anywhere on the glass**, taken from the count LVGL's own
         // read callback keeps rather than by polling the controller a second
@@ -1021,6 +1381,14 @@ void Task(void *) {
             g_touch_down = false;
         }
 
+        // The Wi-Fi screen's two strings and its state line, gathered outside the
+        // lock for the reason the status page is: one of them takes somebody
+        // else's mutex.
+        WifiFacts wifi_facts;
+        if (g_nav.Screen() == ui::ScreenId::kWifi) {
+            GatherWifi(&wifi_facts);
+        }
+
         StatusFacts facts;
         if (g_nav.Screen() == ui::ScreenId::kStatus) {
             facts.page = g_pager.Index();
@@ -1044,7 +1412,8 @@ void Task(void *) {
                 // lock of its own. Acted on here rather than there: §10.8.1 keeps
                 // every decision off the LVGL task, and one of these ends in
                 // `esp_restart`.
-                if (g_settings_screen.TakeBack() || g_status_screen.TakeBack()) {
+                if (g_settings_screen.TakeBack() || g_status_screen.TakeBack() ||
+                    g_wifi_screen.TakeBack() || g_scan_screen.TakeBack()) {
                     Apply(ui::Nav::kBack);
                 }
                 const uint8_t tapped = g_settings_screen.TakeTap();
@@ -1053,11 +1422,44 @@ void Task(void *) {
                     // A tap is both the selection and the press, which is what
                     // `settings_menu.h` means when it says re-selecting the armed row
                     // must not disarm it.
+                    //
+                    // **And it is a row of the list, not a slot on the glass**,
+                    // which is what native scrolling gave back: every row is its own
+                    // widget and carries its own index, so there is no window to map
+                    // it through and no way for a tap to land on a different row than
+                    // the finger did.
                     g_menu.Select(tapped);
                     Activated(now_ms);
                 }
                 if (g_status_screen.TakeNext() && g_nav.Screen() == ui::ScreenId::kStatus) {
                     g_pager.Next();
+                }
+                // **An arrow is taken before a row and separately from it**: it
+                // steps the record without moving the selection, so a later press
+                // still acts on the row the operator last chose.
+                const int8_t arrow = g_wifi_screen.TakeArrow();
+                const uint8_t wifi_tapped = g_wifi_screen.TakeTap();
+                if (g_nav.Screen() == ui::ScreenId::kWifi && !g_nav.RequestVisible()) {
+                    if (arrow < 0) {
+                        g_wifi.StepPrev();
+                    } else if (arrow > 0) {
+                        g_wifi.StepNext();
+                    }
+                    if (wifi_tapped != WifiScreen::kNoRow) {
+                        g_wifi.Select(wifi_tapped);
+                        WifiActivated(now_ms);
+                    }
+                }
+                const uint8_t scan_tapped = g_scan_screen.TakeTap();
+                if (scan_tapped != WifiScanScreen::kNoRow &&
+                    g_nav.Screen() == ui::ScreenId::kWifiScan && !g_nav.RequestVisible()) {
+                    // **A tap that landed on an empty row picks nothing.** It is
+                    // the view that says so, because a press which selected
+                    // nothing and then picked would take whatever was selected
+                    // before it — a network nobody aimed at.
+                    if (g_wifi.ScanSelectRow(scan_tapped)) {
+                        WifiPick(now_ms);
+                    }
                 }
                 if (g_gesture != LV_DIR_NONE) {
                     const lv_dir_t drawn = g_gesture;
@@ -1078,7 +1480,15 @@ void Task(void *) {
                 g_settings_screen.SetVisible(up == ui::ScreenId::kSettings);
                 g_status_screen.SetVisible(up == ui::ScreenId::kStatus);
                 g_touch_screen.SetVisible(up == ui::ScreenId::kTouch);
+                g_wifi_screen.SetVisible(up == ui::ScreenId::kWifi);
+                g_scan_screen.SetVisible(up == ui::ScreenId::kWifiScan);
                 g_settings_screen.Apply(g_menu, now_ms);
+                if (up == ui::ScreenId::kWifi) {
+                    g_wifi_screen.Apply(g_wifi, wifi_facts, now_ms);
+                }
+                if (up == ui::ScreenId::kWifiScan) {
+                    g_scan_screen.Apply(g_wifi);
+                }
                 if (up == ui::ScreenId::kStatus) {
                     g_status_screen.Apply(facts);
                 }
@@ -1186,6 +1596,18 @@ esp_err_t Init(const Hardware &hardware, const Keys &keys) {
             return touch;
         }
 
+        // The Wi-Fi screen and the list one level inside it (10.8.6).
+        const esp_err_t wifi_screen = g_wifi_screen.Create(screen);
+        if (wifi_screen != ESP_OK) {
+            ESP_LOGE(TAG, "wi-fi screen not built: %s", esp_err_to_name(wifi_screen));
+            return wifi_screen;
+        }
+        const esp_err_t scan_screen = g_scan_screen.Create(screen);
+        if (scan_screen != ESP_OK) {
+            ESP_LOGE(TAG, "network list not built: %s", esp_err_to_name(scan_screen));
+            return scan_screen;
+        }
+
         // After the clock, so it is the later sibling and therefore the one LVGL
         // draws on top (§10.8.1: the card outranks everything).
         const esp_err_t card = g_request_screen.Create(screen);
@@ -1219,6 +1641,17 @@ esp_err_t Init(const Hardware &hardware, const Keys &keys) {
         // is announcing.
         xTaskCreateStatic(AlertTask, "card-alert", sizeof(g_alert_stack) / sizeof(g_alert_stack[0]),
                           nullptr, kTaskPriority - 1, g_alert_stack, &g_alert_tcb);
+    }
+
+    // The scan's task, for the reason the chirp has one: `wifimgr::Scan` blocks
+    // for a second or two and the screen task polls the buttons.
+    if (g_scan_signal == nullptr) {
+        g_scan_signal = xSemaphoreCreateBinaryStatic(&g_scan_signal_storage);
+        if (g_scan_signal == nullptr) {
+            return ESP_ERR_NO_MEM;
+        }
+        xTaskCreateStatic(ScanTask, "wifi-scan", sizeof(g_scan_stack) / sizeof(g_scan_stack[0]),
+                          nullptr, kTaskPriority - 1, g_scan_stack, &g_scan_tcb);
     }
 
     g_handle = xTaskCreateStatic(Task, "screens", sizeof(g_stack) / sizeof(g_stack[0]), nullptr,
@@ -1375,10 +1808,41 @@ MenuStatus Menu() {
     out.ready = true;
     out.screen = g_nav.Screen();
     out.selected = g_menu.Selected();
+    // Where the *list* is, which is a different question from where the selection
+    // is now that a finger can drag one without moving the other. It is the
+    // screen's answer because the scroll belongs to LVGL (§10.8.5).
+    out.menu_window = g_settings_screen.ScrolledRows();
+    out.menu_visible = kSettingsVisibleRows;
     out.armed = g_menu.Armed(static_cast<uint32_t>(esp_timer_get_time() / 1000));
     out.can_power_off = g_menu.CanPowerOff();
     out.status_page = g_pager.Index();
     out.status_pages = ui::StatusPager::kPageCount;
+
+    // The Wi-Fi screen (10.8.6). **No password in any of this**, deliberately:
+    // 10.15 keeps one out of every log line and every console dump, and this
+    // readout is a console dump. Whether one is set at all is a different fact
+    // and is worth having.
+    out.wifi_mode = g_wifi.Mode();
+    out.wifi_ap = g_wifi.ShowingAp();
+    out.wifi_row = static_cast<uint8_t>(g_wifi.Selected());
+    out.wifi_index = g_wifi.Index();
+    out.wifi_count = g_wifi.Count();
+    const config::Wifi &settings = config::Get().wifi;
+    if (out.wifi_ap) {
+        std::snprintf(out.wifi_ssid, sizeof out.wifi_ssid, "%s", settings.ap_ssid);
+        out.wifi_secured = settings.ap_password[0] != '\0';
+    } else if (out.wifi_index < settings.network_count) {
+        std::snprintf(out.wifi_ssid, sizeof out.wifi_ssid, "%s",
+                      settings.networks[out.wifi_index].ssid);
+        out.wifi_secured = settings.networks[out.wifi_index].password[0] != '\0';
+    }
+    out.scan_state = g_wifi.ScanState();
+    out.scan_count = g_wifi.ScanCount();
+    out.scan_selected = g_wifi.ScanSelected();
+    if (const ui::WifiScanEntry *entry = g_wifi.ScanEntry(g_wifi.ScanSelected());
+        entry != nullptr) {
+        std::snprintf(out.scan_ssid, sizeof out.scan_ssid, "%s", entry->ssid);
+    }
     xSemaphoreGive(g_lock);
     return out;
 }

@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#0b0d0c">
+<title>wi-fi</title>
+<style>html,body{margin:0;background:#0b0d0c;color:#d6ded8;
+font:16px/1.5 system-ui,-apple-system,sans-serif}
+body{padding:0 16px 40px}</style>
+</head>
+<body data-page="wifi">
+<div class="wrap">
+<header>
+  <h1>Wi-Fi</h1>
+  <span class="lamp" id="lamp">reading&hellip;</span>
+</header>
+
+<p class="lead" id="state">&nbsp;</p>
+
+<nav>
+  <a class="btn" href="/">
+    <span class="chev">&lsaquo;</span>
+    <span class="grow"><span class="name">Back</span></span>
+  </a>
+</nav>
+
+<h2>Radio</h2>
+<div class="seg" id="mode">
+  <button type="button" data-mode="off">Off</button>
+  <button type="button" data-mode="client">Client</button>
+  <button type="button" data-mode="ap">Access point</button>
+</div>
+<p class="hint">Client joins one of the networks below, in turn. Access point makes
+this device its own network so a phone can reach this page with no other network
+around.</p>
+
+<h2>Networks</h2>
+<p class="hint" id="net-hint">Up to four. The device tries them in order and falls
+back to its own access point when none of them answers.</p>
+<div id="networks"></div>
+<div class="row-actions">
+  <button class="btn small" type="button" id="add">Add a network</button>
+  <button class="btn small" type="button" id="scan">See what is on the air</button>
+</div>
+<div id="scan-list"></div>
+
+<h2>This device's access point</h2>
+<p class="hint">What it puts on the air in access-point mode, and as the fallback
+when no network answers. Leave the password empty for an open network, or use eight
+characters or more &mdash; anything in between is refused by the radio.</p>
+<div class="field">
+  <label for="ap-ssid">Name</label>
+  <input id="ap-ssid" type="text" autocapitalize="off" autocomplete="off" spellcheck="false">
+</div>
+<div class="field">
+  <label for="ap-pass">Password</label>
+  <input id="ap-pass" type="password" placeholder="unchanged" autocomplete="new-password">
+  <button class="reveal" type="button" data-for="ap-pass">show</button>
+</div>
+
+<div class="sticky">
+  <div class="notice" id="said" hidden></div>
+  <button class="btn" type="button" id="apply">Apply</button>
+  <button class="btn" type="button" id="save">Apply and save</button>
+  <button class="btn small" type="button" id="retry">Reconnect now</button>
+</div>
+
+<footer>
+  Passwords are never sent back by the device, so a box left empty keeps the key it
+  already has. <b>Apply</b> changes what is in memory; <b>Apply and save</b> writes
+  <code>config.json</code> so it survives a restart. <b>Reconnect now</b> makes the
+  radio walk the list again &mdash; if you are reading this over Wi-Fi, that is the
+  button that can take the page away.
+</footer>
+
+</div>
+
+<script>
+(function () {
+  "use strict";
+  var D = window.Device;
+  var by = function (id) { return document.getElementById(id); };
+
+  var state = { mode: "off", networks: [], max: 4, writable: true };
+
+  function drawMode() {
+    var buttons = by("mode").querySelectorAll("button");
+    for (var i = 0; i < buttons.length; i++) {
+      buttons[i].className = buttons[i].getAttribute("data-mode") === state.mode ? "on" : "";
+    }
+  }
+
+  function drawNetworks() {
+    var box = by("networks");
+    box.innerHTML = "";
+    if (state.networks.length === 0) {
+      var empty = document.createElement("p");
+      empty.className = "hint";
+      empty.textContent = "None. This device will raise its own access point.";
+      box.appendChild(empty);
+    }
+    state.networks.forEach(function (network, index) {
+      var card = document.createElement("div");
+      card.className = "card";
+      card.innerHTML =
+        '<div class="card-head"><b>' + (index + 1) + '</b>' +
+        '<button class="drop" type="button" title="forget">&times;</button></div>' +
+        '<div class="field"><label>Name</label>' +
+        '<input class="ssid" type="text" autocapitalize="off" autocomplete="off" spellcheck="false"></div>' +
+        '<div class="field"><label>Password</label>' +
+        '<input class="pass" type="password" autocomplete="new-password">' +
+        '<button class="reveal" type="button">show</button>
+</div>
+<script src="/app.js"></script>
+</body>
+</html>

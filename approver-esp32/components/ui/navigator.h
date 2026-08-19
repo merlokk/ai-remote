@@ -45,6 +45,12 @@ enum class ScreenId : uint8_t {
     kStatus,
     kTouch,
     kWifi,
+    // The list of what is on the air, one level inside the Wi-Fi screen
+    // (§10.8.6). Its own screen rather than a mode of the one above it, so that
+    // "where does `PWR` go" stays the navigator's answer and stays testable:
+    // out of the list is back to the record it was opened for, and out of that
+    // is back to settings.
+    kWifiScan,
     kCount,
 };
 
@@ -61,6 +67,9 @@ enum class Nav : uint8_t {
     kOpenWifi,
     kOpenStatus,
     kOpenTouch,
+    // The scan row on the Wi-Fi screen. Inert everywhere else, the way
+    // `kOpenWifi` is off the settings list.
+    kOpenScan,
 };
 
 class Navigator {

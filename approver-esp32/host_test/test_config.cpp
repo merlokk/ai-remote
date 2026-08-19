@@ -248,6 +248,58 @@ void test_config_skips_a_network_with_no_ssid(void) {
 
 // --- What the Wi-Fi manager reads out of it (§10.9) ----------------------
 
+void test_config_reads_the_web_mode(void) {
+    // §10.16's three spellings. `off` is the one worth reading back explicitly:
+    // the default is `auto`, so a file that says off and a file with no `web`
+    // section at all must not come out the same.
+    FreshWithDefaults();
+    fake::PutFile("config.json", R"({"web":{"mode":"off"}})");
+    TEST_ASSERT_EQUAL_INT(ESP_OK, config::Init());
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(config::WebMode::kOff),
+                          static_cast<int>(config::Get().web.mode));
+
+    FreshWithDefaults();
+    fake::PutFile("config.json", R"({"web":{"mode":"on"}})");
+    TEST_ASSERT_EQUAL_INT(ESP_OK, config::Init());
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(config::WebMode::kOn),
+                          static_cast<int>(config::Get().web.mode));
+}
+
+void test_config_no_web_section_is_auto(void) {
+    // **Absent is the default rather than off**, and the default is `auto`: a
+    // device whose file predates this field should still be reachable when it
+    // raises its own access point, which is the one state where there is no other
+    // way in (§10.16).
+    FreshWithDefaults();
+    fake::PutFile("config.json", R"({"wifi":{"active":false}})");
+    TEST_ASSERT_EQUAL_INT(ESP_OK, config::Init());
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(config::WebMode::kAuto),
+                          static_cast<int>(config::Get().web.mode));
+}
+
+void test_config_an_unknown_web_mode_keeps_the_default(void) {
+    // The Wi-Fi mode's rule next door, on the newest field: "yes" is the
+    // plausible wrong word, and a device that read it as `on` would be serving
+    // pages nobody asked it to.
+    FreshWithDefaults();
+    fake::PutFile("config.json", R"({"web":{"mode":"yes"}})");
+    TEST_ASSERT_EQUAL_INT(ESP_OK, config::Init());
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(config::WebMode::kAuto),
+                          static_cast<int>(config::Get().web.mode));
+}
+
+void test_config_the_web_mode_round_trips(void) {
+    FreshWithDefaults();
+    fake::PutFile("config.json", kGoodJson);
+    TEST_ASSERT_EQUAL_INT(ESP_OK, config::Init());
+
+    config::Get().web.mode = config::WebMode::kOn;
+    TEST_ASSERT_EQUAL_INT(ESP_OK, config::Save());
+    TEST_ASSERT_EQUAL_INT(ESP_OK, config::Reload());
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(config::WebMode::kOn),
+                          static_cast<int>(config::Get().web.mode));
+}
+
 void test_config_reads_the_wifi_mode_and_the_fallback_settings(void) {
     FreshWithDefaults();
     fake::PutFile("config.json", R"({"wifi":{
@@ -1015,6 +1067,10 @@ void RegisterConfigTests(void) {
     RUN_TEST(test_config_ignores_networks_past_the_fixed_capacity);
     RUN_TEST(test_config_skips_a_network_with_no_ssid);
 
+    RUN_TEST(test_config_reads_the_web_mode);
+    RUN_TEST(test_config_no_web_section_is_auto);
+    RUN_TEST(test_config_an_unknown_web_mode_keeps_the_default);
+    RUN_TEST(test_config_the_web_mode_round_trips);
     RUN_TEST(test_config_reads_the_wifi_mode_and_the_fallback_settings);
     RUN_TEST(test_config_an_unknown_wifi_mode_keeps_the_default);
     RUN_TEST(test_config_the_access_point_settings_round_trip);

@@ -30,13 +30,25 @@ CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 CONFIG_FREERTOS_HZ=1000
 
 # **LVGL's own pool, and this is the one allocator §10.14.1 allows.** Every
-# widget comes out of it, it is sized once here, and it does not grow. 64 KB of
-# the C6's 512 KB is the vendor's number for this panel; the five screens of
-# §10.8 are built once at boot and kept, so this is a ceiling rather than a
-# working set. If it is ever not enough, the fix is this line — never a
+# widget comes out of it, it is sized once here, and it does not grow. The seven
+# screens of §10.8 are built once at boot and kept, so this is a ceiling rather
+# than a working set. If it is ever not enough, the fix is this line — never a
 # create-and-delete-per-navigation screen, which is what §10.8.1 forbids for a
 # different reason and this makes expensive as well.
-CONFIG_LV_MEM_SIZE_KILOBYTES=64
+#
+# **48 KB, and it was the vendor's 64 until the web server could not send a
+# packet.** This pool is a static buffer, so every kilobyte of it is a kilobyte
+# the heap does not have — and the heap is where the Wi-Fi driver takes its TX
+# buffers from (`CONFIG_ESP_WIFI_TX_BUFFER_TYPE=1`, dynamic). At 64 KB the device
+# had about 20 KB of heap with the server up, and serving a 2.7 KB page produced
+# `wifi:m f null` — the driver failing to allocate a buffer to transmit, which
+# from a browser looks like a page that hangs and from the device's own counters
+# looks like a file that was served. §10.16 has that diagnosis in full.
+#
+# What it costs is headroom for widgets: the screens report what they use, and a
+# pool that is too small fails loudly at boot in `screens::Init` rather than
+# quietly later — which is the reason it is safe to lower.
+CONFIG_LV_MEM_SIZE_KILOBYTES=48
 
 # 16-bit colour. The byte order the panel wants is **not** set here: it is the
 # `swap_bytes` flag on the LVGL port's display config, so the swap happens in
@@ -79,3 +91,19 @@ CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
 # `esp-tls` regardless. So the wrapper saves 10,780 bytes of flash and buys
 # nothing back in risk that the self-test does not already cover.
 CONFIG_LIBSODIUM_USE_MBEDTLS_SHA=y
+
+# --- What the web server may have in flight (CLAUDE.md §10.16) --------------
+#
+# **The framework's 5,760 is kept, and this comment is here because lowering it
+# was tried and measured and is worse.** The reasoning was sound — three sockets
+# able to queue 5,760 bytes each is 17 KB of in-flight data on a device with about
+# 20 KB free while the server is up — and the answer at 2,880 was a page that took
+# eleven seconds to send 2.4 KB: two segments of window against a peer that ACKs
+# every second segment is a round trip per 2,880 bytes, and with a retransmit or
+# two it collapses. The heap was worse afterwards rather than better, because a
+# slow socket is a socket held open longer.
+#
+# So the concurrency is bounded where it can be bounded without hurting the wire:
+# `web::kMaxSockets` is 2, and the pages are written to be fetched one at a time —
+# §10.16 has both, and the number that mattered in the end was **how many requests
+# a page makes**, not how big its window is.

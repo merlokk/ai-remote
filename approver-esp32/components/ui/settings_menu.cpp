@@ -4,12 +4,20 @@ namespace ui {
 
 bool SettingsMenu::Built(SettingsEntry entry) {
     switch (entry) {
+        // **Every row on this list has a screen behind it now**, the Wi-Fi one
+        // included (§10.8.6). This function and `kNotBuilt` stay anyway, and not
+        // out of sentiment: §10.8.5 leaves a gap for "a few more, we will know
+        // later", and the honest way to add one of those is to put the row on the
+        // list drawn faint before the screen exists. Deleting the mechanism the
+        // day nothing uses it means the next row arrives without it.
+        case SettingsEntry::kWifi:
         case SettingsEntry::kStatus:
         case SettingsEntry::kTouch:
+        case SettingsEntry::kConfigSave:
+        case SettingsEntry::kConfigReload:
         case SettingsEntry::kReboot:
         case SettingsEntry::kPowerOff:
             return true;
-        case SettingsEntry::kWifi:
         case SettingsEntry::kCount:
             break;
     }
@@ -55,6 +63,22 @@ SettingsAction SettingsMenu::Activate(uint32_t now_ms) {
             return Built(SettingsEntry::kTouch) ? SettingsAction::kOpenTouch
                                                 : SettingsAction::kNotBuilt;
 
+        case SettingsEntry::kConfigSave:
+            // **No arming, and it is the row's cost that decides that** rather
+            // than a preference for fewer presses: a save writes what is already
+            // in memory to the file it came from, twice is the same as once, and
+            // the worst a stray finger does is persist a setting the operator was
+            // going to persist anyway.
+            return SettingsAction::kConfigSave;
+
+        case SettingsEntry::kConfigReload:
+            // This one does have a cost — every edit that has not reached the
+            // file — and it is still one press, because the cost is *stated on
+            // the row* before anybody touches it. Arming is reserved for the two
+            // rows that end the session, and a mechanism that means one thing is
+            // worth more than a mechanism that means "careful, in general".
+            return SettingsAction::kConfigReload;
+
         case SettingsEntry::kPowerOff:
             // **Refused before it is armed, not after.** Arming a row that
             // cannot fire would ask the operator to confirm something the
@@ -95,9 +119,29 @@ bool SettingsMenu::Armed(uint32_t now_ms) const {
     return armed_ && (now_ms - armed_at_ms_) < kArmedMs;
 }
 
+void SettingsMenu::SetResult(SettingsEntry entry, bool ok, uint32_t now_ms) {
+    result_row_ = entry;
+    result_ok_ = ok;
+    result_at_ms_ = now_ms;
+}
+
+SettingsResult SettingsMenu::Result(SettingsEntry entry, uint32_t now_ms) const {
+    if (entry != result_row_ || result_row_ == SettingsEntry::kCount) {
+        return SettingsResult::kNone;
+    }
+    // Subtraction, like every other window in this firmware, so the ~49-day wrap
+    // is arithmetic rather than a case.
+    if ((now_ms - result_at_ms_) >= kResultMs) {
+        return SettingsResult::kNone;
+    }
+    return result_ok_ ? SettingsResult::kOk : SettingsResult::kFailed;
+}
+
 void SettingsMenu::Opened() {
     Disarm();
     selected_ = 0;
+    result_row_ = SettingsEntry::kCount;
+    result_at_ms_ = 0;
 }
 
 void SettingsMenu::Disarm() {

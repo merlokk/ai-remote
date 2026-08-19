@@ -16,6 +16,7 @@
 using ui::SettingsAction;
 using ui::SettingsEntry;
 using ui::SettingsMenu;
+using ui::SettingsResult;
 using ui::StatusPage;
 using ui::StatusPager;
 
@@ -24,6 +25,8 @@ namespace {
 constexpr uint8_t kWifi = static_cast<uint8_t>(SettingsEntry::kWifi);
 constexpr uint8_t kStatus = static_cast<uint8_t>(SettingsEntry::kStatus);
 constexpr uint8_t kTouch = static_cast<uint8_t>(SettingsEntry::kTouch);
+constexpr uint8_t kSave = static_cast<uint8_t>(SettingsEntry::kConfigSave);
+constexpr uint8_t kReload = static_cast<uint8_t>(SettingsEntry::kConfigReload);
 constexpr uint8_t kReboot = static_cast<uint8_t>(SettingsEntry::kReboot);
 constexpr uint8_t kPowerOff = static_cast<uint8_t>(SettingsEntry::kPowerOff);
 
@@ -148,7 +151,15 @@ void test_next_does_not_skip_the_rows_with_nothing_behind_them(void) {
     TEST_ASSERT_EQUAL_UINT8(kStatus, menu.Selected());
     menu.Next();
     TEST_ASSERT_EQUAL_UINT8(kTouch, menu.Selected());
-    TEST_ASSERT_FALSE(SettingsMenu::Built(SettingsEntry::kWifi));
+}
+
+void test_every_row_on_the_list_has_a_screen_behind_it(void) {
+    // It was the Wi-Fi row that did not, until §10.8.6 arrived. The assertion is
+    // kept pointing the other way rather than deleted, because a row added later
+    // is added faint — and this is what says the list is not lying today.
+    for (uint8_t i = 0; i < SettingsMenu::kEntryCount; ++i) {
+        TEST_ASSERT_TRUE(SettingsMenu::Built(static_cast<SettingsEntry>(i)));
+    }
 }
 
 void test_a_tap_between_rows_selects_nothing(void) {
@@ -168,13 +179,12 @@ void test_the_status_row_opens_the_status(void) {
                           static_cast<int>(menu.Activate(1000)));
 }
 
-void test_a_row_with_nothing_behind_it_says_so_rather_than_navigating(void) {
-    // §10.9's "unknown is the honest state", applied to a menu: the row is on the
-    // list because the device is going to have it, and pressing it must not look
-    // like a screen that failed to open.
+void test_the_wifi_row_opens_the_wifi_screen(void) {
+    // It answered `kNotBuilt` until §10.8.6 arrived, and `settings_menu.cpp` says
+    // why that answer still exists for the next row that has nothing behind it.
     SettingsMenu menu;
     menu.Select(kWifi);
-    TEST_ASSERT_EQUAL_INT(static_cast<int>(SettingsAction::kNotBuilt),
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(SettingsAction::kOpenWifi),
                           static_cast<int>(menu.Activate(1000)));
 }
 
@@ -290,6 +300,146 @@ void test_the_arming_window_survives_the_millisecond_wrap(void) {
     TEST_ASSERT_FALSE(menu.Armed(0xFFFFFF00u + SettingsMenu::kArmedMs));
 }
 
+// --- The two config rows -------------------------------------------------
+//
+// One press each, and no arming — which is the decision worth a test rather
+// than the code behind it. The arming of the two rows below them means exactly
+// one thing: *this takes the device away from whoever is looking at it*. Neither
+// of these does — a save is idempotent, and a reload is one press away from
+// being redone — so what a reload costs is said on the row instead, permanently,
+// rather than asked about after the fact.
+
+void test_the_config_rows_sit_between_the_screens_and_the_destructive_ones(void) {
+    // §10.8.5's order: the further down the list, the harder to undo. These two
+    // touch a file; the two under them end the session.
+    TEST_ASSERT_EQUAL_UINT8(kTouch + 1, kSave);
+    TEST_ASSERT_EQUAL_UINT8(kSave + 1, kReload);
+    TEST_ASSERT_EQUAL_UINT8(kReload + 1, kReboot);
+    TEST_ASSERT_FALSE(SettingsMenu::Destructive(SettingsEntry::kConfigSave));
+    TEST_ASSERT_FALSE(SettingsMenu::Destructive(SettingsEntry::kConfigReload));
+}
+
+void test_a_save_is_one_press(void) {
+    SettingsMenu menu;
+    menu.Select(kSave);
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(SettingsAction::kConfigSave),
+                          static_cast<int>(menu.Activate(1000)));
+    TEST_ASSERT_FALSE(menu.Armed(1000));
+}
+
+void test_a_reload_is_one_press(void) {
+    SettingsMenu menu;
+    menu.Select(kReload);
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(SettingsAction::kConfigReload),
+                          static_cast<int>(menu.Activate(1000)));
+    TEST_ASSERT_FALSE(menu.Armed(1000));
+}
+
+// --- The list is longer than the panel, and LVGL is what scrolls it -------
+//
+// The window that used to be here — five slots, a selection that dragged them
+// along, and a tap that had to be mapped from a slot to a row — is gone, at the
+// repository owner's request: it scrolled from the buttons only, and a list on a
+// touchscreen is a list you expect to drag. `settings_screen.cpp` makes the rows a
+// scroll container and LVGL does the rest, so what is left to test here is the one
+// thing this layer still owns, which is the selection.
+//
+// The two properties that mattered did not disappear, they moved: that the
+// selected row is *on the glass* is now `lv_obj_scroll_to_view`'s job, and that a
+// tap lands on the row under the finger is now true by construction, because every
+// row is its own widget carrying its own index.
+
+void test_the_selection_is_the_only_thing_this_layer_scrolls(void) {
+    // It still walks all seven and wraps — which is what `BOOT` does, and the
+    // screen is what brings the selection into view afterwards.
+    SettingsMenu menu;
+    for (uint8_t i = 1; i < SettingsMenu::kEntryCount; ++i) {
+        menu.Next();
+        TEST_ASSERT_EQUAL_UINT8(i, menu.Selected());
+    }
+    menu.Next();
+    TEST_ASSERT_EQUAL_UINT8(0, menu.Selected());
+}
+
+void test_reopening_the_list_goes_back_to_the_first_row(void) {
+    SettingsMenu menu;
+    for (uint8_t i = 0; i < SettingsMenu::kEntryCount - 1; ++i) {
+        menu.Next();
+    }
+    TEST_ASSERT_NOT_EQUAL_UINT8(0, menu.Selected());
+    menu.Opened();
+    TEST_ASSERT_EQUAL_UINT8(0, menu.Selected());
+}
+
+// --- What happened, on the row it happened on ----------------------------
+//
+// A save that reached the filesystem and one that did not are the same press
+// from the glass otherwise: the row is where the operator is looking, and
+// §10.15's console readout is not.
+
+void test_a_save_says_so_for_a_while(void) {
+    SettingsMenu menu;
+    menu.SetResult(SettingsEntry::kConfigSave, true, 1000);
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(SettingsResult::kOk),
+                          static_cast<int>(menu.Result(SettingsEntry::kConfigSave, 1000)));
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(SettingsResult::kOk),
+                          static_cast<int>(menu.Result(SettingsEntry::kConfigSave,
+                                                       1000 + SettingsMenu::kResultMs - 1)));
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(SettingsResult::kNone),
+        static_cast<int>(menu.Result(SettingsEntry::kConfigSave,
+                                     1000 + SettingsMenu::kResultMs)));
+}
+
+void test_a_failure_is_its_own_word(void) {
+    SettingsMenu menu;
+    menu.SetResult(SettingsEntry::kConfigSave, false, 1000);
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(SettingsResult::kFailed),
+                          static_cast<int>(menu.Result(SettingsEntry::kConfigSave, 1200)));
+}
+
+void test_the_result_belongs_to_one_row(void) {
+    SettingsMenu menu;
+    menu.SetResult(SettingsEntry::kConfigReload, true, 1000);
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(SettingsResult::kOk),
+                          static_cast<int>(menu.Result(SettingsEntry::kConfigReload, 1000)));
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(SettingsResult::kNone),
+                          static_cast<int>(menu.Result(SettingsEntry::kConfigSave, 1000)));
+}
+
+void test_a_second_outcome_replaces_the_first(void) {
+    SettingsMenu menu;
+    menu.SetResult(SettingsEntry::kConfigSave, true, 1000);
+    menu.SetResult(SettingsEntry::kConfigReload, false, 1500);
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(SettingsResult::kNone),
+                          static_cast<int>(menu.Result(SettingsEntry::kConfigSave, 1500)));
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(SettingsResult::kFailed),
+                          static_cast<int>(menu.Result(SettingsEntry::kConfigReload, 1500)));
+}
+
+void test_the_saved_note_survives_the_millisecond_wrap(void) {
+    SettingsMenu menu;
+    menu.SetResult(SettingsEntry::kConfigSave, true, 0xFFFFFF00u);
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(SettingsResult::kOk),
+                          static_cast<int>(menu.Result(SettingsEntry::kConfigSave, 0xFFFFFFF0u)));
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(SettingsResult::kOk),
+                          static_cast<int>(menu.Result(SettingsEntry::kConfigSave, 400)));
+    TEST_ASSERT_EQUAL_INT(
+        static_cast<int>(SettingsResult::kNone),
+        static_cast<int>(menu.Result(SettingsEntry::kConfigSave,
+                                     0xFFFFFF00u + SettingsMenu::kResultMs)));
+}
+
+void test_leaving_the_screen_drops_the_result(void) {
+    // It belongs to the visit it happened in. Coming back to `saved` on a row
+    // nobody has pressed this time is a readout about a moment that has gone.
+    SettingsMenu menu;
+    menu.SetResult(SettingsEntry::kConfigSave, true, 1000);
+    menu.Opened();
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(SettingsResult::kNone),
+                          static_cast<int>(menu.Result(SettingsEntry::kConfigSave, 1000)));
+}
+
 // --- The pager -----------------------------------------------------------
 
 void test_the_status_opens_on_the_first_page(void) {
@@ -322,7 +472,8 @@ void RegisterSettingsMenuTests(void) {
     RUN_TEST(test_a_tap_between_rows_selects_nothing);
 
     RUN_TEST(test_the_status_row_opens_the_status);
-    RUN_TEST(test_a_row_with_nothing_behind_it_says_so_rather_than_navigating);
+    RUN_TEST(test_every_row_on_the_list_has_a_screen_behind_it);
+    RUN_TEST(test_the_wifi_row_opens_the_wifi_screen);
     RUN_TEST(test_the_touch_row_opens_the_touch_test);
 
     RUN_TEST(test_one_press_on_reboot_does_not_reboot);
@@ -339,6 +490,20 @@ void RegisterSettingsMenuTests(void) {
     RUN_TEST(test_power_off_takes_two_presses_like_reboot);
     RUN_TEST(test_an_armed_power_off_expires_like_an_armed_reboot);
     RUN_TEST(test_arming_one_destructive_row_does_not_arm_the_other);
+
+    RUN_TEST(test_the_config_rows_sit_between_the_screens_and_the_destructive_ones);
+    RUN_TEST(test_a_save_is_one_press);
+    RUN_TEST(test_a_reload_is_one_press);
+
+    RUN_TEST(test_the_selection_is_the_only_thing_this_layer_scrolls);
+    RUN_TEST(test_reopening_the_list_goes_back_to_the_first_row);
+
+    RUN_TEST(test_a_save_says_so_for_a_while);
+    RUN_TEST(test_a_failure_is_its_own_word);
+    RUN_TEST(test_the_result_belongs_to_one_row);
+    RUN_TEST(test_a_second_outcome_replaces_the_first);
+    RUN_TEST(test_the_saved_note_survives_the_millisecond_wrap);
+    RUN_TEST(test_leaving_the_screen_drops_the_result);
 
     RUN_TEST(test_the_status_opens_on_the_first_page);
     RUN_TEST(test_the_pages_wrap);

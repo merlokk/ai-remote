@@ -22,4 +22,15 @@ namespace console {
 // so `cat` has something to read.
 esp_err_t Init();
 
+// **`devstatus`, printed to whatever `stdout` currently is** (§10.16). It exists
+// so that the web server can serve the same dump the console prints without a
+// second copy of a single readout — §10.7's four-places rule says a second copy
+// of the `power` section would drift from the first the day somebody adds a field
+// to one of them, and a dump served over HTTP is exactly that temptation.
+//
+// It writes with `printf`, like every other readout here. The caller is what
+// decides where that goes; `web_server.cpp` swaps `stdout` for the length of the
+// call and says what that costs.
+void PrintDevStatus();
+
 }  // namespace console

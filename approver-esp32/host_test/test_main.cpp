@@ -22,6 +22,9 @@
 
 void RegisterNavigatorTests(void);
 void RegisterSettingsMenuTests(void);
+void RegisterWifiViewTests(void);
+void RegisterWebPathTests(void);
+void RegisterWebSettingsTests(void);
 void RegisterTouchCalTests(void);
 void RegisterIdleTests(void);
 void RegisterClockFaceTests(void);
@@ -76,6 +79,9 @@ int main(int argc, char **argv) {
 
     if (Wanted("navigator")) RegisterNavigatorTests();
     if (Wanted("settings")) RegisterSettingsMenuTests();
+    if (Wanted("wifi") || Wanted("screen")) RegisterWifiViewTests();
+    if (Wanted("web") || Wanted("http")) RegisterWebPathTests();
+    if (Wanted("web") || Wanted("http") || Wanted("settings")) RegisterWebSettingsTests();
     if (Wanted("touch")) RegisterTouchCalTests();
     if (Wanted("clock") || Wanted("face")) RegisterClockFaceTests();
     if (Wanted("request") || Wanted("card")) RegisterRequestCardTests();

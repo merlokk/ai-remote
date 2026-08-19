@@ -212,6 +212,35 @@ struct Audio {
     uint8_t volume_percent;  // what the codec is set to at boot
 };
 
+// What the operator asked the configuration web server to be (§10.16). Not what
+// is running — the server comes up only when there is a TCP/IP stack for it to
+// live in, and `web::ShouldRun` is where that is decided.
+//
+// **`kAuto` is the default, and it is the cheap one**: the server exists for a
+// device that cannot reach a network and has raised its own access point, which
+// is exactly when somebody needs a way in and has no other. On a working client
+// link `auto` keeps it down and the 7 KB it costs stays free.
+enum class WebMode : uint8_t {
+    kOff = 0,
+    kOn,    // whenever there is a network
+    kAuto,  // only while this device is an access point
+};
+
+struct Web {
+    WebMode mode;
+
+    // **May the page write anything.** The settings pages of §10.16 put the Wi-Fi
+    // records and the bus address behind a form, and anybody who can reach the
+    // server can submit it — §10.3 already puts the trust boundary at the router,
+    // and this is the one switch that lets a device on a network its owner does not
+    // trust serve the read-only half and refuse the rest.
+    //
+    // **True by default**, because a configuration site that cannot configure
+    // anything is not what it was asked for; the honest cost is written down in
+    // §10.16, and TLS with credentials stays the real fix.
+    bool write;
+};
+
 // The touch correction of §10.8.5, as four plain numbers.
 //
 // **Plain numbers rather than `ui::TouchCalibration`**, and that is the layering
@@ -233,6 +262,7 @@ struct Touch {
 
 struct Data {
     Wifi wifi;
+    Web web;
     InternetCheck internet;
     Nats nats;
     Time time;
@@ -260,6 +290,30 @@ esp_err_t Save();
 // thing holding `KEY` at boot does (§10.15), and what the settings screen's
 // "Restore config" entry will call. `registration.json` is not touched.
 esp_err_t Restore();
+
+// --- Who has to be told when the fields moved under them ------------------
+//
+// A `Reload` or a `Restore` replaces every field at once, and four subsystems are
+// holding copies of some of them: the codec has a volume, the panel a brightness,
+// the Wi-Fi manager a network list, the clock's sync task an interval and a
+// server, the bus a URL, the web server a mode. Telling them is not this
+// component's job — it has never heard of a codec (§10.14.2) — but *remembering*
+// to tell them cannot be the caller's, because there are three callers now: the
+// console's `config reload`, the settings screen's row (§10.8.5) and the
+// restore.
+//
+// **So it is a hook, for the fifth time in this firmware** (after
+// `screens::OnDecision`, `wifimgr::OnTick`, `web::SetDiagnostics` and
+// `nats`'s): `main` registers what has to happen, and `Reload`/`Restore` call it
+// themselves on success — which is what makes a reload from a finger and a reload
+// from the console the same reload rather than two lists somebody has to keep in
+// step.
+//
+// **`Init` deliberately does not call it.** It runs before any of those
+// subsystems exists, and `main` applies each of them explicitly in an order that
+// is written down there.
+using ChangeHandler = void (*)();
+void OnChanged(ChangeHandler handler);
 
 // --- `KEY` at boot (§10.15) ----------------------------------------------
 //

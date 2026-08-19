@@ -1,6 +1,6 @@
 idf_component_register(SRCS "main.cpp"
                     INCLUDE_DIRS "."
-                    REQUIRES boards storage config crypto registration responder watcher timezone timesync cli display ui screens wifimgr nats app_update esp_app_format esp_timer)
+                    REQUIRES boards storage config crypto registration responder watcher timezone timesync cli display ui screens wifimgr nats web app_update esp_app_format esp_timer)
 
 # Build a SPIFFS image out of `spiffs_image/` and give it the `storage`
 # partition of partitions.csv. FLASH_IN_PROJECT means a plain `idf.py flash`

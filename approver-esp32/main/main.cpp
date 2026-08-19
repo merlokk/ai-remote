@@ -41,6 +41,7 @@
 #include "timesync.h"
 #include "timezone.h"
 #include "wifi_manager.h"
+#include "web_server.h"
 
 namespace {
 
@@ -64,6 +65,103 @@ constexpr const char *kSplashImage = "splash.bin";
 // it from the start also stops a slow filesystem from being added to the wait:
 // the 460 KB is on the glass while it streams.
 constexpr int64_t kSplashMs = 2000;
+
+// --- Everything holding a copy of a field in `config.json` ----------------
+//
+// Called once at boot and again on every `config reload` / `config restore`,
+// through `config::OnChanged` — which is the hook that exists so that the three
+// callers of a reload do not each keep their own list of who to tell.
+void ApplySettingsToHardware() {
+    if (board::Codec().Present()) {
+        board::Codec().SetVolume(config::Get().audio.volume_percent);
+    }
+
+    // **And the brightness, which was stored and never applied.** §10.15 calls
+    // the volume "the first setting that round-trips"; this is the second, and
+    // until now it only looked like one — `config set brightness` wrote the
+    // field, `config save` put it in the file, and the panel came up at
+    // whatever `Panel::Init` left it at regardless. A setting that survives a
+    // reboot and changes nothing is worse than one that is missing, because
+    // the operator has no reason to doubt it.
+    //
+    // Found by the reading form of `display brightness`, which is the whole
+    // argument for that form existing: the live value and the stored one are
+    // two numbers, and nothing else on this device prints them side by side.
+    // Before the splash, so the first thing on the glass is already at the
+    // brightness that was asked for rather than flashing full-scale first.
+    //
+    // **And only while the screens are not running**, which at boot they are not:
+    // once that task exists the panel is touched under the LVGL lock and nothing
+    // else may write to it (§10.8.1), so `SettingsChanged` hands this half to
+    // `screens::ApplyDisplaySettings` instead.
+    if (board::Display().Ready() && !screens::Ready()) {
+        board::Display().SetBrightness(config::Get().display.brightness);
+    }
+
+    // **And the touch correction** (§10.8.5), which is the third setting that
+    // has hardware to reach and the first one that can make the device
+    // unusable if it is wrong. Applied here for the same reason as the two
+    // above: `config` knows about a file and `board` knows about a panel, and
+    // this is where they meet.
+    {
+        ui::TouchCalibration calibration;
+        calibration.scale_x = config::Get().touch.scale_x;
+        calibration.scale_y = config::Get().touch.scale_y;
+        calibration.offset_x = config::Get().touch.offset_x;
+        calibration.offset_y = config::Get().touch.offset_y;
+        board::Touch().SetCalibration(calibration);
+        if (!calibration.Identity()) {
+            ESP_LOGI(TAG, "touch correction from %s: x %d/1000%+d, y %d/1000%+d", config::kPath,
+                     static_cast<int>(calibration.scale_x),
+                     static_cast<int>(calibration.offset_x),
+                     static_cast<int>(calibration.scale_y),
+                     static_cast<int>(calibration.offset_y));
+        }
+    }
+}
+
+// --- What the configuration page says about the approval loop -------------
+//
+// `components/web` cannot ask `components/responder` for this: the responder
+// requires `screens`, `screens` requires `web` for the row that says whether the
+// server is up, and a cycle in `REQUIRES` is a build that does not happen. So
+// `main` is the one place that can see both, which is where it belongs anyway
+// (§10.14.2) — the same shape as `web::SetDiagnostics` and `screens::OnDecision`.
+void FillApprovals(web::Approvals *out) {
+    const responder::Status now = responder::Get();
+    out->ready = now.ready;
+    out->subscribed = now.subscribed;
+    out->blocked_by = responder::BlockerText(now.blocked_by);
+    out->received = now.received;
+    out->allowed = now.allowed;
+    out->denied = now.denied;
+    out->replied = now.replied;
+}
+
+// And the tasks, which hold rather more than a number each: a network list, an
+// interval and a server, a URL, a mode. Each of these is the narrowest call that
+// re-reads what changed — §10.9's lesson from `wifi check`, which used to
+// reconnect a working link to change a ping list.
+void SettingsChanged() {
+    ApplySettingsToHardware();
+
+    // **The panel is the one that has to go through the screens**, and it is not
+    // tidiness: `screens.cpp` touches the glass only under the LVGL lock (§10.8.1),
+    // and the direct call above is safe at boot precisely because LVGL owns
+    // nothing yet. `ApplyDisplaySettings` re-reads the brightness *and* the two
+    // idle thresholds and marks them dirty, so the next pass of that task applies
+    // them where it is allowed to — which is also the half a reload never used to
+    // do at all: `config set brightness` went through here and `config reload`
+    // did not.
+    if (screens::Ready()) {
+        screens::ApplyDisplaySettings();
+    }
+
+    wifimgr::Apply();
+    timesync::Apply();
+    nats::Apply();
+    web::Apply();
+}
 
 }  // namespace
 
@@ -146,6 +244,13 @@ extern "C" void app_main(void) {
     // configured with Wi-Fi off should not pay them.
     wifimgr::Init();
 
+    // **The configuration web server (§10.16), which starts nothing here.** It
+    // reads `web.mode` and registers itself on the manager's tick; whether it
+    // actually comes up is `web::ShouldRun`'s answer, and on a device whose radio
+    // is off the answer is no — `httpd_start` without lwIP is a panic, not an
+    // error, and that is the whole reason this is a wish rather than a call.
+    web::Init();
+
     // And the clock's network half (§10.8.2), which is why it is after the
     // radio: it has nothing to do until there is an internet, and `wifimgr` is
     // what tells it there is one. It starts a task and asks nothing — a device
@@ -168,50 +273,16 @@ extern "C" void app_main(void) {
     // approve a command.
     nats::Init();
 
-    // Settings applied to the hardware they belong to. `main` is where the two
-    // meet: `config` knows nothing about a codec, and `board` knows nothing
-    // about a file (§10.14.2).
-    if (board::Codec().Present()) {
-        board::Codec().SetVolume(config::Get().audio.volume_percent);
-    }
-
-    // **And the brightness, which was stored and never applied.** §10.15 calls
-    // the volume "the first setting that round-trips"; this is the second, and
-    // until now it only looked like one — `config set brightness` wrote the
-    // field, `config save` put it in the file, and the panel came up at
-    // whatever `Panel::Init` left it at regardless. A setting that survives a
-    // reboot and changes nothing is worse than one that is missing, because
-    // the operator has no reason to doubt it.
+    // Settings applied to the hardware they belong to, and to the tasks holding
+    // copies of them. `main` is where the two meet: `config` knows nothing about a
+    // codec and `board` knows nothing about a file (§10.14.2).
     //
-    // Found by the reading form of `display brightness`, which is the whole
-    // argument for that form existing: the live value and the stored one are
-    // two numbers, and nothing else on this device prints them side by side.
-    // Before the splash, so the first thing on the glass is already at the
-    // brightness that was asked for rather than flashing full-scale first.
-    if (board::Display().Ready()) {
-        board::Display().SetBrightness(config::Get().display.brightness);
-    }
-
-    // **And the touch correction** (§10.8.5), which is the third setting that
-    // has hardware to reach and the first one that can make the device
-    // unusable if it is wrong. Applied here for the same reason as the two
-    // above: `config` knows about a file and `board` knows about a panel, and
-    // this is where they meet.
-    {
-        ui::TouchCalibration calibration;
-        calibration.scale_x = config::Get().touch.scale_x;
-        calibration.scale_y = config::Get().touch.scale_y;
-        calibration.offset_x = config::Get().touch.offset_x;
-        calibration.offset_y = config::Get().touch.offset_y;
-        board::Touch().SetCalibration(calibration);
-        if (!calibration.Identity()) {
-            ESP_LOGI(TAG, "touch correction from %s: x %d/1000%+d, y %d/1000%+d", config::kPath,
-                     static_cast<int>(calibration.scale_x),
-                     static_cast<int>(calibration.offset_x),
-                     static_cast<int>(calibration.scale_y),
-                     static_cast<int>(calibration.offset_y));
-        }
-    }
+    // **The same function is what a reload calls**, through the hook registered
+    // below — so a `config reload` typed on the console, one pressed on the
+    // settings screen (§10.8.5) and a restore all re-apply one list rather than
+    // three that drift.
+    ApplySettingsToHardware();
+    config::OnChanged(SettingsChanged);
 
     // **The splash and the boot sound are one event, and the order below is
     // what makes them one.** The picture goes on the glass first, the chime
@@ -330,4 +401,8 @@ extern "C" void app_main(void) {
     if (responder_err != ESP_OK) {
         ESP_LOGE(TAG, "responder not started: %s", esp_err_to_name(responder_err));
     }
+
+    // And where the configuration page gets its half of that from — after the
+    // responder exists, though it would answer zeros rather than crash either way.
+    web::SetApprovals(FillApprovals);
 }

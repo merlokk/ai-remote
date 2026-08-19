@@ -1,4 +1,8 @@
 {
+    "web": {
+        "mode": "auto",
+        "write": true
+    },
     "wifi": {
         "active": false,
         "mode": "client",

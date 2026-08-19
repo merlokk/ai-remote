@@ -1,5 +1,6 @@
 #include "settings_screen.h"
 
+#include <cstdio>
 #include <cstring>
 
 namespace screens {
@@ -54,11 +55,46 @@ const char *RowName(ui::SettingsEntry entry) {
             return "status";
         case ui::SettingsEntry::kTouch:
             return "touch test";
+        case ui::SettingsEntry::kConfigSave:
+            return "config save";
+        case ui::SettingsEntry::kConfigReload:
+            return "config reload";
         case ui::SettingsEntry::kReboot:
             return "reboot";
         case ui::SettingsEntry::kPowerOff:
             return "power off";
         case ui::SettingsEntry::kCount:
+            break;
+    }
+    return "";
+}
+
+// What a row says when nothing has happened on it. **Only one row has anything
+// to say**, and it is the row whose cost is not obvious: a reload throws away
+// every edit that has not reached the file, and `settings_menu.cpp` gives that
+// warning as the reason the row needs no arming. Written before it is pressed,
+// which is the same call §10.8.5 makes about `usb in`.
+const char *RowHint(ui::SettingsEntry entry) {
+    // **Two words, and the board is what chose the number.** `drops unsaved` was
+    // thirteen characters, which at Montserrat 28 is about 190 px against a note
+    // column that starts 180 px into a 432 px plate — so on the panel it shared
+    // pixels with `config reload`, which is 200 px of label. §10.8.5 already
+    // records this exact finding about the status page's label column and §10.8.6
+    // about the scan row; this is the third time, and the answer is the same one:
+    // measure it on the glass, then shorten the words rather than widening the box.
+    return entry == ui::SettingsEntry::kConfigReload ? "edits lost" : "";
+}
+
+// And what it says afterwards. A save that reached the filesystem and one that
+// did not are the same press from the glass otherwise — the console's `config`
+// readout is not on the panel.
+const char *ResultText(ui::SettingsEntry entry, ui::SettingsResult result) {
+    switch (result) {
+        case ui::SettingsResult::kOk:
+            return entry == ui::SettingsEntry::kConfigSave ? "saved" : "reloaded";
+        case ui::SettingsResult::kFailed:
+            return "failed";
+        case ui::SettingsResult::kNone:
             break;
     }
     return "";
@@ -97,11 +133,46 @@ esp_err_t SettingsScreen::Create(lv_obj_t *parent) {
         return ESP_ERR_NO_MEM;
     }
 
-    for (uint8_t i = 0; i < ui::SettingsMenu::kEntryCount; ++i) {
-        const auto entry = static_cast<ui::SettingsEntry>(i);
-        MenuRow &row = rows_[i];
+    // **Where in the list the eye is**, because five rows of seven is a screen
+    // that would otherwise not say the other two exist. Right-aligned against the
+    // same margin the rows use, for the reason §10.8.3 gives about its countdowns:
+    // the field's width changes with its value.
+    std::snprintf(position_text_, sizeof position_text_, "1 / %u",
+                  static_cast<unsigned>(ui::SettingsMenu::kEntryCount));
+    position_ = Text(title_, Dim(), 0, kSettingsTitleTop, position_text_);
+    if (position_ == nullptr) {
+        return ESP_ERR_NO_MEM;
+    }
+    lv_obj_set_width(position_, kSettingsNoteWidth);
+    lv_obj_set_style_text_align(position_, LV_TEXT_ALIGN_RIGHT, LV_PART_MAIN);
+    lv_obj_set_pos(position_, 480 - kSettingsPad - kSettingsNoteWidth, kSettingsTitleTop);
 
-        row.plate = Bare(root_, kSettingsPad, kSettingsFirstRowTop + i * kSettingsRowStride,
+    // **The scroll container, and the four lines that make a list draggable.**
+    // Vertical only, because there is nothing beside a row to reach; a scrollbar
+    // on `AUTO`, because five rows of seven is otherwise a screen that does not
+    // admit the other two exist; and the elastic/momentum flags LVGL puts on by
+    // default are kept, since they are what makes a drag feel like a list rather
+    // than like a slider.
+    //
+    // **What it costs is the swipe that used to leave this screen.** LVGL
+    // suppresses a gesture while something is scrolling (`indev_gesture` returns
+    // early on `scroll_obj`), so a vertical drag here is scrolling and nothing
+    // else — the way out with a finger is the title above, or a swipe *sideways*,
+    // which no scroll consumes. `PWR` is unchanged.
+    list_ = Bare(root_, 0, kSettingsListTop, 480, kSettingsListHeight);
+    if (list_ == nullptr) {
+        return ESP_ERR_NO_MEM;
+    }
+    lv_obj_add_flag(list_, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(list_, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(list_, LV_SCROLLBAR_MODE_AUTO);
+    lv_obj_set_style_pad_bottom(list_, kSettingsListPadBottom, LV_PART_MAIN);
+
+    for (uint8_t i = 0; i < ui::SettingsMenu::kEntryCount; ++i) {
+        MenuRow &row = rows_[i];
+        const auto entry = static_cast<ui::SettingsEntry>(i);
+
+        row.plate = Bare(list_, kSettingsPad, i * kSettingsRowStride,
                          480 - 2 * kSettingsPad, kSettingsRowHeight);
         if (row.plate == nullptr) {
             return ESP_ERR_NO_MEM;
@@ -117,6 +188,8 @@ esp_err_t SettingsScreen::Create(lv_obj_t *parent) {
         lv_obj_add_event_cb(row.plate, RowClicked, LV_EVENT_CLICKED,
                             reinterpret_cast<void *>(static_cast<uintptr_t>(i)));
 
+        // A row's name never changes again, so it is written here and the label
+        // holds a literal — which is what a row per entry buys back.
         row.label = Text(row.plate, Bright(), kSettingsRowTextLeft, kSettingsRowTextTop,
                          RowName(entry));
         row.note = Text(row.plate, Dim(), 0, kSettingsRowTextTop, "");
@@ -128,14 +201,6 @@ esp_err_t SettingsScreen::Create(lv_obj_t *parent) {
         lv_obj_set_pos(row.note, 480 - 2 * kSettingsPad - kSettingsRowTextLeft -
                                      kSettingsNoteWidth,
                        kSettingsRowTextTop);
-
-        // **A row with nothing behind it says so before it is pressed.** §10.9's
-        // rule that `unknown` is the honest state: a list that looked complete
-        // and then did nothing would be a list nobody presses twice.
-        if (!ui::SettingsMenu::Built(entry)) {
-            lv_obj_set_style_text_color(row.label, Faint(), LV_PART_MAIN);
-            lv_label_set_text_static(row.note, "soon");
-        }
     }
 
     return ESP_OK;
@@ -148,6 +213,15 @@ void SettingsScreen::SetVisible(bool visible) {
     visible_ = visible;
     if (visible) {
         lv_obj_remove_flag(root_, LV_OBJ_FLAG_HIDDEN);
+        // **Coming back into settings starts at the top**, which is
+        // `SettingsMenu::Opened`'s rule for the selection and has to be the scroll
+        // as well: the menu puts the highlight on row one, and a list still
+        // scrolled where it was left would show it nowhere. No animation — this is
+        // the screen appearing rather than moving.
+        if (list_ != nullptr) {
+            lv_obj_scroll_to_y(list_, 0, LV_ANIM_OFF);
+            scrolled_rows_ = 0;
+        }
     } else {
         lv_obj_add_flag(root_, LV_OBJ_FLAG_HIDDEN);
         // A screen that is not up must not be holding a tap from the last time
@@ -162,48 +236,110 @@ void SettingsScreen::Apply(const ui::SettingsMenu &menu, uint32_t now_ms) {
         return;
     }
 
+    // **Sampled before the early return below, because a finger can scroll this
+    // list without changing one thing the menu knows about.** It is read here
+    // rather than in `screens::Menu()` for the ordinary reason: this runs under the
+    // display lock and that does not.
+    if (list_ != nullptr) {
+        const int32_t scrolled = lv_obj_get_scroll_y(list_);
+        const int32_t rows = scrolled > 0 ? scrolled / kSettingsRowStride : 0;
+        scrolled_rows_ = static_cast<uint8_t>(
+            rows > ui::SettingsMenu::kEntryCount ? ui::SettingsMenu::kEntryCount : rows);
+    }
+
     const uint8_t selected = menu.Selected();
     const bool armed = menu.Armed(now_ms);
     const bool can_power_off = menu.CanPowerOff();
+    // Which row has something to say about what just happened to it, asked once
+    // for the whole screen: `Result` takes the clock, so the answer changes on
+    // its own when the note's window closes and a repaint is what takes it off.
+    ui::SettingsResult result = ui::SettingsResult::kNone;
+    uint8_t result_row = kNoRow;
+    for (uint8_t i = 0; i < ui::SettingsMenu::kEntryCount; ++i) {
+        const ui::SettingsResult on_row =
+            menu.Result(static_cast<ui::SettingsEntry>(i), now_ms);
+        if (on_row != ui::SettingsResult::kNone) {
+            result = on_row;
+            result_row = i;
+            break;  // there is only ever one (`settings_menu.h` says why)
+        }
+    }
+
     if (selected == shown_selected_ && armed == shown_armed_ &&
-        can_power_off == shown_can_power_off_) {
+        can_power_off == shown_can_power_off_ && result == shown_result_ &&
+        result_row == shown_result_row_) {
         return;
     }
+    const bool selection_moved = selected != shown_selected_;
     shown_selected_ = selected;
     shown_armed_ = armed;
     shown_can_power_off_ = can_power_off;
+    shown_result_ = result;
+    shown_result_row_ = result_row;
+
+    std::snprintf(position_text_, sizeof position_text_, "%u / %u",
+                  static_cast<unsigned>(selected + 1),
+                  static_cast<unsigned>(ui::SettingsMenu::kEntryCount));
+    lv_label_set_text_static(position_, position_text_);
 
     for (uint8_t i = 0; i < ui::SettingsMenu::kEntryCount; ++i) {
         MenuRow &row = rows_[i];
         const auto entry = static_cast<ui::SettingsEntry>(i);
-        lv_obj_set_style_bg_color(row.plate, i == selected ? PlateSelected() : Plate(),
+        const bool is_selected = i == selected;
+        lv_obj_set_style_bg_color(row.plate, is_selected ? PlateSelected() : Plate(),
                                   LV_PART_MAIN);
 
-        if (!ui::SettingsMenu::Destructive(entry)) {
-            continue;
-        }
-        // **The two rows whose words change**, and they change colour with them:
-        // an amber row that asks a question is not the same object as a grey row
+        // **The rows whose words change**, and they change colour with them: an
+        // amber row that asks a question is not the same object as a grey row
         // that opens a screen.
         //
-        // And the power-off says why it cannot happen *before* anybody presses
-        // it. §10.1: VBUS is a power-on source, so a shutdown with the cable in
-        // is one the hardware undoes — the honest thing is to put the cable on
-        // the row rather than to answer a press with a refusal.
-        const bool asking = armed && i == selected;
+        // The power-off says why it cannot happen *before* anybody presses it.
+        // §10.1: VBUS is a power-on source, so a shutdown with the cable in is
+        // one the hardware undoes — the honest thing is to put the cable on the
+        // row rather than to answer a press with a refusal.
+        const bool asking = armed && is_selected && ui::SettingsMenu::Destructive(entry);
         const bool blocked = entry == ui::SettingsEntry::kPowerOff && !can_power_off;
+        const bool reporting = i == result_row;
 
-        const char *note = "";
+        const char *note = RowHint(entry);
         if (asking) {
             note = "press again";
         } else if (blocked) {
             note = "usb in";
+        } else if (reporting) {
+            note = ResultText(entry, result);
+        } else if (!ui::SettingsMenu::Built(entry)) {
+            // **A row with nothing behind it says so before it is pressed.**
+            // §10.9's rule that `unknown` is the honest state: a list that looked
+            // complete and then did nothing would be a list nobody presses twice.
+            note = "soon";
         }
         lv_label_set_text_static(row.note, note);
-        lv_obj_set_style_text_color(row.label,
-                                    asking ? Attention() : (blocked ? Faint() : Bright()),
-                                    LV_PART_MAIN);
-        lv_obj_set_style_text_color(row.note, asking ? Attention() : Dim(), LV_PART_MAIN);
+
+        lv_color_t label_colour = Bright();
+        if (asking) {
+            label_colour = Attention();
+        } else if (blocked || !ui::SettingsMenu::Built(entry)) {
+            label_colour = Faint();
+        }
+        lv_obj_set_style_text_color(row.label, label_colour, LV_PART_MAIN);
+
+        lv_color_t note_colour = Dim();
+        if (asking || (reporting && result == ui::SettingsResult::kFailed)) {
+            note_colour = Attention();
+        } else if (reporting) {
+            note_colour = Bright();
+        }
+        lv_obj_set_style_text_color(row.note, note_colour, LV_PART_MAIN);
+    }
+
+    // **The button route and the finger route move the same list**, which is the
+    // whole of what replaced the window: `BOOT` steps the selection and this is
+    // what brings it onto the glass. Only when it *moved* — scrolling the list to
+    // the selection on every repaint would fight the finger that just dragged it
+    // somewhere else.
+    if (selection_moved && list_ != nullptr) {
+        lv_obj_scroll_to_view(rows_[selected].plate, LV_ANIM_ON);
     }
 }
 

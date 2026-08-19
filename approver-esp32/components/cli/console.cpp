@@ -21,6 +21,7 @@
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_ota_ops.h"
+#include "esp_heap_caps.h"
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -43,6 +44,7 @@
 #include "timezone.h"
 #include "wifi_manager.h"
 #include "wifi_radio.h"
+#include "web_server.h"
 
 namespace console {
 
@@ -1061,21 +1063,14 @@ int CmdConfig(int argc, char **argv) {
         if (strcmp(what, "save") == 0) {
             return 0;
         }
-        // A reload or a restore changed the fields; the codec is holding the
-        // old number until something tells it otherwise.
-        if (board::Codec().Present()) {
-            board::Codec().SetVolume(config::Get().audio.volume_percent);
-        }
-        // And so is the Wi-Fi manager, which is holding a network list that
-        // may have just been replaced — an attempt against index 2 of the old
-        // list is an attempt against a network that is no longer there.
-        wifimgr::Apply();
-        // And the clock's sync task, holding an interval and a server that may
-        // both have just changed.
-        timesync::Apply();
-        // And the bus link, which may now be pointed at a different server —
-        // and, if it is not, is left exactly as it was, connection included.
-        nats::Apply();
+        // **Nothing is re-applied here any more, and that is the point.** A
+        // reload or a restore moves every field at once, and four subsystems are
+        // holding copies of some of them — the codec a volume, the Wi-Fi manager
+        // a network list, the clock's sync task an interval and a server, the bus
+        // a URL. That list used to live here, in the one caller there was; there
+        // are three now (this, the settings screen's row, and the boot restore),
+        // so it lives where it cannot drift: `config::OnChanged`, registered by
+        // `main`, called by `Reload` and `Restore` themselves.
     }
 
     const config::Data &c = config::Get();
@@ -2227,6 +2222,8 @@ void PrintScreenUsage(void) {
     printf("       screen settings       the settings list\n");
     printf("       screen status         the status pages, inside settings\n");
     printf("       screen touch          the touch test and calibration\n");
+    printf("       screen wifi           the wi-fi screen, inside settings\n");
+    printf("       screen networks       the list of what is on the air, and scan\n");
     printf("       screen page           the next status page\n");
     printf("       screen back           up one level\n");
     printf("it moves between screens the way a swipe does, and cannot press a row\n");
@@ -2246,6 +2243,8 @@ const char *ScreenName(ui::ScreenId screen) {
             return "touch";
         case ui::ScreenId::kWifi:
             return "wi-fi";
+        case ui::ScreenId::kWifiScan:
+            return "networks";
         case ui::ScreenId::kCount:
             break;
     }
@@ -2260,6 +2259,10 @@ const char *MenuRowName(uint8_t row) {
             return "status";
         case ui::SettingsEntry::kTouch:
             return "touch test";
+        case ui::SettingsEntry::kConfigSave:
+            return "config save";
+        case ui::SettingsEntry::kConfigReload:
+            return "config reload";
         case ui::SettingsEntry::kReboot:
             return "reboot";
         case ui::SettingsEntry::kPowerOff:
@@ -2286,7 +2289,10 @@ int CmdScreen(int argc, char **argv) {
     if (argc == 2) {
         const char *where = argv[1];
         if (strcmp(where, "clock") == 0) {
-            // From two levels down that is two backs, so it is spelled as one.
+            // From the deepest screen there is — the network list, three levels
+            // down — that is three backs, so it is spelled as one. A back on the
+            // clock does nothing, so the extra ones are free.
+            screens::Navigate(ui::Nav::kBack);
             screens::Navigate(ui::Nav::kBack);
             screens::Navigate(ui::Nav::kBack);
         } else if (strcmp(where, "settings") == 0) {
@@ -2299,6 +2305,17 @@ int CmdScreen(int argc, char **argv) {
         } else if (strcmp(where, "touch") == 0) {
             screens::Navigate(ui::Nav::kSwipeUp);
             screens::Navigate(ui::Nav::kOpenTouch);
+        } else if (strcmp(where, "wifi") == 0) {
+            screens::Navigate(ui::Nav::kSwipeUp);
+            screens::Navigate(ui::Nav::kOpenWifi);
+        } else if (strcmp(where, "networks") == 0) {
+            // **Opening the list starts a scan**, which is the one thing on these
+            // screens the console can set in motion — and it is navigation rather
+            // than a press: what it reaches is a readout, and picking a name out
+            // of it still needs a finger.
+            screens::Navigate(ui::Nav::kSwipeUp);
+            screens::Navigate(ui::Nav::kOpenWifi);
+            screens::Navigate(ui::Nav::kOpenScan);
         } else if (strcmp(where, "page") == 0) {
             // **Paging is navigation, not a press.** The rule this command
             // keeps is that it cannot reach a row's action - and turning a
@@ -2328,6 +2345,14 @@ int CmdScreen(int argc, char **argv) {
                static_cast<unsigned>(now.selected + 1),
                static_cast<unsigned>(ui::SettingsMenu::kEntryCount),
                now.armed ? " - asking for a second press" : "");
+        // **Which rows are on the glass**, which is a different answer from which
+        // one is selected — the list is longer than the panel and a finger can drag
+        // it without moving the selection. This is the only readout that can say
+        // which five without a photograph (§10.12.2).
+        printf("showing    rows %u-%u of %u, dragged with a finger or stepped by BOOT\n",
+               static_cast<unsigned>(now.menu_window + 1),
+               static_cast<unsigned>(now.menu_window + now.menu_visible),
+               static_cast<unsigned>(ui::SettingsMenu::kEntryCount));
         if (!now.can_power_off) {
             printf("power off  refused while the cable is in - it would come straight back on\n");
         }
@@ -2336,8 +2361,51 @@ int CmdScreen(int argc, char **argv) {
         printf("page       %u of %u - BOOT, or tap the body\n",
                static_cast<unsigned>(now.status_page + 1),
                static_cast<unsigned>(now.status_pages));
+    } else if (now.screen == ui::ScreenId::kWifi) {
+        printf("mode       %s\n", ui::WifiModeName(now.wifi_mode));
+        if (now.wifi_ap) {
+            printf("record     the access point\n");
+        } else if (now.wifi_count == 0) {
+            printf("record     no networks - 'wifi join' adds one\n");
+        } else {
+            printf("record     network %u of %u\n", static_cast<unsigned>(now.wifi_index + 1),
+                   static_cast<unsigned>(now.wifi_count));
+        }
+        // **The name, and whether there is a password — never the password.**
+        // A passphrase belongs on the glass, to somebody holding the device, and
+        // nowhere in a console dump that gets pasted into a chat window.
+        printf("ssid       %s%s\n", now.wifi_ssid[0] != '\0' ? now.wifi_ssid : "-",
+               now.wifi_secured ? "  (password set)" : "  (open)");
+        printf("selected   row %u of %u\n", static_cast<unsigned>(now.wifi_row + 1),
+               static_cast<unsigned>(ui::WifiView::kRowCount));
+        printf("press      KEY, or tap - the console cannot press one\n");
+    } else if (now.screen == ui::ScreenId::kWifiScan) {
+        switch (now.scan_state) {
+            case ui::WifiScanState::kScanning:
+                printf("list       looking - a scan takes a second or two\n");
+                break;
+            case ui::WifiScanState::kEmpty:
+                printf("list       nothing on the air\n");
+                break;
+            case ui::WifiScanState::kFailed:
+                printf("list       the radio refused the scan\n");
+                break;
+            case ui::WifiScanState::kList:
+                printf("list       %u found, %u selected: %s\n",
+                       static_cast<unsigned>(now.scan_count),
+                       static_cast<unsigned>(now.scan_selected + 1), now.scan_ssid);
+                break;
+            case ui::WifiScanState::kIdle:
+                printf("list       nothing asked for\n");
+                break;
+        }
+        printf("pick       KEY, or tap a row - it goes into the record behind this\n");
     }
-    printf("in         swipe up or hold KEY for 2 s; out is PWR or a swipe down\n");
+    // **The way out changed when the list started scrolling**, and this line is
+    // where an operator finds that out: a vertical drag belongs to the list now, so
+    // a swipe down no longer leaves. Sideways does, and so does the title.
+    printf("in         swipe up or hold KEY for 2 s; out is PWR, the title, or a swipe "
+           "sideways\n");
     return 0;
 }
 
@@ -3163,6 +3231,219 @@ int CmdRequest(int argc, char **argv) {
     return 0;
 }
 
+// `web` (CLAUDE.md §10.16) — the configuration server, and the two questions it
+// exists to answer before anything is built on top of it: what does it cost while
+// it is up, and **does stopping it give every byte back**.
+//
+// The second one is why `cycle` is here. Older frameworks leaked a little per
+// start, which is invisible once and fatal on a device that is configured a few
+// times a week and never rebooted — and the only honest way to know is to do it
+// twenty times and look at the drift. It is the same experiment §10.9 records for
+// the Wi-Fi stack, where twenty-six on/off cycles came back every time and
+// wandered a few hundred bytes in *both* directions: the allocator, not a leak.
+void PrintWebUsage() {
+    printf("usage: web                   what was asked for, and what is running\n");
+    printf("       web on                have it up whenever there is a network\n");
+    printf("       web off               never\n");
+    printf("       web auto              only while this device is an access point\n");
+    printf("       web cycle [n]         start and stop it n times, and print the drift\n");
+    printf("the mode is a wish: it comes up only with a network, in memory only\n");
+    printf("it serves pages and one read-only json; nothing on it changes this device\n");
+}
+
+// A settling delay after `httpd_stop`, and it is not padding: **lwIP frees a
+// closed socket on its own task**, so a heap sampled the instant the server task
+// exits can still be holding what the tcpip thread has not got to yet. Without
+// this the measurement reports a leak that is not there.
+constexpr uint32_t kWebSettleMs = 150;
+
+uint32_t WebFreeHeap() {
+    return static_cast<uint32_t>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+}
+
+void PrintWebStatus() {
+    const web::Status now = web::Get();
+    const wifimgr::Snapshot wifi = wifimgr::Get();
+
+    // **Desired and current, side by side** — §10.9's shape, and the reason a
+    // server that is waiting for a network does not read as a broken one.
+    printf("wanted     %s  (config: web %s)\n", web::Name(now.desired),
+           web::Name(web::DesiredFromConfig()));
+    printf("server     %s", now.running ? "running" : "stopped");
+    if (now.running) {
+        printf(" on port %u", static_cast<unsigned>(now.port));
+    } else {
+        // Why not, in the operator's terms rather than as an error code. Each of
+        // these is a different thing to go and do.
+        if (now.desired == web::Desired::kOff) {
+            printf(" - nothing asked for it");
+        } else if (wifimgr::DesiredFromConfig() == wifimgr::Desired::kOff) {
+            printf(" - the radio is switched off ('wifi mode client' or 'wifi mode ap')");
+        } else if (!wifi.stack_up) {
+            printf(" - waiting for a network ('wifi mode client' or 'wifi mode ap')");
+        } else if (now.desired == web::Desired::kAuto) {
+            printf(" - 'auto', and this device is not an access point");
+        }
+    }
+    printf("\n");
+    if (now.running && wifi.radio.ip != 0) {
+        // The address to type into a phone, which is the whole point of it being
+        // up — and it is the radio's own answer rather than something rebuilt.
+        printf("reach      http://%u.%u.%u.%u/\n", static_cast<unsigned>(wifi.radio.ip & 0xFF),
+               static_cast<unsigned>((wifi.radio.ip >> 8) & 0xFF),
+               static_cast<unsigned>((wifi.radio.ip >> 16) & 0xFF),
+               static_cast<unsigned>((wifi.radio.ip >> 24) & 0xFF));
+    }
+    printf("served     %" PRIu32 " file(s), %" PRIu32 " byte(s), %" PRIu32 " api\n",
+           now.requests, now.bytes, now.api);
+    // **Two refusals, counted apart.** A name the whitelist would not serve is
+    // somebody asking for something like `config.json`; a name that is simply not
+    // there is an ordinary 404. The browser is told the same thing either way
+    // (§10.16), and this is where the difference lives.
+    printf("refused    %" PRIu32 " not a page, %" PRIu32 " no such file\n", now.refused,
+           now.not_found);
+    printf("heap       %" PRIu32 " free, %" PRIu32 " lowest ever\n", now.free_now,
+           now.low_water);
+    if (now.task_stack_low != 0) {
+        // **Measured after the heaviest handler there is**, which is
+        // `/api/devstatus`: it reads the I2C bus through the lease and formats a
+        // few hundred lines on this task's 4 KB. Section 10.14.1's number, for the
+        // one task in this firmware whose stack is not ours to size statically.
+        printf("stack      %" PRIu32 " byte(s) never used, of %" PRIu32 "\n",
+               now.task_stack_low, static_cast<uint32_t>(web::kTaskStackBytes));
+    }
+    if (now.running && !wifimgr::Get().stack_up) {
+        // The radio went down under a running server. Not a crash — the socket
+        // outlives the netif — but nothing can reach it, and a server that is
+        // "running" and unreachable is the readout §10.9 spends a paragraph on.
+        printf("warning    the network stack went down under it - nothing can reach this\n");
+    }
+    // **While it is up, the cost; once it is down, what came back** — and never
+    // both, because the two are only comparable when nothing else has moved the
+    // heap between them. `web_server.h` has the readout that taught that: a radio
+    // switched off between a start and a stop releases 41 KB, and this line
+    // reported the server as having cost minus forty-two kilobytes.
+    if (now.running && now.free_before_start != 0) {
+        printf("cost       %" PRId32 " byte(s) while up\n",
+               static_cast<int32_t>(now.free_before_start) - static_cast<int32_t>(now.free_now));
+    } else if (now.has_run) {
+        printf("last run   %" PRId32 " byte(s) unreturned by its stop%s\n",
+               -now.last_run_returned,
+               now.last_run_returned >= 0 ? "  (all of it came back)" : "");
+    }
+}
+
+int CmdWeb(int argc, char **argv) {
+    if (argc == 1) {
+        PrintWebStatus();
+        return 0;
+    }
+    if (strcmp(argv[1], "help") == 0) {
+        PrintWebUsage();
+        return 0;
+    }
+
+    // **The three of them set a wish, they do not start anything.** The
+    // reconcile runs on the Wi-Fi manager's tick (§10.16), so it happens within
+    // 200 ms and it happens in one place — which is what keeps "asked for" and
+    // "running" from being two truths. In memory only, like every other setter
+    // (§10.15).
+    web::Desired wanted = web::Desired::kOff;
+    bool is_mode = true;
+    if (strcmp(argv[1], "on") == 0) {
+        wanted = web::Desired::kOn;
+    } else if (strcmp(argv[1], "off") == 0) {
+        wanted = web::Desired::kOff;
+    } else if (strcmp(argv[1], "auto") == 0) {
+        wanted = web::Desired::kAuto;
+    } else {
+        is_mode = false;
+    }
+    if (is_mode && argc == 2) {
+        const uint32_t before = WebFreeHeap();
+        web::SetDesired(wanted);
+        // Long enough for the manager's next pass to have acted, so the readout
+        // below is the answer rather than the question — the same reason
+        // `screens::Navigate` waits for the screen task to take a move.
+        vTaskDelay(pdMS_TO_TICKS(wifimgr::kPollMs * 2 + kWebSettleMs));
+        printf("web %s, in memory only - 'config save' writes it to %s\n",
+               web::Name(wanted), config::kPath);
+        const int32_t moved = static_cast<int32_t>(before) - static_cast<int32_t>(WebFreeHeap());
+        if (moved != 0) {
+            printf("heap       %+" PRId32 " byte(s)\n", -moved);
+        }
+        PrintWebStatus();
+        return 0;
+    }
+
+    if (strcmp(argv[1], "cycle") == 0 && argc <= 3) {
+        long rounds = 10;
+        if (argc == 3) {
+            char *end = nullptr;
+            rounds = strtol(argv[2], &end, 10);
+            if (end == argv[2] || *end != '\0' || rounds < 1 || rounds > 50) {
+                printf("cycle takes 1..50 rounds; got '%s'\n", argv[2]);
+                return 1;
+            }
+        }
+        if (web::Running()) {
+            printf("stop it first - 'web off'\n");
+            return 1;
+        }
+        if (web::GetDesired() != web::Desired::kOff) {
+            // Otherwise the manager's tick would start the server back up between
+            // this loop's rounds, and every number below would be measuring two
+            // things at once.
+            printf("set 'web off' first - the manager would restart it mid-cycle\n");
+            return 1;
+        }
+
+        const uint32_t start = WebFreeHeap();
+        uint32_t lowest = start;
+        uint32_t highest = start;
+        uint32_t last = start;
+        printf("round   after start   after stop   drift\n");
+        for (long i = 0; i < rounds; ++i) {
+            if (web::Start() != ESP_OK) {
+                printf("round %ld would not start\n", i + 1);
+                return 1;
+            }
+            // Long enough for the server task to reach its own `select`, so each
+            // round is a server that really ran rather than one that was torn
+            // down mid-construction.
+            vTaskDelay(pdMS_TO_TICKS(50));
+            const uint32_t up = WebFreeHeap();
+            web::Stop();
+            vTaskDelay(pdMS_TO_TICKS(kWebSettleMs));
+            const uint32_t down = WebFreeHeap();
+
+            printf("%5ld   %11" PRIu32 "   %10" PRIu32 "   %+" PRId32 "\n", i + 1, up, down,
+                   static_cast<int32_t>(down) - static_cast<int32_t>(last));
+            last = down;
+            if (down < lowest) {
+                lowest = down;
+            }
+            if (down > highest) {
+                highest = down;
+            }
+        }
+        printf("start %" PRIu32 ", end %" PRIu32 " - %+" PRId32 " over %ld round(s)\n", start,
+               last, static_cast<int32_t>(last) - static_cast<int32_t>(start), rounds);
+        printf("spread %" PRIu32 " byte(s) between the lowest and highest resting point\n",
+               highest - lowest);
+        // **What the numbers mean, said here rather than left to whoever reads
+        // them**: a leak walks one way and grows with the rounds; the allocator
+        // wandering shows up as a spread with no direction.
+        printf("a drift that grows with the rounds is a leak; a spread that does not is the "
+               "allocator\n");
+        return 0;
+    }
+
+    printf("no such thing as 'web %s'\n", argv[1]);
+    PrintWebUsage();
+    return 1;
+}
+
 int CmdDevStatus(int argc, char **) {
     if (argc != 1) {
         printf("usage: devstatus     the board, the chips, the screen, time and the network\n");
@@ -3193,6 +3474,9 @@ int CmdDevStatus(int argc, char **) {
         {"keys", &CmdKeys},
         // And the readout that is only a readout (§10.8.3).
         {"limits", &CmdLimits},   {"screen", &CmdScreen},  {"touch", &CmdTouch},
+        // And the one thing on this list that is off unless somebody asked for it
+        // (§10.16), which is itself the state worth printing.
+        {"web", &CmdWeb},
     };
 
     bool first = true;
@@ -3362,9 +3646,18 @@ const esp_console_cmd_t kCommands[] = {
         .context = nullptr,
     },
     {
+        .command = "web",
+        .help = "the configuration web server: start it, stop it, and measure what it costs",
+        .hint = "[on|off|cycle]",
+        .func = &CmdWeb,
+        .argtable = nullptr,
+        .func_w_context = nullptr,
+        .context = nullptr,
+    },
+    {
         .command = "screen",
         .help = "which screen is up, and move between them the way a swipe does",
-        .hint = "[clock|settings|status|touch|page|back]",
+        .hint = "[clock|settings|status|touch|wifi|networks|page|back]",
         .func = &CmdScreen,
         .argtable = nullptr,
         .func_w_context = nullptr,
@@ -3446,7 +3739,15 @@ const esp_console_cmd_t kCommands[] = {
 
 }  // namespace
 
+void PrintDevStatus() { CmdDevStatus(1, nullptr); }
+
 esp_err_t Init() {
+    // **The web server's `/api/devstatus` prints this one** (§10.16), rather than
+    // a second copy of every section — §10.7's rule that one readout lives in one
+    // place. The hook runs the other way round so that `web` never depends on the
+    // console, which depends on it.
+    web::SetDiagnostics(&PrintDevStatus);
+
     esp_console_repl_t *repl = nullptr;
     esp_console_repl_config_t repl_config = ESP_CONSOLE_REPL_CONFIG_DEFAULT();
     repl_config.prompt = "approver>";

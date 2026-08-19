@@ -37,6 +37,7 @@
 #include "navigator.h"
 #include "qmi8658.h"
 #include "settings_menu.h"
+#include "wifi_view.h"
 #include "panel.h"
 #include "touch.h"
 #include "speaker.h"
@@ -328,10 +329,36 @@ struct MenuStatus {
     bool ready = false;
     ui::ScreenId screen = ui::ScreenId::kClock;
     uint8_t selected = 0;
+    // The first row on the glass, and how many of them fit. The list is longer
+    // than the panel and LVGL scrolls it with a finger (§10.8.5), so "which row is
+    // selected" and "which rows can be seen" are two different answers — and the
+    // second one is the screen's rather than the menu's. The count travels with it
+    // so that the console needs no LVGL header to print the pair.
+    uint8_t menu_window = 0;
+    uint8_t menu_visible = 0;
     bool armed = false;       // the selected row is asking for a second press
     bool can_power_off = false;  // false while the cable is in (§10.1)
     uint8_t status_page = 0;
     uint8_t status_pages = 0;
+
+    // --- The Wi-Fi screen (§10.8.6) ---------------------------------------
+    //
+    // **There is no password here**, and that is the one rule of this struct:
+    // §10.15 keeps a passphrase out of every log line and every console dump, and
+    // a dump is exactly what this is. Whether one is set at all is a different
+    // question and the answer is useful, so `wifi_secured` is it.
+    ui::WifiMode wifi_mode = ui::WifiMode::kOff;
+    bool wifi_ap = false;       // which record is on the glass
+    uint8_t wifi_row = 0;       // which row is selected
+    uint8_t wifi_index = 0;
+    uint8_t wifi_count = 0;
+    bool wifi_secured = false;
+    char wifi_ssid[ui::kWifiSsidSize] = {};
+
+    ui::WifiScanState scan_state = ui::WifiScanState::kIdle;
+    uint8_t scan_count = 0;
+    uint8_t scan_selected = 0;
+    char scan_ssid[ui::kWifiSsidSize] = {};
 };
 
 MenuStatus Menu();

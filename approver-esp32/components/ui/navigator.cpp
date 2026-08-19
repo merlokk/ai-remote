@@ -47,13 +47,21 @@ bool Navigator::Navigate(Nav nav) {
             break;
 
         case ScreenId::kSettings:
-            // **Swipes do not navigate here, and that is the whole rule for
-            // this screen.** Settings is a scrolling list and §10.8.6 is a list
-            // with a keyboard on it: a swipe belongs to the widget under the
-            // finger. A navigation gesture that also scrolls is how a
-            // half-typed password gets thrown away, which §10.8.1 spends a
-            // paragraph on.
-            if (nav == Nav::kBack) {
+            // **A vertical swipe belongs to the list, and a sideways one is the way
+            // out.** This screen used to refuse every swipe on the reasoning that a
+            // gesture which also scrolls is how a half-typed password gets thrown
+            // away (§10.8.1) — and then the list really did start scrolling, at the
+            // repository owner's request, which settles the first half and takes
+            // away the second: LVGL suppresses a gesture while it is scrolling, so
+            // a drag up or down never reaches here at all.
+            //
+            // What that cost is the swipe *down* that used to leave, and something
+            // had to replace it: `PWR` and the title are both still there, but a
+            // list you can drag with a thumb and cannot leave with one is a list
+            // people get stuck in. So sideways goes back — **both** directions, for
+            // the reason the clock's own carousel gives: a swipe that does nothing
+            // in one direction reads as a broken screen.
+            if (nav == Nav::kBack || nav == Nav::kSwipeLeft || nav == Nav::kSwipeRight) {
                 screen_ = ScreenId::kClock;
             } else if (nav == Nav::kOpenWifi) {
                 screen_ = ScreenId::kWifi;
@@ -89,8 +97,24 @@ bool Navigator::Navigate(Nav nav) {
             break;
 
         case ScreenId::kWifi:
+            // **Swipeless, like the settings list it hangs off**: this screen is
+            // rows and arrows drawn a finger's width apart, and a gesture that
+            // also navigated would take the operator off it while they were
+            // aiming at one of them.
             if (nav == Nav::kBack) {
                 screen_ = ScreenId::kSettings;
+            } else if (nav == Nav::kOpenScan) {
+                screen_ = ScreenId::kWifiScan;
+            }
+            break;
+
+        case ScreenId::kWifiScan:
+            // **Back is one level, to the record the list was opened for.** The
+            // whole point of picking a name off the air is that it lands in the
+            // record that was on the glass, so dropping the operator two levels
+            // out would hide the one thing that changed.
+            if (nav == Nav::kBack) {
+                screen_ = ScreenId::kWifi;
             }
             break;
 

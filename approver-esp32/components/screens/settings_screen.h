@@ -59,11 +59,34 @@ inline constexpr int32_t kSettingsRowTextTop = 17;
 // changes with its value.
 inline constexpr int32_t kSettingsNoteWidth = 230;
 
-static_assert(kSettingsFirstRowTop +
-                      (ui::SettingsMenu::kEntryCount - 1) * kSettingsRowStride +
-                      kSettingsRowHeight <=
-                  480,
-              "the settings rows would run off the bottom of the glass");
+// **The seventh row is why this list scrolls**, and the assertion that used to
+// live here is why it had to: seven rows at this stride is 624 pixels of list on a
+// 480-pixel panel, and the `static_assert` refused to build it rather than letting
+// anybody discover `power off` drawn past the bottom of the glass.
+//
+// So the rows live inside a scroll container that fills what is left under the
+// title, and **LVGL does the scrolling** — a finger drags the list, with momentum
+// and a scrollbar, which is what anybody who has held a phone expects of a list on
+// a touchscreen. `BOOT` still steps the selection and the container is scrolled to
+// keep it in view; the two routes move the same list.
+inline constexpr int32_t kSettingsListTop = kSettingsFirstRowTop;
+inline constexpr int32_t kSettingsListHeight = 480 - kSettingsListTop;
+
+// Room under the last row, so the end of the list does not sit flush against the
+// bottom edge of the glass.
+inline constexpr int32_t kSettingsListPadBottom = 16;
+
+// How many rows are on the glass at once — five, and it is *derived* rather than
+// chosen: the viewport divided by the stride. Nothing lays anything out with it;
+// it exists so that `screen` on the console can say which rows can be seen
+// (§10.12.2), which is the one question a scroll offset answers and a photograph
+// otherwise has to.
+inline constexpr uint8_t kSettingsVisibleRows =
+    static_cast<uint8_t>(kSettingsListHeight / kSettingsRowStride);
+
+static_assert(kSettingsVisibleRows >= 2 &&
+                  kSettingsVisibleRows < ui::SettingsMenu::kEntryCount,
+              "a list that fits the glass does not need scrolling, and one row is not a list");
 
 // One row's widgets. Kept together because there are four of them and the only
 // difference between them is the words.
@@ -101,20 +124,45 @@ class SettingsScreen {
     uint8_t TakeTap();
     bool TakeBack();
 
+    // The first row on the glass, for the console. Sampled at the last `Apply`.
+    uint8_t ScrolledRows() const { return scrolled_rows_; }
+
    private:
     static void RowClicked(lv_event_t *event);
     static void BackClicked(lv_event_t *event);
 
     lv_obj_t *root_ = nullptr;
     lv_obj_t *title_ = nullptr;
+    // The scroll container the rows live in. **The title is not inside it**: it is
+    // the way back out with a finger, and a way out that scrolls off the top of the
+    // screen is a way out nobody can find (§10.8.5 — `PWR` is the other one).
+    lv_obj_t *list_ = nullptr;
+    // **Which row of the list is where the eye is**, right of the title, because
+    // a window of five over seven is a screen that otherwise says nothing about
+    // the two rows it is not showing. `4 / 7`, in the title's own faint grey.
+    lv_obj_t *position_ = nullptr;
+    char position_text_[12] = {};
+    // **One widget set per entry again**, which is what native scrolling bought
+    // back: a row is a row, its name is written once in `Create`, and the tap
+    // callback carries its own index rather than a slot number that has to be
+    // mapped through a window.
     MenuRow rows_[ui::SettingsMenu::kEntryCount] = {};
 
     uint8_t tapped_ = kNoRow;
     bool back_ = false;
 
+    // Where the list is scrolled to, in rows, sampled where the LVGL lock is held
+    // and read by `screens::Menu()` without it — a plain byte, for the console's
+    // readout. It is not a decision and nothing lays out with it.
+    uint8_t scrolled_rows_ = 0;
+
     uint8_t shown_selected_ = kNoRow;
     bool shown_armed_ = false;
     bool shown_can_power_off_ = false;
+    // The last outcome painted, so a `saved` that has expired takes the row back
+    // to its ordinary state without repainting every row ten times a second.
+    ui::SettingsResult shown_result_ = ui::SettingsResult::kNone;
+    uint8_t shown_result_row_ = kNoRow;
     bool visible_ = false;
 };
 

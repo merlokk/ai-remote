@@ -245,15 +245,28 @@ Calibrating needs the screen — `screen touch`, then `BOOT` and four presses.
 Four crosses need four fingers in four places, and there is no honest way to send
 that down a serial port.
 
-### `screen [clock|settings|status|touch|page|back]`
+### `screen [clock|settings|status|touch|wifi|networks|page|back]`
 Which screen is up — and, with a word, a way to move between them that is not a
 finger.
 
     screen     settings
-    selected   wi-fi (row 1 of 5)
+    selected   wi-fi (row 1 of 7)
+    showing    rows 1-5 of 7
     power off  refused while the cable is in - it would come straight back on
     press      KEY, or tap the row - the console cannot press one
     in         swipe up or hold KEY for 2 s; out is PWR or a swipe down
+
+`showing` is there because **the list is longer than the panel**: seven rows at the
+stride they are drawn at is 624 pixels of list on a 480-pixel glass, so five are on
+screen at a time and **LVGL scrolls the rest with a finger** — a drag, with
+momentum and a scrollbar. `BOOT` still steps the selection and brings it into view,
+so `selected` and `showing` are two different answers: a finger can move the list
+without moving the selection. This is the only readout that gives the second one
+without a photograph (§10.12.2).
+
+One consequence is on the `in` line above: a vertical drag belongs to the list now,
+so **a swipe down no longer leaves this screen**. Sideways does, in either
+direction, and so does the title.
 
 The `power off` line appears only while the cable is in, which is the state the
 row itself shows as `usb in`: VBUS is a power-on source for this chip, so a
@@ -272,8 +285,127 @@ operator would reach: a request card still outranks it, and settings still
 cannot be opened from inside itself. `screen page` turns a status page and
 `screen touch` opens the touch test — both navigation rather than a press.
 
+`screen wifi` and `screen networks` reach the two of §10.8.6, and each prints
+what is on it:
+
+    screen     wi-fi
+    mode       client
+    record     network 1 of 2
+    ssid       office  (password set)
+    selected   row 1 of 3
+    press      KEY, or tap - the console cannot press one
+
+    screen     networks
+    list       8 found, 1 selected: office
+    pick       KEY, or tap a row - it goes into the record behind this
+
+**The password is not in either of them, and that is deliberate**: it belongs on
+the glass, to somebody holding the device, and nowhere in a dump that gets pasted
+into a chat window. Whether one is set at all is a different fact and is the
+`(password set)` / `(open)` on the `ssid` line.
+
+`screen networks` **starts a scan**, which is the one thing on these two screens
+the console can set in motion — opening that list is asking what is on the air,
+and it takes a second or two before the rows appear. Picking a name out of it is
+still a finger: it edits a record, and the rule above is that this command cannot
+press anything.
+
 **It cannot press a row**, deliberately: the rows are where `reboot` lives, and
 the console already has its own `reboot`. One route per surface.
+
+Two of those rows are this console's own commands with a finger in front of them —
+`config save` and `config reload` (§10.8.5), which is what makes a Wi-Fi mode
+picked on the glass or a touch correction made with four presses survive a reboot
+without a cable. They behave exactly as the commands do, the reload included:
+every edit that has not reached the file is gone, which is why that row carries
+`drops unsaved` before anybody presses it. Neither arms — the arming is reserved
+for the two rows that end the session — and what each one did is said on the row
+for three seconds afterwards (`saved`, `reloaded`, or `failed`).
+
+### `web [on|off|auto|cycle]`
+The configuration web server of §10.16. The three words set a **desired state**,
+they do not start anything: the server comes up only when there is a network to
+come up in, and the Wi-Fi manager's tick is what reconciles the two within 200 ms.
+
+    web on
+    web on, in memory only - 'config save' writes it to config.json
+    heap       -6860 byte(s)
+    wanted     on  (config: web auto)
+    server     running on port 80
+    reach      http://192.168.11.134/
+    served     0 file(s), 0 byte(s), 0 api
+    refused    0 not a page, 0 no such file
+    heap       23696 free, 21756 lowest ever
+    stack      2000 byte(s) never used, of 4096
+    cost       6824 byte(s) while up
+
+`wanted` is the wish and `server` is the fact, side by side for the reason §10.9
+prints both — and when the fact is "stopped", the line says which of the three
+reasons it is: nothing asked for it, the radio is switched off, or `auto` and this
+device is not an access point. `reach` is the address to type into a phone, and it
+is the radio's own answer rather than something rebuilt.
+
+| | |
+|---|---|
+| `web off` | never |
+| `web on` | up whenever there is a network |
+| `web auto` | only while this device is an access point — its own, or §10.9's fallback one. The default, and the cheap one |
+
+What is on it, once a phone has the address: a front page of buttons with the
+device's state under them, the whole `devstatus` dump, **the Wi-Fi and bus settings**,
+a restart that asks twice, and a 404 for everything else. The Wi-Fi page has the mode,
+the four remembered networks with a scan to pick names out of, and this device's own
+access point; the bus page has the address. Both say `in memory only` until the save,
+exactly as this console does.
+
+Eight routes are served. Four of them read: the pages, `/api/status` (the numbers
+the front page shows — the bus, the registration, §7's counters, the battery, the
+heap), and **`/api/devstatus` — this console's own `devstatus`, byte for byte**,
+because a second copy of fifteen readouts is fifteen things to drift (§10.7).
+`stack` above is that handler's margin: it is the heaviest thing the server does,
+and it left 2,000 of 4,096 bytes untouched.
+
+…plus `GET /api/settings`, which is the settings a form may change — and `GET
+/api/wifi/scan`, which runs one.
+
+**Three of them write**, which is new: `POST /api/settings` takes the same document
+the GET answers with (a whitelist of fields — `wifi.mode`, the access point, the four
+networks, `nats.url`, and nothing else in `config.json`), and `POST
+/api/action?do=save|reload|retry|reconnect` is the four verbs that are not a field.
+Everything is **memory only** until `do=save`, like every setter here, and a password
+that is not in the document is *kept* rather than cleared — the device never sends one
+back, so a form cannot return what it never had. `config.json`'s `web.write` false
+turns all of it off and answers 403.
+
+The last one **writes nothing and restarts the device**: `POST
+/api/reboot?confirm=reboot`, which the restart page uses. It is a `POST` so that
+no link or crawler can reach it and it needs the word so that a stray one cannot
+either — a confirmation rather than a password, since §10.3 already puts the trust
+boundary at the router. It is the only action this server has, and the reason it
+was allowed in first is that a reboot takes nothing away that does not come back
+by itself (§10.7's argument for `reboot` needing no confirmation word here).
+
+Like every other setter it is **memory only** (§10.15): `config save` writes
+`web.mode`. And the server follows the network without being told — `wifi mode
+off` takes it down before the radio goes, and a link coming back brings it up
+again.
+
+`refused` counts two different things apart, and the difference never reaches the
+browser: a name the whitelist would not serve — somebody asking for something like
+`config.json` — and a name that is simply not on the filesystem. Both answer 404,
+because telling the two apart is telling somebody the file is there.
+
+**`web cycle [n]` is the reason this command exists.** It starts and stops the
+server n times (default 10, capped at 50) and prints the resting heap after each,
+so "does stopping it give everything back" is a measurement rather than a hope —
+older frameworks leaked a little per start, which is invisible once and fatal on a
+device that is never rebooted. On this board twenty rounds came back to the byte
+with a four-byte spread. A drift that grows with the rounds is a leak; a spread
+that does not is the allocator.
+
+It refuses to start with the radio off and says why: lwIP is brought up lazily
+(§10.9), and `httpd_start` without it is an assert inside the TCP/IP stack rather
+than an error — so `wifi mode client` or `wifi mode ap` comes first.
 
 ### `screenshot`
 The frame itself, as base64, for `tools/screenshot.py` to turn into a PNG.

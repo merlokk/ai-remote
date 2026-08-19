@@ -40,6 +40,11 @@ void GoTo(Navigator &nav, ScreenId screen) {
             nav.Navigate(Nav::kGear);
             nav.Navigate(Nav::kOpenWifi);
             break;
+        case ScreenId::kWifiScan:
+            nav.Navigate(Nav::kGear);
+            nav.Navigate(Nav::kOpenWifi);
+            nav.Navigate(Nav::kOpenScan);
+            break;
         case ScreenId::kCount:
             break;
     }
@@ -101,14 +106,24 @@ void test_wifi_is_reached_from_settings_and_backs_out_one_step(void) {
 void test_swipes_do_not_navigate_away_from_settings_or_wifi(void) {
     // The rule that protects the half-typed password of §10.8.1: on a list and
     // on a keyboard, a swipe belongs to the widget under the finger.
+    //
+    // **Half of it changed when the settings list started scrolling** (§10.8.5),
+    // and this is where the difference is asserted rather than described. On that
+    // screen a *vertical* swipe is the list — and if one ever reaches the navigator
+    // anyway it must still move nothing, which is what the loop below says — while
+    // sideways is now the way out, because a list a thumb can drag and cannot leave
+    // is a list people get stuck in. The Wi-Fi screen is unchanged: nothing there
+    // scrolls, and a swipe on a record being edited belongs to the record.
     const Nav swipes[] = {Nav::kSwipeLeft, Nav::kSwipeRight, Nav::kSwipeUp};
 
     for (Nav swipe : swipes) {
         Navigator settings;
         GoTo(settings, ScreenId::kSettings);
-        TEST_ASSERT_FALSE(settings.Navigate(swipe));
-        TEST_ASSERT_EQUAL_INT(static_cast<int>(ScreenId::kSettings),
-                              static_cast<int>(settings.Screen()));
+        const bool leaves = swipe == Nav::kSwipeLeft || swipe == Nav::kSwipeRight;
+        TEST_ASSERT_EQUAL(leaves, settings.Navigate(swipe));
+        TEST_ASSERT_EQUAL_INT(
+            static_cast<int>(leaves ? ScreenId::kClock : ScreenId::kSettings),
+            static_cast<int>(settings.Screen()));
 
         Navigator wifi;
         GoTo(wifi, ScreenId::kWifi);
@@ -143,7 +158,8 @@ void test_settings_is_reached_from_the_two_screens_that_are_home(void) {
     // it again — the way out of those is `kBack`, and a gesture that took the
     // operator sideways into a list they are already inside is a gesture that
     // loses their place.
-    const ScreenId inside[] = {ScreenId::kStatus, ScreenId::kTouch, ScreenId::kWifi};
+    const ScreenId inside[] = {ScreenId::kStatus, ScreenId::kTouch, ScreenId::kWifi,
+                               ScreenId::kWifiScan};
     for (ScreenId screen : inside) {
         Navigator nav;
         GoTo(nav, screen);
@@ -183,7 +199,8 @@ void test_back_on_the_clock_does_nothing(void) {
 
 void test_a_request_appears_over_every_screen_without_moving_it(void) {
     const ScreenId screens[] = {ScreenId::kClock,  ScreenId::kLimits, ScreenId::kSettings,
-                                ScreenId::kStatus, ScreenId::kTouch,  ScreenId::kWifi};
+                                ScreenId::kStatus, ScreenId::kTouch,  ScreenId::kWifi,
+                                ScreenId::kWifiScan};
 
     for (ScreenId screen : screens) {
         Navigator nav;
@@ -198,7 +215,8 @@ void test_a_request_appears_over_every_screen_without_moving_it(void) {
 
 void test_navigation_is_gone_while_the_card_is_up(void) {
     const Nav every[] = {Nav::kSwipeLeft, Nav::kSwipeRight, Nav::kSwipeUp,    Nav::kGear,
-                         Nav::kBack,      Nav::kOpenWifi,   Nav::kOpenStatus, Nav::kOpenTouch};
+                         Nav::kBack,      Nav::kOpenWifi,   Nav::kOpenStatus, Nav::kOpenTouch,
+                         Nav::kOpenScan};
 
     Navigator nav;
     GoTo(nav, ScreenId::kSettings);
@@ -319,7 +337,8 @@ void test_status_is_reached_from_settings_and_backs_out_one_step(void) {
 }
 
 void test_status_is_only_opened_from_settings(void) {
-    const ScreenId elsewhere[] = {ScreenId::kClock, ScreenId::kLimits, ScreenId::kWifi};
+    const ScreenId elsewhere[] = {ScreenId::kClock, ScreenId::kLimits, ScreenId::kWifi,
+                                  ScreenId::kWifiScan};
     for (ScreenId screen : elsewhere) {
         Navigator nav;
         GoTo(nav, screen);
@@ -377,7 +396,110 @@ void test_the_touch_test_is_only_opened_from_settings(void) {
     }
 }
 
+// --- The scan list, inside the Wi-Fi screen (§10.8.6) --------------------
+
+void test_the_scan_list_is_reached_from_the_wifi_screen_and_backs_out_one_step(void) {
+    // Two levels down from home, and each `kBack` is one of them: out of the
+    // list is the record it was opened for — which is where the name it just
+    // picked has landed — and out of that is the settings list.
+    Navigator nav;
+    GoTo(nav, ScreenId::kWifi);
+    TEST_ASSERT_TRUE(nav.Navigate(Nav::kOpenScan));
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(ScreenId::kWifiScan), static_cast<int>(nav.Screen()));
+
+    TEST_ASSERT_TRUE(nav.Navigate(Nav::kBack));
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(ScreenId::kWifi), static_cast<int>(nav.Screen()));
+    TEST_ASSERT_TRUE(nav.Navigate(Nav::kBack));
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(ScreenId::kSettings), static_cast<int>(nav.Screen()));
+}
+
+void test_the_scan_list_is_only_opened_from_the_wifi_screen(void) {
+    // A scan costs a connected station a beat because the radio has to leave its
+    // channel (§10.8.6), so the action that starts one has to be inert
+    // everywhere the operator did not ask for it — including on the list itself,
+    // where it would otherwise be a way to reload it and lose the selection.
+    const ScreenId elsewhere[] = {ScreenId::kClock, ScreenId::kLimits, ScreenId::kSettings,
+                                  ScreenId::kStatus, ScreenId::kTouch, ScreenId::kWifiScan};
+    for (ScreenId screen : elsewhere) {
+        Navigator nav;
+        GoTo(nav, screen);
+        TEST_ASSERT_FALSE(nav.Navigate(Nav::kOpenScan));
+        TEST_ASSERT_EQUAL_INT(static_cast<int>(screen), static_cast<int>(nav.Screen()));
+    }
+}
+
+void test_swipes_do_not_navigate_away_from_the_scan_list(void) {
+    // The rows are a finger apart and one of them is under the finger: a
+    // gesture that navigated would take the operator off the list while they
+    // were aiming at a network.
+    const Nav swipes[] = {Nav::kSwipeLeft, Nav::kSwipeRight, Nav::kSwipeUp, Nav::kGear};
+    for (Nav swipe : swipes) {
+        Navigator nav;
+        GoTo(nav, ScreenId::kWifiScan);
+        TEST_ASSERT_FALSE(nav.Navigate(swipe));
+        TEST_ASSERT_EQUAL_INT(static_cast<int>(ScreenId::kWifiScan),
+                              static_cast<int>(nav.Screen()));
+    }
+}
+
+void test_arriving_limits_do_not_take_the_operator_out_of_the_scan_list(void) {
+    // §10.8.1's "everything else is quiet", on the deepest screen there is —
+    // and the one where being thrown out would lose a selection rather than
+    // just a place.
+    Navigator nav;
+    GoTo(nav, ScreenId::kWifiScan);
+    TEST_ASSERT_FALSE(nav.LimitsArrived());
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(ScreenId::kWifiScan), static_cast<int>(nav.Screen()));
+}
+
+// --- The settings list scrolls, so its way out moved (§10.8.5) -----------
+
+void test_a_sideways_swipe_leaves_the_settings_list(void) {
+    // **The rule the scrolling bought.** A vertical drag on that screen is the
+    // list — LVGL suppresses the gesture while it scrolls, so a swipe down never
+    // reaches the navigator at all — and a list somebody can drag with a thumb and
+    // cannot leave with one is a list people get stuck in. Both directions, for the
+    // reason the clock's carousel gives: a swipe that works one way and not the
+    // other reads as a broken screen.
+    const ui::Nav sideways_both[] = {ui::Nav::kSwipeLeft, ui::Nav::kSwipeRight};
+    for (ui::Nav sideways : sideways_both) {
+        ui::Navigator nav;
+        nav.Navigate(ui::Nav::kSwipeUp);
+        TEST_ASSERT_EQUAL_INT(static_cast<int>(ui::ScreenId::kSettings),
+                              static_cast<int>(nav.Screen()));
+        nav.Navigate(sideways);
+        TEST_ASSERT_EQUAL_INT(static_cast<int>(ui::ScreenId::kClock),
+                              static_cast<int>(nav.Screen()));
+    }
+}
+
+void test_a_sideways_swipe_does_not_leave_the_screens_behind_settings(void) {
+    // It is the *list* that lost its swipe down, because the list is what scrolls.
+    // The status pages, the touch test and the Wi-Fi screens refuse every swipe on
+    // their own grounds (a wall of numbers that must not move under a finger, a
+    // calibration that must not be swiped away from, a record being edited), and
+    // none of that changed.
+    const ui::ScreenId deeper[] = {ui::ScreenId::kStatus, ui::ScreenId::kTouch,
+                                   ui::ScreenId::kWifi};
+    const ui::Nav opens[] = {ui::Nav::kOpenStatus, ui::Nav::kOpenTouch, ui::Nav::kOpenWifi};
+    for (int i = 0; i < 3; ++i) {
+        const ui::Nav sideways_both[] = {ui::Nav::kSwipeLeft, ui::Nav::kSwipeRight};
+    for (ui::Nav sideways : sideways_both) {
+            ui::Navigator nav;
+            nav.Navigate(ui::Nav::kSwipeUp);
+            nav.Navigate(opens[i]);
+            TEST_ASSERT_EQUAL_INT(static_cast<int>(deeper[i]), static_cast<int>(nav.Screen()));
+            nav.Navigate(sideways);
+            TEST_ASSERT_EQUAL_INT_MESSAGE(static_cast<int>(deeper[i]),
+                                          static_cast<int>(nav.Screen()),
+                                          "a swipe moved a screen that refuses swipes");
+        }
+    }
+}
+
 void RegisterNavigatorTests(void) {
+    RUN_TEST(test_a_sideways_swipe_leaves_the_settings_list);
+    RUN_TEST(test_a_sideways_swipe_does_not_leave_the_screens_behind_settings);
     RUN_TEST(test_starts_on_the_clock_with_nothing_pending);
 
     RUN_TEST(test_clock_reaches_limits_by_either_swipe);
@@ -394,6 +516,10 @@ void RegisterNavigatorTests(void) {
     RUN_TEST(test_the_touch_test_is_reached_from_settings_and_is_swipeless);
     RUN_TEST(test_the_touch_test_is_only_opened_from_settings);
     RUN_TEST(test_swipes_do_not_navigate_away_from_the_status);
+    RUN_TEST(test_the_scan_list_is_reached_from_the_wifi_screen_and_backs_out_one_step);
+    RUN_TEST(test_the_scan_list_is_only_opened_from_the_wifi_screen);
+    RUN_TEST(test_swipes_do_not_navigate_away_from_the_scan_list);
+    RUN_TEST(test_arriving_limits_do_not_take_the_operator_out_of_the_scan_list);
     RUN_TEST(test_arriving_limits_do_not_take_the_operator_out_of_the_status);
     RUN_TEST(test_back_on_the_clock_does_nothing);
 

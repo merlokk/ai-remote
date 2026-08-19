@@ -96,6 +96,9 @@ add_executable(host_test
     # `tools/make_vectors.py`; nothing here needs Python to build.
     test_vectors.cpp
     test_settings_menu.cpp
+    test_wifi_view.cpp
+    test_web_paths.cpp
+    test_web_settings.cpp
     test_touch_cal.cpp
     test_idle.cpp
 
@@ -112,6 +115,16 @@ add_executable(host_test
     ../components/ui/request_card.cpp
     ../components/ui/limits_view.cpp
     ../components/ui/settings_menu.cpp
+    ../components/ui/wifi_view.cpp
+    # What a URL may reach on the filesystem (§10.16). `<cstddef>` and nothing
+    # else, for the reason every other decision-holding file here manages it.
+    ../components/web/web_paths.cpp
+    ../components/web/web_policy.cpp
+    # And what a *form* may change (§10.16's write path). It needs cJSON, the
+    # config layer and the URL parser next door — all three already compile here,
+    # which is what makes the one path into this device from outside testable with
+    # no board.
+    ../components/web/web_settings.cpp
     ../components/ui/touch_cal.cpp
     ../components/ui/idle_policy.cpp
     ../components/i2cbus/i2c_bus.cpp
@@ -170,6 +183,7 @@ target_include_directories(host_test PRIVATE
     ../components/wifimgr
     ../components/timesync
     ../components/nats
+    ../components/web
     ../components/protocol
     "${CJSON_DIR}"
     "${UNITY_DIR}"

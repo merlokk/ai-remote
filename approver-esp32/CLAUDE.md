@@ -28,7 +28,7 @@ between them they carry what this file deliberately does not:
   device answers and what each one does. Design documents describe why; that
   one describes what you can type.
 
-## Status: a working responder, with three screens still to build
+## Status: a working responder, and every screen it was going to have
 
 **The loop is closed.** A permission request published by `hook.py` reaches this
 device on `approvals.*`, appears on the glass with the command whole, and a press
@@ -44,20 +44,34 @@ Wi-Fi radio with a manager above it, the clock and its SNTP half — a console o
 the USB port with a command per piece of it ([`commands.md`](commands.md) is the
 list), the bus, an Ed25519 identity (§10.6) and a registration (§10.7).
 
-Above it, six of §10.8's seven screens: the clock, the limits that come up on
-their own while a session is spending, the request card over both, the settings
-list — reached by a swipe up or by holding `KEY` — and, behind it, the three
-status pages and the touch test with its calibration.
+Above it, all seven of §10.8's screens, every one of them photographed on the
+panel, and an eighth that is one level inside the seventh: the clock, the limits that come up on their own while a session is
+spending, the request card over both, the settings list — reached by a swipe up or
+by holding `KEY` — and, behind it, the three status pages, the touch test with its
+calibration, the Wi-Fi screen, and the list of what is on the air that it opens.
+Nothing on that list says `soon` any more. It has seven rows now and five of them
+fit the panel, so it scrolls: `config save` and `config reload` are on it, which is
+what makes a setting picked with a finger survive a reboot without a cable
+(§10.8.5).
 
-What is **not** done, and the table below is row by row about it: the Wi-Fi
-screen (§10.8.6), which is the one row on the settings list still drawn faint
-with `soon` next to it; and §10.6's key custody shipped as its
-*fallback* — the seed is in unencrypted NVS rather than behind an eFuse, which is
-a decision with a cost that section states in a table of its own.
+**And there is a site to open on a phone** (§10.16): the front page with the
+device's state and the buttons that go anywhere, the whole `devstatus` dump, a
+restart that asks twice, and a 404. Read-only apart from that restart, which is the
+only thing on it that changes the device at all.
+
+What is **not** done, and the table below is row by row about it. **The Wi-Fi
+screen is the reduced one the repository owner asked for rather than the one
+§10.8.6 specified**: the mode, one record at a time and a name picked off the
+air — read, stepped and chosen, but never typed. The keyboard that section
+measures in millimetres does not exist, so a *password* still arrives over the
+console, and that section says what is missing and why the two halves separate
+where they do. And §10.6's key custody shipped as its *fallback* — the seed is in
+unencrypted NVS rather than behind an eFuse, which is a decision with a cost that
+section states in a table of its own.
 
 | Scope | State |
 |-------|-------|
-| The design below — the protocol roles (§10.2), key custody (§10.6), registration (§10.7), the screens (§10.8) | **mostly implemented now**, and the rows below say which parts. What is left as design-only is one screen (§10.8.6) and the eFuse half of §10.6 |
+| The design below — the protocol roles (§10.2), key custody (§10.6), registration (§10.7), the screens (§10.8) | **mostly implemented now**, and the rows below say which parts. What is left as design-only is §10.8.6's keyboard and the eFuse half of §10.6 |
 | The project skeleton — `CMakeLists.txt`, `main/main.cpp`, `sdkconfig.defaults`, `partitions.csv` (§10.12) | **generated and building** on ESP-IDF v6.0.2; two 2.5 MB OTA slots, ~10.9 MB `storage`, `nvs_keys` reserved |
 | The pin map — `components/boards/board.h` (§10.1) | **written**, from Waveshare's own pinout sheet in `docs/`; logged at boot. Every driver below is *handed* its pins from here rather than including this file, which is §10.14.3's rule and what keeps the drivers testable on the host |
 | SPIFFS mounted + the console — `components/storage`, `components/cli` (§10.7, §10.15) | **running on hardware**: flashed over COM4, and the console answers on the USB Serial/JTAG port — [`commands.md`](commands.md) is what it knows, and `devstatus` is all of it at once |
@@ -83,20 +97,21 @@ a decision with a cost that section states in a table of its own.
 | Firmware: the key and the signing bytes (§10.2, §10.6) — `components/crypto`, `components/protocol` | **written, and the key signs on the board**: the boot self-test passes both halves, the identity is derived and survives a reboot, `keys` is on the console, and a signature this board made verifies under `lib/crypto.py`. §7's signing bytes are assembled and host-tested against Python's own output (14 tests, 7 of 7 mutations caught). **On §10.6's fallback, not its design** — no eFuse key is burned, so the seed is in unencrypted NVS and that section's table has the row that says what it costs |
 | Firmware: registration (§6, §10.7) — `components/registration`, `components/protocol` | **done, against the real handler**: `register <token>` on the console runs §6 verbatim — a nonce made after the radio is up, a private inbox, the handler's signature verified **before** a single field of the reply is read, and `registration.json` written only on a verified `ok:true`. On the board: registered, survived a reboot, refused a spent token, and **refused a perfectly valid `ok:true` signed by a handler it is not pinned to** — with the file unchanged every time. 25 host tests |
 | Firmware: the loop (§7) — `components/responder`, `components/protocol` | **closed**: `approvals.*` in the queue group `approvers`, parsed, on the glass, and a press signed and published into the request's own reply subject. It subscribes only when it has a key, a registration **and** a connection, so a device that cannot answer never takes a request from a responder that can. On the board: a request built by `hook.build_request` arrived and showed the command whole. 19 host tests over the wire format |
-| The screens — clock, limits, request, settings, status, touch, Wi-Fi (§10.8) | **six of seven running**: the clock face (§10.8.2), the limits (§10.8.3), the request card (§10.8.4), and the settings list, the status pages and the touch test of §10.8.5. The Wi-Fi screen is specified and not started, and is the one row on that list still saying `soon` |
+| The screens — clock, limits, request, settings, status, touch, Wi-Fi (§10.8) | **all seven running on hardware**, and a list of scanned networks behind the last of them: the clock face (§10.8.2), the limits (§10.8.3), the request card (§10.8.4), the settings list, the status pages and the touch test of §10.8.5, and the Wi-Fi screen of §10.8.6. No row on that list says `soon` any more — which is also why `SettingsMenu::Built` now answers yes for everything, and `settings_menu.cpp` says why the mechanism stays |
 | The request card — `components/ui/request_card.*` + `components/screens/request_screen.*` (§10.8.4) | **running on hardware**: §7's fields in a bounded queue of four, the tool and the command as the heaviest thing on the glass, a countdown that is the hook's rather than the device's, `+N waiting`, and a receipt afterwards that distinguishes a verdict from a card nobody answered. **Answered by the buttons** — `BOOT` allows, `PWR` denies and doubles as the way back to the clock — with §10.8.1's queued-touch guard in the shape a press has. Nothing on it is touchable, deliberately. The deciding half is `<cstdint>`-only and host-tested (23 tests, 16 of 16 mutations caught). **And now a bus behind it**: `components/responder` subscribes when it can actually answer, and `request test` is still there for when it cannot |
 | The clock face — `components/ui/clock_face.*` + `components/screens` (§10.8.2) | **running on hardware**: 24-hour seven-segment digits filled by a travelling wave, three indicators to the left of them (radio, bus, battery), the date under them, and the whole face drifting ±30/±40 px because the panel is an AMOLED. `--:--` rather than a plausible midnight when no believable time has arrived. `clock` on the console prints what is on the glass and why — which is how the drift and the water are checked without a camera. The deciding half is `<cstdint>`-only and host-tested (35 tests, 16 of 16 mutations caught); the painting half is LVGL and is the only file in the firmware that draws anything. It carries §10.15's one-line notice as well, under the date and for thirty seconds |
 | The Wi-Fi driver — `components/wifi` (§10.9) | **running on hardware**: two modes (access point, client), one network at a time, a latched link state, a disconnection reason turned into the three answers a person can act on, and a scan that works in both modes. It has **no opinions** — which network and when is the manager's, and that split is what makes the manager testable |
 | The internet check — `components/wifimgr/reachability.*` (§10.9) | **running on hardware**: once a minute, while there is a client link, an ICMP echo to one of a few addresses from `config.json` (8.8.8.8, 1.1.1.1, 9.9.9.9 by default). Three states — `unknown` is the honest one — two failed rounds to say offline and one reply to come back. `wifi ping` and `wifi check` on the console. **It never decides anything**: a link with no internet is reported, never a reason to change networks |
-| The Wi-Fi manager — `components/wifimgr` (§10.9) | **running on hardware, and tested on the host**: desired state (off / client / AP) against current, round-robin over the remembered networks with a growing capped backoff, sticky auth failures, and after N fruitless rounds a fallback access point that stays up for two minutes unless somebody attaches to it. `wifi` on the console. `wifi_policy.h` includes `<cstdint>` and nothing else, the way the navigator's does; the radio is lazily brought up, so a device with `wifi.active` false pays nothing for this existing. **It has joined a real network**, walked past one that refuses on the way, and come up on both DHCP and a fixed address — §10.9 has that run, and it is what makes the cycle, the fallback AP and the scan more than a proof against a network that does not exist. What no board has produced yet is a deliberate **auth failure**, which needs a network whose password is wrong on purpose |
+| The Wi-Fi manager — `components/wifimgr` (§10.9) | **running on hardware, and tested on the host**. It **lends its tick out** now (`OnTick`, §10.16): the web server has to come up when there is a network and go down before there is not, and it has nothing to do in between — so it borrows this task rather than paying 2.5 KB for one of its own, and the handler is called *before* the pump because the pump is what takes the network away. Desired state (off / client / AP) against current, round-robin over the remembered networks with a growing capped backoff, sticky auth failures, and after N fruitless rounds a fallback access point that stays up for two minutes unless somebody attaches to it. `wifi` on the console. `wifi_policy.h` includes `<cstdint>` and nothing else, the way the navigator's does; the radio is lazily brought up, so a device with `wifi.active` false pays nothing for this existing. **It has joined a real network**, walked past one that refuses on the way, and come up on both DHCP and a fixed address — §10.9 has that run, and it is what makes the cycle, the fallback AP and the scan more than a proof against a network that does not exist. What no board has produced yet is a deliberate **auth failure**, which needs a network whose password is wrong on purpose |
 | The limits screen (§10.8.3) — `components/ui/limits_view.*`, `components/screens/limits_screen.*`, `components/watcher` | **running on hardware, and every rule of it checked there**: it came up on its own when this repository's own status line published, went back to the clock 73 s after the last document, was dismissed by `PWR`, held that dismissal through ten more documents, dropped it when the stream stopped, and came back on the first document after. A subscription-less payload draws `7d --` with no fill at all, which is §9.7's "absent is absent" on the glass. **It arrives rather than being swiped to**, at the repository owner's request — that section says what changed and why `PWR` dismisses a burst rather than a message. The deciding half is `<cstdint>`-only and host-tested (21 tests, 10 of 11 mutations caught, and the eleventh has an answer) |
 | The touch test and the calibration (§10.8.5) — `components/ui/touch_cal.*`, `components/screens/touch_screen.*` | **written, and the on-glass half is not confirmed by hand yet.** A crosshair follows the raw point with both coordinates on screen, `BOOT` runs four crosses, the fit is applied at once and `config save` keeps it. Every refusal has its own sentence and leaves the correction in use alone. **Nothing on that screen is touchable and swipes do not navigate away from it**, because a bad correction would otherwise take away the screen that fixes it — `KEY` on the screen and `touch reset` on the console are the two escape hatches. The deciding half is `<cstdint>`-only and host-tested (22 tests, 16 of 16 mutations caught, one of which found a guard that had made another one unreachable). The panel it corrects is a *capacitive* one, so what this fixes is an offset and, if the film is on the other way round, a mirror — never the axes, which are `board.h`'s |
 | The power-off row (§10.8.5, §10.1) | **built, used once, and it led straight to §10.8.5's account of a board that would not come back** — which turned out to be the chip latched into the ROM's download boot rather than anything the row did, and which is cleared by holding `PWR` for six seconds and pressing it again. **Built, and the half that can be checked has been**: the row draws faint with `usb in` while the cable is connected, refuses a press before it arms, and the console's `screen` prints the same fact. Two presses when the cable is out, sharing the reboot row's arming flag — which belongs to the *selected* row, and that is a test. **The shutdown itself is unverified and cannot be from here**, exactly as §10.7 records for the console's `poweroff`: it needs the cable out, and with the cable out there is no console to watch it from |
-| The settings list and the status pages (§10.8.5) — `components/ui/settings_menu.*`, `status_pages.h`, `components/screens/settings_screen.*`, `status_screen.*` | **running on hardware, and every input confirmed by hand**: a swipe up or `KEY` held two seconds opens a four-row list — Wi-Fi and the touch test drawn faint with `soon`, status, and reboot — and `BOOT` steps it, `KEY` presses it, a tap does both, `PWR` goes back. Behind it three status pages: power (battery, rails, die temperature, and why the chip is awake), system (why it last restarted, uptime, heap low-water, radio, address, bus) and motion (six axes, the magnitude and the die), turned by `BOOT` or a tap. **Reboot asks twice** and the arming expires on its own. The deciding half is `<cstdint>`-only and host-tested (18 tests, 16 of 16 mutations caught — one of which survived until the test for the *button* route round the list existed). `screen` on the console is what photographs a list otherwise reachable only by a gesture |
-| The Wi-Fi screen (§10.8.6) | specified, not started — the manager underneath it is what exists |
+| The settings list and the status pages (§10.8.5) — `components/ui/settings_menu.*`, `status_pages.h`, `components/screens/settings_screen.*`, `status_screen.*` | **running on hardware, and every input confirmed by hand**: a swipe up or `KEY` held two seconds opens the list and `BOOT` steps it, `KEY` presses it, a tap does both, `PWR` goes back. **Seven rows now, five on the glass, and it scrolls with a finger**: `config save` and `config reload` joined it at the owner's request, which took the list past the height of the panel — so the rows live in an LVGL scroll container with momentum and a scrollbar, `BOOT` still steps the selection and scrolls it into view, and the title says `4 / 7`. A window that only the buttons could move was the first answer and the owner rejected it; what that cost is the swipe down that used to leave the screen, so a swipe *sideways* goes back now. Those two rows are §10.15's file reached by a finger: one press each, no arming, `drops unsaved` written on the reload before anybody presses it, and what happened said on the row for three seconds afterwards. Behind it three status pages: power (battery, rails, die temperature, and why the chip is awake), system (why it last restarted, uptime, heap low-water, radio, address, bus) and motion (six axes, the magnitude and the die), turned by `BOOT` or a tap. **Reboot asks twice** and the arming expires on its own. The deciding half is `<cstdint>`-only and host-tested (36 tests, 27 of 27 mutations caught — one of which survived until the test for the *button* route round the list existed, and two of which had to be re-aimed because `/W4 /WX` turned them into build errors rather than survivors). `screen` on the console is what photographs a list otherwise reachable only by a gesture |
+| The configuration web server (§10.16) — `components/web` | **running on hardware, reachable over the LAN, and measured**: `esp_http_server` over the pages in SPIFFS, with a *desired state* — `web off` / `web on` / `web auto`, `auto` meaning "only while this device is an access point" — reconciled on the Wi-Fi manager's own tick, so the server needs no task of its own and follows the network up and down without anybody typing. **6,824–6,940 bytes of heap while up, 46 KB of flash, and twenty start/stop rounds that came back to the byte** — which was the question worth asking before anything is built on top of it. **And there is a site on it now** (§10.16), in the order the owner asked for it: a mobile front page of buttons with the device's state under them — could it approve something, what has it approved, is it healthy — the whole `devstatus` dump, a restart that asks twice, a styled 404, and **the Wi-Fi and bus settings, which write**: a mode row, four network records with a scan to pick names out of, this device's own access point, one bus address, and Apply / Apply-and-save / reconnect. The write path is a **whitelist of fields** and passwords are write-only — an absent one keeps what is there, matched by name — so a form that never sees a key cannot lose one, which is checked on the board rather than argued. `web.write` in `config.json` refuses the whole of it; it is not authentication, and §10.3's boundary is unchanged. 38 KB of pages and about 14 KB more of flash. **And it did not work when it was first flashed**, which is the most useful thing in that section: a page hung, and the answer turned out to be neither the TCP window (lowering it made things worse and the finding is in `sdkconfig.defaults`) nor the socket count, but the Wi-Fi driver failing to allocate a transmit buffer — `wifi:m f null`, with the file already served and the packets nowhere. The fix was 16 KB taken off LVGL's static pool (64 → 48 KB, and all seven screens still build): the heap went from ~18 KB with the server up to **37.9 KB**, and a page with its script and an API poll now takes 0.08–0.47 s with 21.7 KB of margin. **Every page of it served over the LAN and every refusal a 404**, and the restart confirmed end to end — including the part that looks like a failure and is not: `web on` is memory-only, so after the restart `auto` leaves the server down on a client link. **One route writes, and it is the only one**: `POST /api/reboot?confirm=reboot`, allowed in first because a reboot takes nothing away that does not come back by itself — a `POST` so no link can reach it, needing a word so a stray one cannot either, and confirmation rather than authentication (§10.3 already put the boundary at the router). Nothing on it can reach a verdict (§10.10), and no setting can be written from it yet. What a URL may name is a **whitelist** — `config.json` shares that filesystem with the pages, so the whitelist is the thing that keeps a WPA passphrase off the network (52 host tests over what a URL may read and what a form may write, and the reboot's confirmation is a scan rather than a `strstr` because both `xconfirm=reboot` and `confirm=reboots` contain the word — 2 of 2 mutations caught there). **Two panics went into it, both about the same thing**: a socket needs the network stack for its whole life. Starting one before lwIP exists is an assert (a freshly flashed board, radio off); closing one after `esp_netif_destroy` has run is a jump to zero inside `esp_netif_free_rx_buffer` (`wifi mode off` under a running server). So it refuses to start without a stack, and it lets go *before* the radio does — which is why the manager ticks it ahead of its own pump. A page served over the LAN takes the low-water mark to 12,892 free and gives it straight back |
+| The Wi-Fi screen (§10.8.6) — `components/ui/wifi_view.*`, `screens/wifi_screen.*`, `screens/wifi_scan_screen.*` | **running on hardware, and both screens photographed**: the mode read off the config, `network 1/3` between two arrows, the name and the password whole, and a scan that turned 8 access points on the air into 6 rows — the hidden ones and a duplicate name dropped, which is that rule performed rather than argued. It is the owner's screen rather than the one that section first specified: a mode row that cycles off / client / ap, one record at a time — the access point's own name and password, or one remembered network's — arrows that step between them, and a row that opens the list of what is on the air, where a name is picked into the record that was on the glass. **No keyboard**, so a password is read and never typed, and **no way to add a network**, which is the owner's instruction and the reason the scan row refuses with a sentence when there is no record to fill. Every edit is memory-only, like every other setter (§10.15); the mode is the one that takes effect at once, because `wifimgr` re-reads it every pass. The deciding half is `<cstdint>`-only and host-tested (42 tests, 20 of 20 mutations caught, one of which had to be aimed at the *header* — the trap §10.11 already records once). The keyboard's own design stays below, in millimetres, and it is still **not** `lv_keyboard`. The host preview could not stand in for the panel here — its LVGL is built without Montserrat 28, so a render would have measured a different font — so the layout was checked with §10.12.2 instead, and the two things the board found are at the end of that section |
 | Where the configuration lives (§10.15) | **decided**: all of it in JSON on SPIFFS, nothing of ours in NVS — with the cost stated (SPIFFS cannot be encrypted at rest). `spiffs_image/config.json` + `config.init.json` are flashed, and `components/config` is what reads them |
 | The `KEY`-at-boot config restore (§10.15) | **running on hardware, three times over**: `KEY` held through a boot put `config.init.json` back over `config.json` at 5,001 ms — before the parse, which is the whole point — left `registration.json` untouched and the device still registered, and said so in three places: a log line at the time, `config restored` under the clock, and a `boot` line `config` keeps printing for the rest of the uptime. The deciding half is host-tested (9 tests, 5 of 5 mutations caught). **The screen half is where the board earned its keep**: the console said the notice was up and the glass was empty, because the label hung outside its parent and `LV_OBJ_FLAG_OVERFLOW_VISIBLE` does not do what its name suggests — §10.15 has that finding |
-| Host-tier tests (§10.11) — `host_test/` | **running**: 555 Unity tests over `ui` (the navigator, the clock face, the request card, the limits, the settings list and the panel's idle timer), `protocol` (§7's signing bytes, its wire format, §6's registration exchange and §9.7's status document), `i2cbus`, `pmic`, `rtc`, `imu`, `audio`, `config`, `buttons`, `timezone`, `speaker`, `wifimgr`, `timesync`, `nats` and the parity vectors, one command, no board. The drivers are compiled **unmodified** against a fake ESP-IDF (`host_test/fakes/`), which is §10.14.3's owed fake backend arriving in a different shape than that section specified, and which now covers I²S and a filesystem as well as the I²C wire. Built by MSVC rather than by ESP-IDF's `linux` target, which does not work on a Windows host — §10.11 records why |
+| Host-tier tests (§10.11) — `host_test/` | **running**: 669 Unity tests over `ui` (the navigator, the clock face, the request card, the limits, the settings list, the Wi-Fi screen and the panel's idle timer), `web` (what a URL may reach), `protocol` (§7's signing bytes, its wire format, §6's registration exchange and §9.7's status document), `i2cbus`, `pmic`, `rtc`, `imu`, `audio`, `config`, `buttons`, `timezone`, `speaker`, `wifimgr`, `timesync`, `nats` and the parity vectors, one command, no board. The drivers are compiled **unmodified** against a fake ESP-IDF (`host_test/fakes/`), which is §10.14.3's owed fake backend arriving in a different shape than that section specified, and which now covers I²S and a filesystem as well as the I²C wire. Built by MSVC rather than by ESP-IDF's `linux` target, which does not work on a Windows host — §10.11 records why |
 | Protocol parity vectors (§10.11 tier 2) | **done, and it has two halves in two languages**: `tools/make_vectors.py` generates `host_test/vectors/parity_vectors.h` (six §7 decisions, six §6 replies) and `components/crypto/selftest_vector.h` (§10.6's Ed25519 vector) from `approver/protocol.py` and `lib/crypto.py` themselves; both are committed, so the build needs no Python. `test_vectors.cpp` runs the firmware's assemblers over them, and **`tests/test_esp32_vectors.py` is what stops them going stale** — it regenerates on every `pytest` run and fails if the committed files are not what today's Python produces. The three pasted literals this replaced are gone from `test_signing.cpp`, `test_registration.cpp` and `device_key.cpp`. Mutation-checked from both ends: a swapped field in `protocol.py` fails the guard, a dropped separator in `signing.cpp` fails the vectors |
 | Device-tier tests (§10.11 tier 3) — `tests/test_esp32_device.py` | **written, and half of it has run against the board**: one press produces a reply `hook.verify_reply` calls trusted, and every tamper is asserted on that reply without a second press — the verdict flipped, each of §7's six echoed fields changed in turn, the `key_id` renamed, the signature removed. `scripts/esp32-approval.cmd` is the one command, and `AI_REMOTE_ESP32_DEVICE=1` is what stops an unattended `pytest` quietly testing the software responder instead. **§10.10's half is confirmed on hardware**: a card nobody pressed produced no reply at all in 20 s and the hook fell back. The pressed half needs a finger and has not been run since it was written |
 
@@ -416,6 +431,7 @@ In-tree, arriving with ESP-IDF itself and needing no new supply chain:
 | `nvs_flash` | **nothing of ours** (§10.15) — initialised because `esp_wifi` needs it for calibration and PHY data |
 | `esp_hmac`, `efuse` | the key custody of §10.6 |
 | `esp_console`, `esp_vfs_usb_serial_jtag` | the provisioning commands of §10.7 |
+| `esp_http_server` | the configuration web server of §10.16 — **in-tree, so not a new entry on root §1's list**, which is why §10.8.6 named it as the cheap way round a 6 mm keyboard. 46 KB of flash when it is linked, measured either side |
 | `esp_lcd`, `driver` (I²C/SPI), `esp_timer`, `esp_event` | display transport, buses, the clock |
 
 **cJSON left the framework, and that is the first thing v6.0.2 has actually
@@ -1183,10 +1199,15 @@ one arrives with the numbers:
 | 10.8.2 | **Clock** — home | the screen it returns to from everywhere | be the thing on the desk for 99 % of its life, and admit in one glyph whether it could answer a request right now |
 | 10.8.3 | **Limits** | swipe left/right from the clock | the §9.7 `status` document: which model is answering and how much of the 5h / 7d windows is spent — present only while a Claude Code session is actually publishing |
 | 10.8.4 | **Request** | **a message on `approvals.*`** | the one screen the device exists for |
-| 10.8.5 | **Settings** | a swipe up, or `KEY` held two seconds — from the clock **and from the limits**, which arrive on their own | a short list of places to go: Wi-Fi, the status pages, the touch test, and reboot |
+| 10.8.5 | **Settings** | a swipe up, or `KEY` held two seconds — from the clock **and from the limits**, which arrive on their own | a short list of places to go — Wi-Fi, the status pages, the touch test — and three things to do: save the settings, reload them, and restart. Seven rows, five of them on the glass at a time |
 | 10.8.5 | **Status** | from Settings | three pages of what the board is doing — power, system, motion — for the questions a console answers and a desk object cannot |
 | 10.8.5 | **Touch** | from Settings | show where the finger is, and correct it — the one screen that has to work while the thing it tests does not |
-| 10.8.6 | **Wi-Fi settings** | from Settings | scan, pick, type a password, forget a network (the machinery is §10.9) |
+| 10.8.6 | **Wi-Fi** | from Settings | the mode, and one record at a time: the access point's own name and password, or one remembered network's (the machinery is §10.9) |
+| 10.8.6 | **Networks** | from Wi-Fi | what is on the air, and a name picked out of it into the record that was on the glass |
+
+The last two are one level deeper than the rest — settings, then Wi-Fi, then the
+list — and each `PWR` is one level of it, which is the rule §10.8.5 already keeps
+for the status pages.
 
 None of them needs a board to be drawn: §10.12.1 renders LVGL on the host and
 returns a picture — with the caveats stated there about what a picture proves.
@@ -1908,9 +1929,11 @@ that had been sitting here unbuilt:
 
 | Entry | What it is | State |
 |-------|------------|-------|
-| Wi-Fi | → §10.8.6 | on the list, **not built** — the only row left |
+| Wi-Fi | → §10.8.6 | **built** |
 | Status | three pages of what the board is doing, below | **built** |
 | Touch test | a crosshair that follows the finger, and a four-cross calibration behind it | **built** |
+| Config save | `config save`, with a finger in front of it (§10.15) | **built** — and the row that made the list longer than the panel |
+| Config reload | `config reload`, which drops every edit that has not reached the file | **built** |
 | *(a few more, later)* | the owner's words: "пока непонятно, потом чтото добавим" | **deliberately not drawn** |
 | | the last two are the rows that *do* something rather than opening something, and they are last in that order on purpose: the further down, the harder to undo | |
 | Reboot | restarts the device | **built** |
@@ -1959,6 +1982,112 @@ them does nothing.
 Found by trying to reach the list on a board that was watching this repository's
 own status line. It is the same action reaching the same place, so it is not a
 second way in; what changed is that the first one stopped being reachable.
+
+##### The settings file, from the glass — and the list that outgrew the panel
+
+**Two rows, at the repository owner's request**: `config save` and `config
+reload`. They are this repository's own console commands with a finger in front of
+them, and the reason they are worth a row is §10.15's rule rather than
+convenience — *every* setter in this firmware writes to memory and `config save`
+is what reaches the filesystem. So until these existed, a Wi-Fi mode picked on the
+glass (§10.8.6) and a touch correction made with four presses (§10.8.5) both
+needed a USB cable to survive a reboot, on a device whose whole point is that it
+does not need one.
+
+Three decisions in them, and only the first is obvious:
+
+- **one press each, and neither arms.** The arming below means exactly one thing —
+  *this takes the device away from whoever is looking at it* — and a mechanism
+  that means one thing is worth more than a mechanism that means "careful, in
+  general". A save is idempotent. A reload does have a cost, and it is **written
+  on the row** rather than asked about afterwards: `drops unsaved`, drawn before
+  anybody touches it, which is the same call this section already makes about
+  `usb in` on the power-off row;
+- **what happened is said on the row**, for three seconds — `saved`, `reloaded`,
+  `failed`. A save that reached the filesystem and one that did not are the same
+  press from the glass otherwise, and the console's `config` readout is not on the
+  panel. It belongs to the visit it happened in, so leaving the screen drops it:
+  coming back to `saved` on a row nobody has pressed this time is a readout about
+  a moment that has gone;
+- **and the work happens off the LVGL lock.** `Activated` is reached from the
+  button poll *and* from the tap handler, and that one runs inside the display
+  lock — while `config::Save` writes a file and `config::Reload` reads one and
+  then hands every subsystem holding a copy of a field its new value. So the press
+  records what to do and the task loop does it a tick later, which is §10.8.1's
+  rule about the LVGL task arriving on a row rather than on a signature.
+
+**And the reload re-applies what a reload has always re-applied, through a hook
+rather than a second list.** The console's `config reload` used to be followed, in
+`console.cpp`, by the list of everybody holding a copy of a field: the codec's
+volume, the Wi-Fi manager's network list, the clock's sync interval, the bus's
+URL. That was one caller, so it was fine there. There are three now — this row,
+the console, and §10.15's boot restore — so the list moved to
+`config::OnChanged`, registered by `main` and called by `Reload` and `Restore`
+themselves. Which is the fifth inversion of this kind in this firmware, after
+`screens::OnDecision`, `wifimgr::OnTick` and `web::SetDiagnostics`, and it is what
+makes a reload from a finger and a reload from a cable the same reload. It also
+picked up `web::Apply`, which nothing had ever called: `web.mode` was re-read at
+boot and never again.
+
+**The list is now seven rows, and seven do not fit.** At the stride
+`settings_screen.h` draws them at, seven rows are 624 pixels of list on a
+480-pixel panel — and that header's `static_assert` refused the build rather than
+letting anybody discover it on the glass, which is exactly what it did when the
+*fifth* row arrived.
+
+**The first answer was a window of five that the selection dragged along with it,
+and the owner threw it out in one sentence**: "экран настроек скролится только
+кнопками. надо сделать чтоб скрол был жестами". Which is right, and the mistake is
+worth naming rather than quietly fixing — a window is what you build when the
+scrolling is yours to implement, and on a touchscreen it is not: a list is a thing
+people expect to drag. The window worked and it was reachable only from `BOOT`.
+
+So **LVGL scrolls it**. The rows live in a scroll container that fills what is
+left under the title, vertical only, with a scrollbar on `AUTO` and LVGL's own
+momentum and elastic ends:
+
+| | |
+|---|---|
+| a finger | drags the list, with momentum — LVGL's, not ours |
+| `BOOT` | steps the selection as it always did, and `lv_obj_scroll_to_view` brings it onto the glass. **Only when it moves**: scrolling to the selection on every repaint would fight the finger that had just dragged the list somewhere else |
+| a tap | a **row**, and that is the whole simplification — every row is its own widget carrying its own index, so the slot-to-entry mapping the window needed is gone and with it a bug class: a tap on the third slot is not a tap on the third row |
+| the title | still says `4 / 7`; `screen` on the console says which five are on the glass, read off the scroll offset |
+| coming back in | the top, which is `SettingsMenu::Opened`'s rule for the selection and now the scroll's as well — a highlight on row one under a list still scrolled to the bottom would be a highlight nowhere |
+
+**What it cost is the swipe that used to leave this screen, and something had to
+replace it.** LVGL suppresses a gesture while anything is scrolling
+(`indev_gesture` returns early on `scroll_obj`), so on this screen a vertical drag
+is the list and never reaches the navigator at all — including at the ends of the
+list, because a container with content out of view stays the scroll target and
+merely shows an elastic bounce. `PWR` and the title were always the other two ways
+out, and a list a thumb can drag and cannot leave is a list people get stuck in, so
+**a sideways swipe now goes back** — both directions, for the reason the clock's own
+carousel gives: a swipe that works one way and not the other reads as a broken
+screen. A *horizontal* drag is not consumed by a vertically-scrolling container, so
+it still arrives. That is two navigator tests, and the older one that asserted "no
+swipe navigates away from settings" was rewritten rather than worked around.
+
+None of this reached `ui::SettingsMenu`, which went back to owning one thing: which
+row is selected. Deleting the window took eight tests with it — they were testing a
+mechanism, and the two properties worth keeping moved rather than vanished: *the
+selected row is on the glass* is `lv_obj_scroll_to_view`'s job now, and *a tap lands
+on the row under the finger* is true by construction.
+
+**What the board said, and it is the same sentence for the third time.** The list
+came up with seven rows, five on the glass, `1 / 7` in the title, and `config
+reload` **sharing pixels with its own note**: `drops unsaved` is thirteen
+characters, about 190 px at Montserrat 28, against a note column that starts 180 px
+into a 432 px plate — and the label is 200 px of it. §10.8.5 already records this
+about the status page's label column and §10.8.6 about the scan row; the answer is
+the same one each time, and it is not to widen the box. `edits lost`, measured on
+the glass afterwards rather than reasoned about. A layout constant is the one kind
+of mistake that looks fine in every test.
+
+The scroll container is on the glass with its scrollbar showing five rows of seven,
+photographed, and the console reads the offset back (`showing rows 1-5 of 7`).
+What is still owed is a **finger**: the drag itself, a row pressed, and the three
+seconds of `saved` are host-tested or LVGL's and have not been done by hand, because
+`screen` on the console deliberately cannot press a row or draw a gesture (§10.7).
 
 ##### Reboot and power off ask twice, and the console does not
 
@@ -2012,7 +2141,7 @@ Three, and each answers a different question rather than a third of one:
 | Page | What is on it |
 |------|---------------|
 | **power** | the battery and its voltage, whether it is charging, VBUS in and its voltage, the system rail, ALDO2 and ALDO3 with their states, the PMIC die temperature — and **why the board is awake**, which is the chip's own answer (§10.1) and not something the firmware participates in |
-| **system** | why the firmware last restarted (`esp_reset_reason`), uptime, free heap and the **low-water mark** rather than the current free heap (§10.14.1), the firmware version, the Wi-Fi state with its SSID, signal and channel, the address, and whether the bus is connected |
+| **system** | why the firmware last restarted (`esp_reset_reason`), uptime, **the free heap and its low-water mark on one line** — §10.14.1's point is that the first only means something next to the second, and they were two rows until the page ran out of them — the firmware version, the Wi-Fi state with its SSID, signal and channel, the address, whether the bus is connected, and **whether the configuration web server is up** (§10.16). That row's first word is now always the fact — `up, port 80`, or `stopped` with which of the three reasons — because it used to lead with `auto` / `on` / `off`, and the repository owner read it and said what it looks like from the desk: there was no state on the row, only a desired state. `auto` is a setting; `stopped` is what is happening |
 | **motion** | the three acceleration axes, the **magnitude** — the one line that says the other three mean anything, since at rest it must be 1 g (§10.7) — **the position in words** (`card-slot edge down`, `flat, screen up`), the three gyroscope axes, and the IMU die temperature |
 
 Rules it keeps:
@@ -2030,6 +2159,12 @@ Rules it keeps:
 - **it reads the IMU and that changes nothing about §10.13.** No gesture ever
   approves anything, and the way that stays true is that nothing on the approval
   path can see it: this is a readout, in the same class as `imu` on the console;
+- **the page holds nine rows, and it is full.** `kStatusRows` is nine and the
+  system page had exactly nine when §10.16's server needed a tenth — so the two
+  heap rows became one (`23364, low 17588`), which is what `status` on the console
+  has always printed on one line anyway. The next row to arrive will need a fourth
+  page rather than another merge, and that is a `StatusPage` value and a `Fill…`
+  function;
 - **a label has about eight characters of room**, measured on the glass rather
   than computed — and the column is clipped, so a ninth is a cut-off word rather
   than two words drawn on top of each other. `magnitude` was the ninth, and what
@@ -2250,13 +2385,71 @@ about 14 KB of it is these two screens' widgets. The screen task's own stack wen
 from 2,936 free to **2,672**, which is the `StatusFacts` local, and is still a
 margin.
 
-#### 10.8.6 Wi-Fi settings — the screen
+#### 10.8.6 Wi-Fi — the screen, and the list behind it
 
-The front of §10.9: a list of what was found, sorted by signal, each with a lock
-glyph and RSSI; the remembered ones marked; tap to join, long-press to forget.
-A password goes in through the LVGL keyboard, with a show/hide toggle — a
-mistyped WPA key and an out-of-range AP look identical otherwise. `Other…`
-takes a hidden SSID by hand.
+**What this section specified**, and it is still the end state: the front of
+§10.9 — a list of what was found, sorted by signal, each with a lock glyph and
+RSSI; the remembered ones marked; tap to join, long-press to forget. A password
+goes in on the keyboard below, with a show/hide toggle — a mistyped WPA key and
+an out-of-range AP look identical otherwise. `Other…` takes a hidden SSID by
+hand.
+
+**What shipped is smaller, and it is the repository owner's shape rather than a
+subset chosen here.** Two screens, and between them they answer the three
+questions somebody standing over the device actually has — what is this radio
+doing, which network is it configured for, and what else is out there:
+
+| | |
+|---|---|
+| **mode** | one row, cycling **off → client → ap → off**. Three states rather than the two the request named, because the shipped `config.json` has `wifi.active` false: a two-state row would switch the radio on the first time anybody pressed it and offer no way to switch it back off. It is also exactly `wifimgr::Desired`, which is what makes it one press rather than a mapping |
+| **one record** | the access point's own name and password in AP mode; one remembered network's in client mode. Both drawn in full, password included |
+| **arrows** | `‹ network 2/3 ›`, when there is more than one. They wrap, which is what lets `KEY` on that row be the whole stepper for an operator who is not touching the glass |
+| **a name off the air** | the row at the bottom opens the second screen: a scan, five rows at a time, and a press puts the name into the record that was on the glass |
+| **no keyboard** | so a *password* is read here and typed on the console (`wifi join`). The section below has that screen in millimetres and it is the piece of work still outstanding |
+| **no way to add a network** | the owner's instruction. It is why the scan row draws itself faint with `no record` on a device that remembers none, and refuses with a sentence rather than growing the list |
+
+Three decisions inside that are not obvious from the list:
+
+- **the mode takes effect at once and everything else does not**, which looks
+  inconsistent and is not. `wifimgr` re-reads the desired mode off the config on
+  every pass, so a press on that row *is* the radio changing; a name picked off
+  the air is an edit to a record whose password is still the old one, and
+  applying it would walk the network list and fail an association nobody asked
+  for. So: `config save` keeps it and `wifi retry` tries it, both said in the log
+  line, and the screen carries `in memory - 'config save' keeps it` where its
+  hint normally is. That is §10.15's rule for every setter, and the touch
+  calibration next door already follows it;
+- **the record shown follows `wifi.mode` and not `wifi.active`.** Off is a
+  statement about the radio, not about which of the two records the operator was
+  reading — so switching off leaves the access point's name on the glass, and
+  only the row above it changes. It is also why the caller writes `wifi.mode`
+  *only* when the new mode is not off: writing it anyway would move the record
+  under a press that was about the radio;
+- **an empty list and a refused scan are different screens.** A scan needs the
+  radio for a second or two and can be refused outright; `nothing on the air` and
+  `the radio refused` send somebody in different directions, which is §10.9's
+  rule about `unknown` being an honest state arriving on a screen.
+
+And two about where the work happens, both of them rules this firmware already
+had:
+
+- **the scan runs on a task of its own.** `wifimgr::Scan` blocks for a second or
+  two, and the screen task is the one that polls the buttons — the same argument
+  §10.8.1 makes about the chirp, and the same answer: a small task, a semaphore,
+  and a screen that says `looking...` in the meantime. It logs the stack it never
+  used on every scan, which is what turned 5,120 bytes of guess into 3,072 of
+  measurement — see the end of this section;
+- **a scan that comes back late is dropped.** The view ignores a result with no
+  scan in flight, and a generation counter drops one belonging to a *previous*
+  visit to the list — the rule `link_policy.h` and `sync_policy.h` both keep
+  about a result nobody asked for.
+
+What the console can and cannot do with it: `screen wifi` and `screen networks`
+open either (and the second one starts a scan, which is navigation rather than a
+press), and `screen` prints the mode, the record, the SSID and the state of the
+list. **It never prints the password** — §10.15 keeps a passphrase out of every
+log line and every console dump, and the glass is the one place it is meant to
+be, to somebody holding the device.
 
 Rules the screen has to keep because of what it is:
 
@@ -2269,7 +2462,143 @@ Rules the screen has to keep because of what it is:
   a request arriving mid-scan still preempts it (§10.8.1).
 - Joining is not blocking: the screen shows the state machine's state
   (`connecting… / wrong password / no such network / connected`) rather than
-  freezing on a spinner with no way back.
+  freezing on a spinner with no way back. **This one is kept as one line in the
+  header**, right of the title: `wifimgr`'s current state, or its *failure* when
+  the last attempt had one, because that section forbids spelling "wrong
+  password" and "no such network" the same way. Desired above, current here.
+
+##### Three things only the board could have said
+
+All three came out of flashing it and typing `screen wifi`, and the first is the
+kind of bug this document keeps finding in the same place — an *ordering*.
+
+- **The screen showed a mode and a record count from nowhere, for a frame.** The
+  readout was three lines that contradicted each other: `mode off`, `no networks`,
+  and an SSID printed live out of the config. `SyncWifi` runs near the top of the
+  task loop and the pending navigation is consumed further down, so on the pass
+  that *arrives* at this screen the sync had already looked, seen the settings
+  list, and declined to run — leaving the view on its own defaults until the next
+  pass. On the glass that is a tenth of a second of `off` / `no networks` before
+  it corrects itself, which is exactly the flicker the host suite has a test
+  against, arriving from the one direction the host suite cannot see. Every route
+  in goes through `Apply(ui::Nav)`, so that is where the sync belongs, and it is
+  there now.
+- **The scan task's stack was two thirds too big, and the log line is what said
+  so.** Two measurements, and the second is the one worth having: **604 bytes**
+  used for a scan with the radio already up, and **1,356** for a scan with
+  `wifi.active` off — where `wifimgr::Scan` brings the whole Wi-Fi stack up inside
+  this task and puts it back, which is the deep path and the only one that could
+  have justified the original number. 3,072 now, still more than twice the
+  measured peak, and 2 KB of RAM back on a device that runs with about 30 KB free.
+- **`from the air` became `scan networks`**, at the repository owner's request,
+  and the rename cost a layout change rather than a string: thirteen characters at
+  Montserrat 28 is about 200 px, and the row's right-hand note column started at
+  210 — so `no record` and the label would have shared pixels the moment a device
+  with no networks opened this screen. The column is 150 wide now. That is
+  §10.8.5's finding about the status page's label column, seen coming this time
+  instead of photographed after the fact.
+
+##### What is written, and the five decisions inside it
+
+The split is the one every screen here takes, and this is the sixth pair — with
+two screens on the painting side because there are two screens:
+
+| File | What it is |
+|---|---|
+| `ui/wifi_view.h/.cpp` | **`ui::WifiView`** — the mode cycle and its mapping onto `config.json`'s two fields, which record is on the glass, what each row's press means, and the scan list with its selection and its window. `<cstdint>`/`<cstddef>` only, so all of it is host-tested (§10.11) |
+| `screens/wifi_screen.h/.cpp` | three rows, two arrows, two values and a state line. No decisions |
+| `screens/wifi_scan_screen.h/.cpp` | five rows and a headline. No decisions |
+| `screens/screens.cpp` | where the two meet the world: the scan's own task, the record's strings read out of `config.json`, and the three ways in that all end at `Apply(ui::Nav)` |
+
+Five things are decisions rather than plumbing, and four of them are above. The
+fifth is small and would otherwise be rediscovered: **the arrows are their own
+touch targets and are taken before the row**, so a press on one steps the record
+without moving the selection — otherwise a later `KEY` would act on a row the
+operator never chose. Their click area is extended by 26 px, because a chevron is
+20 px wide and a fingertip is 100 (the millimetres are below).
+
+What it costs, measured rather than assumed: **7,551 bytes of flash** for the
+three new files, and **5,625 bytes of static RAM** — of which **3,072 is the scan
+task's stack** and the rest is the two screens' label buffers, the view's
+sixteen-entry list, and the driver's own results array. `libui.a` is 8,560 bytes
+now (all flash, as always) and `libscreens.a` 66,435.
+
+##### The keyboard is a 6×5 grid, and the reason is millimetres
+
+This section used to say "the LVGL keyboard" and mean `lv_keyboard`. It does
+not, and the argument is one number the rest of this document has never written
+down.
+
+**The panel is 38.8 mm across.** 2.16″ on the diagonal of a square 480×480 glass
+is a side of **38.79 mm** and a pixel pitch of **0.081 mm** — 12.4 px/mm, about
+314 ppi. Neither `board.h` nor anything in `docs/` records it (the vendor ships a
+schematic and a pinout, not a mechanical drawing), so it is derived from the one
+figure the product page gives — and it is written here because every decision
+below is that number in disguise.
+
+What it does to LVGL's own keyboard, **measured in the host preview (§10.12.1)
+at 480×480** rather than argued about:
+
+| `lv_keyboard` | Key | In millimetres |
+|---|---|---|
+| the bottom half (240 px) | 43 × 55 px | **3.5 × 4.4 mm** |
+| the whole screen (408 px) | 43 × 96 px | **3.5 × 7.8 mm** |
+
+**Height was never the constraint, and width cannot be bought with more of the
+screen**: a QWERTY row is ten columns whatever its height, and ten columns
+across 38.8 mm is 3.9 mm of pitch. A fingertip is 8–10 mm across, the smallest
+touch target anybody recommends is 7 mm, and at 3.5 mm the finger covers the key
+it is pressing and both of its neighbours. **None of that is the touch
+controller's fault** — the CST9220 reports the panel's own 480×480 grid and
+§10.8.5 corrects what offset there is. It is the hand, and no calibration
+addresses a hand.
+
+So the number of columns is chosen from the millimetres, and the layout follows
+from the columns:
+
+| Columns | Key | mm | |
+|---|---|---|---|
+| 10 (QWERTY) | 43 px | 3.5 | no |
+| 8 | 55 px | 4.4 | no |
+| **6** | **74 px** | **6.0** | ← **chosen**: the fewest columns that still hold the alphabet on one page |
+| 5 | 90 px | 7.3 | comfortable, and a second page for the tail of the alphabet |
+| 4 | 114 px | 9.2 | comfortable, at three or four pages |
+
+**Six columns by five rows is thirty cells, and the lower-case alphabet plus the
+four keys that matter is exactly thirty**: `a`…`z`, then shift, `123`, backspace
+and done. One page to type a password on, and one more for digits and symbols —
+rather than a keyboard that changes shape under the finger every third
+character.
+
+- **Alphabetical, not a QWERTY cut into six.** What a QWERTY layout buys is the
+  shape of its rows, and that does not survive being re-flowed six wide; what is
+  left is a scrambled alphabet. Somebody hunting a letter finds it faster in the
+  order they already know.
+- **A preview bubble above the pressed key**, the way a phone does it. At 6 mm
+  the finger hides the key it is on, and what is being typed is masked as well —
+  so without it a wrong letter is invisible twice over, and the operator learns
+  about it from `wrong password` a minute later.
+- **70 px of header and 410 of keyboard is 480 exactly**: the SSID and its
+  security on one line, what has been typed so far and the show/hide eye on the
+  next, and the grid under them. Nothing is left for the scan list, which
+  **settles** a layout question rather than losing one — entering the password
+  is its own screen, reached from the list, not a panel that rises under it.
+
+Two costs that are already paid, so that nobody re-argues them when this is
+built. **Montserrat 28 is enabled and, since §10.8.3, actually referenced**, so
+key labels at that size are free — 48 is the one that costs 97 KB the moment
+anything names it. And a thirty-key `lv_buttonmatrix` is a few hundred bytes of
+LVGL's 64 KB pool: the screen is built at boot and kept, like every other one
+(§10.14.1), which is also what keeps a half-typed password alive under a request
+card that preempts it (§10.8.1).
+
+**And the two ways round it stay, because 6 mm is workable rather than
+pleasant.** A 30-character WPA key is `wifi join` on the console (§10.9) — which
+exists, and is what this screen is competing with rather than replacing. The
+fallback access point is the other one, if serving a form from it is ever worth
+it: `esp_http_server` is in-tree, so it would cost no dependency under root §1,
+and a phone's keyboard beats 6 mm every time. What this screen buys is that
+neither has to be reached for to get a device onto a network.
 
 ### 10.9 Wi-Fi — the manager behind that screen
 
@@ -2395,7 +2724,10 @@ headless sensor. This board has a 480×480 touchscreen: pulling a phone, an app
 and a second radio into onboarding would be more moving parts to reach a worse
 result. The cost is honest — typing a 30-character WPA key on a touchscreen is
 unpleasant, exactly once per network — and it is the reason the keyboard gets a
-show-password toggle instead of a policy against showing it.
+show-password toggle instead of a policy against showing it. **§10.8.6 has that
+cost in millimetres now**, which is what turned "unpleasant" into a layout: this
+glass is 38.8 mm across, so `lv_keyboard`'s ten columns are 3.5 mm apart and the
+keyboard is a 6×5 grid of 6 mm keys instead.
 
 **The registration token still comes over USB** (§10.7). It is ~50 characters of
 base64 that must be transcribed exactly, it is minted on the host anyway, and a
@@ -2751,19 +3083,21 @@ Three tiers, and the first one is where nearly everything belongs:
    already here for §10.12.1's LVGL preview, CMake and Ninja ship with
    ESP-IDF. One command, in [`working-with-code.md`](working-with-code.md).
 
-   **What is under it today is the navigator, the three screens' arithmetic, all
+   **What is under it today is the navigator, every screen's arithmetic, all
    of §6 and §7's wire format, four of the five chips on the I²C bus, the
    settings file, the buttons, the zone table, the speaker, the Wi-Fi policy,
    the internet check, the clock's sync schedule, the bus link and the panel's
-   idle timer** — 555 tests, and the last row of the table is tier 2 living in
+   idle timer** — 669 tests, and the last row of the table is tier 2 living in
    the same binary:
 
    | Subject | What is pinned |
    |---|---|
-   | `components/ui` | every transition of §10.8's table; swipes that must *not* navigate on the settings and Wi-Fi screens; the settings screen being reachable from the clock **and from the limits, and from nowhere deeper** — §10.8.5 says what changed and what found it — and the Wi-Fi screen and the status pages only from settings, each backing out one level rather than to the clock; a request preempting all four screens without moving any of them; navigation vanishing entirely while the card is up; the screen underneath surviving both an answer and an expiry; the pending queue refusing a fifth arrival. Its `CMakeLists.txt` has an empty `REQUIRES`, which is not an omission — a navigator that included LVGL would be a navigator that needs a board |
+   | `components/ui` | every transition of §10.8's table; swipes that must *not* navigate on the settings, Wi-Fi or network-list screens; the settings screen being reachable from the clock **and from the limits, and from nowhere deeper** — §10.8.5 says what changed and what found it — and the Wi-Fi screen and the status pages only from settings, each backing out one level rather than to the clock; the network list **only from the Wi-Fi screen**, including not from itself, since that would be a way to reload it and lose the selection, and its own `kBack` landing on the record it was opened for rather than two levels out; a request preempting every one of those screens without moving any of them; navigation vanishing entirely while the card is up; the screen underneath surviving both an answer and an expiry; the pending queue refusing a fifth arrival. Its `CMakeLists.txt` has an empty `REQUIRES`, which is not an omission — a navigator that included LVGL would be a navigator that needs a board |
    | `components/ui` (the clock face) | §10.8.2's rules, and the sixth subject in this firmware that needs no fake. **The time**: an unset clock showing dashes rather than a plausible `00:00`, a year outside the RTC's own 2024..2099 refused at each end, the digits being 24-hour with their leading zeros, and a wall clock out of range showing dashes rather than rendering an hour of 74. **The three indicators**: a connected link never showing *no* bars, because an empty icon reads as "not connected"; the connecting animation never being blank; an access point and a switched-off radio both lighting none; no server configured being a shape rather than a red light; the two-minute traffic window opening on a delivery, closing on time, surviving the ~49-day wrap, **not** opening on the first reading of a counter that was already non-zero, and **not** opening on a counter that went backwards — which is a reconnect (§10.5) rather than a message; traffic never showing through a dropped link; and a battery percentage clamped, with negative meaning "nothing to ask" rather than empty. **The panel's own two**: the drift staying inside its box, reaching all four corners of it, never standing still, and being continuous across the millisecond wrap — the last of which is the only test that catches a cycle read as `now_ms % period`; and the water bounded away from both ends of the scale, travelling with the phase, varying down the face, and free of hard edges. Plus `Wave` interpolating rather than reading its 64-entry table flat, which is here because the mutation pass showed that breaking it was invisible through `Shimmer`. **And §10.15's notice**: shown when there is one, gone at its window to the millisecond either side of the boundary, and — the test that had to be strengthened before it tested anything — still right across the ~49-day wrap on **both** sides of it, since a window written `now < since + window` passes every check taken after the counter wraps and fails only in the moments just before |
    | `components/ui` (the request card) | §10.8.4's rules, and the ones where a test is worth the most. **What a card is allowed to be**: every refusal is its own case — a queue that is full, a field with no terminator in it (all seven, in one loop, so a field added later cannot skip the check), a request with no reply subject, one with no tool name — because a refused card is §10.10's fail-safe and a *shown* card is a question put to a human. **The queue**: the oldest is the one on screen, the bound is asserted equal to the navigator's, and room freed is room usable. **The press guard**: a press inside the first 300 ms is thrown away, a press that *began* before the card appeared is thrown away by the same comparison, the next card in the queue gets its own guard from scratch, and pressing nothing decides nothing. **The outcomes**: a press hands back the whole request the reply will have to echo; a card that timed out reads as a timeout and not as a deny; a request that waited past its own life is dropped without ever being shown; a missing TTL falls back to one that expires rather than to forever; the countdown floors at zero; and the ~49-day wrap lands inside a card's life. **The receipt**: it fades on its own, it is skipped when another card is waiting, and an arriving request outranks it. Plus the assertion the whole file is built around — **no amount of ticking produces a verdict** |
-   | `components/ui` (the settings list) | §10.8.5's rules, and nearly all of the value is in one row: **the two destructive rows are armed before they fire**, and every way of getting a single press to reach a restart or a shutdown is a case here — including the ones the second row added: a power-off refused while the cable is in and refused *before* it arms, an arming that belongs to the selected row rather than to the list, and the two rows being last and in the order of how hard they are to undo — the first press arming rather than going, the second one inside the window going, the arming expiring and the next press arming again, walking off the row clearing it *by either route* (a tap and the button take different paths, and only one of them was covered until a mutation said so), re-selecting the row that is already selected **not** clearing it — which is what makes a tap-tap work, since a touch reports both the selection and the press — leaving the screen clearing it, and the window measured across the ~49-day wrap on both sides of it. Then the list itself: it opens at the top, reboot is asserted to be the **last** row, the walk wraps and does **not** skip the rows with nothing behind them, a tap past the end selects nothing rather than clamping to an end it did not aim at, and a row with nothing behind it answers `kNotBuilt` rather than navigating. Plus the pager: three pages, wrapping, and back to the first when the screen is reopened |
+   | `components/web` | §10.16's whitelist, and the suite is almost entirely refusals — because the pages and `config.json` share one flat filesystem, so every one of them is about a WPA passphrase not leaving the device over HTTP. `/config.json`, `/registration.json` and every other `.json` refused because the extension is not on the list rather than because the name is on a blacklist; an unlisted extension refused; traversal in three spellings, including the percent-encoded one that nothing decodes; a name longer than SPIFFS can store refused **at the bound and one over it**; a buffer too small refused with the caller's buffer untouched (§10.2's rule about a refusal writing nothing); `/` being the index, with and without a query string; and the six files this site is made of all passing, `404.html` included — the server opens that one by name rather than from a URL, so nothing forces it through the whitelist and it is asserted to pass anyway. **And the reboot's confirmation**, which is a scan over the query rather than a `strstr` for one reason worth a test each: `xconfirm=reboot` and `confirm=reboots` both *contain* the word and neither confirmed anything, a path that spells it is not a query, and the comparison is case-sensitive like every other one in that file. Plus the content types, and that one is never null — that fallback is unreachable through the whitelist today, and is kept because "unreachable today" is not "unreachable". **And the write path** (§10.16), which is the only way anything outside this device changes what it does, so the suite is a list of things that must not get through: a field that is not on the whitelist refused **by name** — the touch calibration, the display, the clock, the audio, `wifi.rounds`, and `web.write` itself, which would otherwise make the read-only switch a suggestion — a mode that is not one of the three refused rather than guessed, a URL that will not parse, a string longer than its field refused rather than cut, a fifth network refused rather than dropped, a nameless one refused, an address with a leading zero and one with an octet over 255, and every one of them asserted to leave the settings **byte for byte** as they were. Then the four that are not refusals and carry the design: a password that was not retyped is kept **by name rather than by position**, an empty one clears it, a new network starts with nobody else's, and an address the form does not carry survives — that last one is a bug the board found by pressing Apply and watching a `192.168.1.42` disappear. Plus the four verbs, where a value that merely starts with one is not it. **And `web::ShouldRun`, which is four lines and two panics**: no network stack means no server in every mode, `off` stays off with a network, `on` is up on either kind of network, `auto` waits for an access point — and a radio that is merely *no longer wanted* takes the server with it while the stack is still up, which is the ordering that stopped `wifi mode off` rebooting the board |
+   | `components/ui` (the Wi-Fi screen) | §10.8.6's, and the suite divides the way the screen does. **The mode**, which is the one thing here that can switch a radio on: every combination of the two config fields, `active` false being off whatever the mode says, the cycle reaching all three states and coming round, and both directions of the mapping — because it is the caller that writes those two fields back. **The record**: the access point being exactly one whatever the network list holds, switching to it showing that one immediately rather than a frame later, switching *off* leaving the record alone — off is a statement about the radio — the arrows wrapping both ways, one record and none being different sentences, and a network forgotten from the console pulling the index back rather than leaving it past the end. **The scan row**, which is the owner's "you cannot add a network" as behaviour: nowhere to put a name is its own refusal, and an access point always has somewhere. **The list**: a scan in flight, an empty flat and a refused scan as three states rather than one, a hidden network with no name dropped, the same name twice dropped, a crowded flat bounded, an SSID that fills its field surviving with a terminator, the window following a selection that wrapped, a tap on an empty row saying it selected nothing — because on that screen a tap also picks — a stale scan ignored, and the list dropped on the way out. Plus the two that are about coming *back*: a fresh visit starts at the first record and a pick leaves the index where it was |
+   | `components/ui` (the settings list) | §10.8.5's rules, and nearly all of the value is in one row: **the two destructive rows are armed before they fire**, and every way of getting a single press to reach a restart or a shutdown is a case here — including the ones the second row added: a power-off refused while the cable is in and refused *before* it arms, an arming that belongs to the selected row rather than to the list, and the two rows being last and in the order of how hard they are to undo — the first press arming rather than going, the second one inside the window going, the arming expiring and the next press arming again, walking off the row clearing it *by either route* (a tap and the button take different paths, and only one of them was covered until a mutation said so), re-selecting the row that is already selected **not** clearing it — which is what makes a tap-tap work, since a touch reports both the selection and the press — leaving the screen clearing it, and the window measured across the ~49-day wrap on both sides of it. Then the list itself: it opens at the top, reboot is asserted to be the **last** row, the walk wraps and does **not** skip the rows with nothing behind them, a tap past the end selects nothing rather than clamping to an end it did not aim at, and a row with nothing behind it answers `kNotBuilt` rather than navigating. Plus the pager: three pages, wrapping, and back to the first when the screen is reopened. **And the two rows that reach the filesystem** (§10.8.5), where the value is in what they *do not* do: one press each and no arming, asserted in both directions, and their place in the order — after the screens, before the two that end the session. **The window**, because the list is longer than the panel: it is asserted that it *is* (`kEntryCount` against `kVisibleRows` — a suite that windowed a list which fits would be testing nothing), that the window stands still while the selection moves inside it, that it follows by one row rather than a page, that it comes back when the selection wraps, that the selected row is on the glass over *every* selection there is rather than at a sample, and — the one that would cost the most — that **a tap is a slot and not a row**: once the window has moved the two are different numbers, and using one as the other presses whatever is that far down the list. Then the outcome note: shown, expiring at its own millisecond, belonging to one row, replaced by the next press, dropped when the screen is left, and measured across the ~49-day wrap |
    | `components/ui` (the touch correction) | §10.8.5's, and the suite is mostly **refusals** — because a correction that is merely wrong is one the operator can see and redo, while one that is *badly* wrong takes away the screen it was made on. Every refusal is its own case and every one of them is asserted to leave the caller's calibration byte for byte as it was: an incomplete set, four presses in one place, a stretch nobody could want, a fit that would push a corner off the glass — and that they do not share a sentence, since "you tapped the same place four times" and "your screen is mounted sideways" send somebody in different directions. Then the arithmetic: identity changes nothing, a shift is recovered *and undone*, one bad tap out of four moves the answer by a few pixels rather than deciding it — which is why it is a least squares — a mirrored panel fits to a negative scale, and a corrected point is **clamped onto the panel**, because a point off the edge is one LVGL hit-tests against nothing. And the flow: the test mode records no points at all, a press too short or too long is not one, a fifth is ignored rather than overwriting a fourth, the result fades on its own across the ~49-day wrap, and abandoning a calibration leaves the one in use alone |
    | `components/ui` (the panel's idle timer) | §10.8.1's, and the twelfth subject in this firmware that needs no fake. **The two thresholds**: a dim at its own millisecond and not one before, reported as an edge rather than a level — the caller sends a QSPI command on every `true` — anything at all putting it straight back to the configured brightness, the wait measured from the last thing that happened rather than from the last time the screen was lit, and zero disabling either wait, which is an answer rather than a missing value. **The blank, which is the half with a condition on it**: it never happens lying flat however long the device is left, it happens standing on the USB edge, laying the board down while it is dark brings the screen back, and a hand-edited file whose sleep is shorter than its dim still switches the panel off — the stronger of the two statements winning rather than whichever is checked first. **And the two readings §10.13 says to measure rather than derive**: every one of that section's six positions, with the card-slot edge given as the numbers actually read off this board; a device on a corner or in a hand being *no* position at all, since the blank needs a statement and not the absence of one; a stand that leans back still counting; the noise of a board at rest not being movement, against the 0.02 g the magnitude really wanders; and a rotation about gravity being movement, which is what makes the check the whole vector rather than an axis at a time. **And the table itself, since it grew a second reader**: every one of the six positions naming itself, nothing dominant answering `kUnknown`, `StandingButtonsUp` asserted to be a *reading* of that table rather than a second opinion about it — the blank and the status page cannot disagree about which way up the board is — and every name short enough for the status page's value column, a bound this layer cannot see and which was **measured on the glass**: the first 21-character name was photographed and its rightmost lit pixel was column 479 of 479. Plus the pair that is about the console: a shorter wait typed in applying without an activity, and configuring **not** counting as one — and both waits measured across the ~49-day wrap, which for this subject is not a hypothetical, since reaching it means nobody touched the thing |
    | `components/buttons` (short and long) | §10.8.5's `KEY`: a press released early is short; one held to the threshold reports **long while the finger is still down**, which is the decision the class exists for; it reports it **once**, and the release afterwards says nothing — without which one press would open settings and immediately activate whatever row it landed on; the next press starts over; a button nobody is touching reports nothing at all; and the hold is measured across the ~49-day wrap |
@@ -2815,6 +3149,27 @@ Three tiers, and the first one is where nearly everything belongs:
    Four more needed no mutation, because they failed on the real code the
    first time they ran: §10.14.3 has two, §10.8.2 the third, and §10.8.1 the
    fourth.
+
+   **The Wi-Fi screen added twenty, all caught, and one of them had to be aimed
+   somewhere else before it was a mutation at all.** The nineteen that went
+   straight through: `active` ignored so that looking at the screen switches the
+   radio on, the mode cycle never reaching off, a press on the mode row not
+   moving the record with it, switching *off* moving it, the access point counted
+   as many records as there are networks, the index left past the end of a list
+   the console shortened, the scan list opened with no record to fill, a stale
+   scan accepted, a hidden network listed as a nameless row, the same name listed
+   twice, a full SSID losing its last character, both halves of the window
+   following the selection, a tap on an empty row claiming it selected something,
+   the note window written the non-wrap-safe way, an empty list picked from, a
+   fresh visit keeping the last one's record, and the navigator's two: the list
+   opened from settings and its way out skipping the Wi-Fi screen.
+
+   The twentieth is the useful one, and it is a trap §10.11 already records once:
+   `CanStep()` lives in the **header**, so a mutation aimed at the `.cpp` found no
+   pattern — and a mutation that reports "not found" is not a survivor and must
+   not be counted as one. Aimed at the header it is caught at once, by the test
+   that says one record is nothing to step through. The harness `os.utime`s every
+   file it restores, for the reason the paragraph above gives.
 
    **The clock's schedule added six**, all caught, and they are the six rules
    §10.8.2 spends its words on: the flap guard removed (a link bouncing then
@@ -3325,6 +3680,20 @@ RAM.** What costs is *holding* things: the responder's stack and slots, and
 134,901 for the library that does one primitive. The protocol was never the
 expensive part; the buffers §10.8.4 refuses to truncate are.
 
+**And the last of the screens is on now**, which closes that comparison:
+`ui/wifi_view.cpp`, `screens/wifi_screen.cpp` and `screens/wifi_scan_screen.cpp`
+are **7,551 bytes of flash** between them, and the static RAM they bring is
+**5,625** — of which **3,072 is one task stack**, sized for a blocking
+`wifimgr::Scan` and then *measured* rather than left at the 5,120 it was guessed
+at (§10.8.6 has both numbers). `libui.a` is **8,560 bytes**, still all flash, and
+`libscreens.a` **66,435** (31,191 of DIRAM). The app is **1,861,552 bytes**
+against the 2.5 MB slot.
+
+Read next to the paragraph below, it is the same shape a third time: the layer
+with every decision in it costs a kilobyte of flash and no RAM at all, and what
+costs is *holding* things — a task stack, sixteen SSIDs, and the label buffers
+that keep §10.8.4's promise never to truncate anything.
+
 And the two screens of §10.8.2 and §10.8.4, because they are the first data point
 for what three more of them cost: `libscreens.a` is **30,372 bytes** (10,770 of
 flash and 19,602 of DIRAM) and `libui.a` — the navigator, the whole of the clock
@@ -3467,6 +3836,487 @@ back out of the segment boxes of the PNG, at a drift of `+10,-8`.
 [`working-with-code.md`](working-with-code.md) has the one command;
 [`commands.md`](commands.md) has the wire format.
 
+### 10.16 The configuration web server — measured before it is trusted
+
+A page served off SPIFFS, over `esp_http_server`, started and stopped on demand:
+`components/web`, and `web` on the console. It exists because §10.8.6 arrived at
+a keyboard 6 mm wide and named the alternative in the same breath — a phone's
+keyboard, over the device's own access point — and because the repository owner
+asked the question that decides whether that is affordable at all: **what does it
+cost while it is up, and does stopping it give every byte back.**
+
+Both are answered, on this board, and the answers are the reason this section is
+short:
+
+| | |
+|---|---|
+| the server, while up | **6,824–6,940 bytes** of heap (the 24-byte spread between rounds is the allocator, not a setting) |
+| flash | **46,032 bytes**, app 1,861,024 → 1,907,056 of the 2.5 MB slot |
+| our own static RAM | 1,536 bytes — a 1 KB chunk buffer and a 512-byte JSON buffer, both in `.bss` |
+| **twenty start/stop rounds** | **+0 bytes end to end, and a 4-byte spread between the lowest and highest resting point** |
+| pages, in SPIFFS | `index.html` is 1,723 bytes of a partition with 9.8 MB free — the one part of this that is free |
+| **a page actually served, over the LAN** | the low-water mark went from 21,632 to **12,892** free while a browser pulled the page and the JSON — about 8.7 KB of pbufs, sockets and scratch on top of the server itself, and it came straight back afterwards. That is the number the arithmetic above could only bound |
+
+**So there is no leak**, which was the open question: `httpd_stop` on ESP-IDF
+v6.0.2 gives back the task, its stack and the socket database, twenty times in a
+row, to the byte. `web cycle` is the command that says so and it is kept rather
+than thrown away — the same experiment §10.9 runs on the Wi-Fi stack, and the
+same shape of answer: a spread with no direction is the allocator, a drift that
+grows with the rounds is a leak.
+
+One number in that run needs its own sentence, because it looks like a leak and
+is not: the **first** stop reported 168 bytes short. It came from the access point
+that had been raised two seconds earlier — a DHCP server and a beacon settling —
+and the twenty rounds that follow are flat at 27,180 bytes with the same AP up.
+A single before/after pair cannot tell those apart, which is the whole argument
+for cycling.
+
+#### The site — four pages, one column, a phone's width
+
+The single `index.html` this section started with was a table and a `<pre>` on one
+page: enough to answer "does the server work", which is what it was for. What is
+there now is the site the repository owner asked for, in the order they asked for
+it — **the front page of buttons, the `devstatus` page, the restart, and the 404**
+— with Wi-Fi and bus settings drawn on the list and marked `soon`.
+
+| File | What it is |
+|---|---|
+| `index.html` | the state of the device in three tables, and the buttons that go anywhere |
+| `devstatus.html` | the whole console dump, and a button that reads it again |
+| `wifi.html` | the radio's mode, the four remembered networks, this device's own access point, and what is on the air |
+| `nats.html` | one address, and what the bus is doing with it |
+| `reboot.html` | one action, asked for twice |
+| `404.html` | what a refusal and a missing file both look like |
+| `app.js` | **the stylesheet and every page's script**, in one file — and the shape of that is a memory decision rather than a taste one, below |
+
+**Mobile first and mobile only, deliberately.** This page exists to be opened on a
+phone that has just joined the device's own access point, one-handed: one column,
+58-pixel targets, nothing behind a hover, 16-pixel text in every input (anything
+smaller and iOS zooms the field), and 38 KB for the whole site. It is wide enough to
+look deliberate on a laptop and is not designed for one. No framework and no build
+step, for the same reason the firmware has no image decoder.
+
+**And each page is fetched on its own, which is the one piece of this that is
+architecture rather than styling.** No page carries a `<link rel=stylesheet>`; each
+has four lines of critical CSS in its head and one `<script src="/app.js">` at the
+end of its body, so a browser asks for the HTML, finishes it, and *then* asks for
+the script — one socket at a time. Three parallel requests for a page and its two
+files is precisely what this device could not survive, and the section below is that
+diagnosis. The cost is that `app.js` carries the stylesheet as a string and every
+page's script behind a `data-page` attribute: one file of 23 KB, cached for a day,
+instead of two of 12 that arrive together.
+
+Four rules it keeps, and each of them is the panel's rule rather than a new one:
+
+- **the palette is the panel's** (`screens/*.cpp`): near-black, the same greens,
+  amber for something that wants attention. A page that looked like somebody
+  else's product would read as somebody else's device;
+- **one lamp says the whole thing.** Top right, three states and not two: ready,
+  a reason worth acting on, or nothing has been asked of it — which is §10.8.1's
+  rule about the clock's own indicator, and the words come from
+  `responder::BlockerText` so the page never invents a diagnosis of its own;
+- **a field that did not arrive is a dash, not a zero**, and a battery that is not
+  there says `on usb` rather than drawing an empty gauge (§10.8.2 makes the same
+  call about the icon). The `devstatus` page keeps the last good dump when a read
+  fails, which is §10.8.3's rule about a document that did not arrive;
+- **rows with nothing behind them are drawn and disabled**, marked `soon`, exactly
+  as the settings list does it (§10.8.5). A link to a page that 404s would be
+  worse than a row that admits it.
+
+The front page's tables are the three questions this device is about, which is
+also what `/api/status` grew to answer: **could it approve something right now**
+(the bus, the registration, the subscription and what is blocking it), **what has
+it approved** (§7's counters, allow and deny apart rather than summed — a total
+hides the interesting half), and **is it healthy** (battery, uptime, heap beside
+its low-water mark, filesystem).
+
+Those counters could not come from a dependency, and the way round it is worth
+recording because it looks like over-engineering until you try the obvious thing:
+`web` cannot require `responder`, because `responder` requires `screens` and
+`screens` requires `web` for the row that says whether the server is up. A cycle
+in `REQUIRES` is a build that does not happen. So `main` fills a small struct
+through `web::SetApprovals` — the sixth inversion of this kind here — and the
+fields read zero on a device where nobody registered one.
+
+**What the board has actually done with it**, over the LAN at
+`192.168.11.134`, and it is the whole of the site rather than a sample: all six
+files served with their own content types (6,187 bytes of front page, 5,534 of CSS,
+3,906 of JavaScript, 3,375, 5,129 and 1,144 of the three other pages);
+`/api/status` answering the full 25-field document — `"bus":"connected"`,
+`"registered":true`, `"subscribed":true`, `"blocked_by":"nothing"`,
+`"battery":100`, `"battery_mv":4186`, `"usb":true`; `/api/devstatus` streaming
+5,031 bytes and sixteen sections through the `stdout` cookie; and **every refusal a
+404 with the page in it** — `/config.json`, `/registration.json`,
+`/config.init.json`, `/../config.json` and a name that simply is not there, all
+1,144 bytes of `text/html` and none of them telling the difference apart. 6,928
+bytes of heap while up, which is inside the 6,824–6,940 this section measured
+before the site existed: the pages cost flash and the filesystem, not RAM.
+
+#### The settings pages, and the write path §10.16 said it would need
+
+This section shipped read-only and named what a write would need first: "a writable
+config over HTTP is a way to point this device at another NATS server, and that
+needs the authentication question answered first". The repository owner then asked
+for the Wi-Fi and bus pages, which is the ordinary way that sentence gets tested.
+What was built is the narrowest thing that answers it, and the five rules are in
+`web_settings.h` next to the code:
+
+| | |
+|---|---|
+| `GET /api/settings` | **the same document the POST takes** — `wifi` and `nats` — so a form is filled from the answer and submits the answer. `writable` and the radio's current `state` travel with it |
+| `POST /api/settings` | a **whitelist of fields**, not a merge: `wifi.mode`, `wifi.ap`, `wifi.networks[]` and `nats.url`, and *anything else is refused by name*. The touch calibration, the idle timers, the clock and the display's brightness are all in the same file and none of them is reachable |
+| `POST /api/action?do=…` | the four verbs that are not a field: `save`, `reload`, `retry` (walk the network list again), `reconnect` (the bus) |
+| `GET /api/wifi/scan` | what is on the air, hidden names and duplicates dropped, for the picker |
+
+**The rule the whole thing hangs off is that a password can be written and never
+read back.** §10.15 keeps a passphrase out of every log line and every console dump,
+so a JSON document served over the LAN is out of the question — a record says
+`secured` and nothing more. Which leaves the problem of a form that must submit
+*something*: an absent or null password means **keep the one that is there, matched
+by SSID**, and an empty string means clear it. That is the difference between "I did
+not retype it" and "this network is open", and it is two tests. The page never sends
+a password box that was not typed in.
+
+**The same rule caught a bug the board found rather than a test**: an omitted `ip`
+block was *clearing* a static address, because the page has no address fields at
+all — so every Apply quietly forgot an address somebody had set from the console.
+Watched happening to a `192.168.1.42`. An absent block keeps what is there now, and
+`"static": false` inside one is how a network goes back to DHCP.
+
+Three more decisions worth stating:
+
+- **memory only, like every other setter** (§10.15). Applying changes the live
+  fields; `save` is its own action, so a mistaken or hostile write does not survive a
+  reboot on its own and `reload` is the undo;
+- **the bus is reconnected and the radio is not.** `nats::Apply` drops a connection
+  the operator is not looking at; `wifimgr::Apply` would drop the link the page
+  arrived over, mid-edit. So the network retry is a button, and it says on the page
+  that it may take the page away;
+- **`config.json`'s `web.write`** refuses the whole write path, `GET` included in the
+  answer (`writable: false`, and the pages grey themselves out and say why). It is
+  **not** authentication — anyone who can reach the server can submit the form,
+  exactly as anyone on that LAN can already read every permission request off the bus
+  (§10.3) — and it is the one switch a device on a network its owner does not trust
+  has. TLS with credentials stays the real fix. The field cannot be written through
+  the form, which is a test, and it is refused by the whitelist rather than by a
+  special case.
+
+**What the board did with it**, over the LAN: every refusal came back as itself with
+the field named — `{"error":"this device has no such setting","detail":"touch"}`,
+`"detail":"yes"` for a mode that is not one of the three, a `ws://` URL, a nameless
+network, and `web.write` itself; a scan answered with seven networks off the air; and
+then the case that matters — **the form as a browser submits it, every network with
+no password in it, applied and saved, left all four keys on the filesystem exactly
+as they were**, and the static address with them. `config` on the console is what
+says so.
+
+#### The one thing it can do without asking: `POST /api/reboot`
+
+This section used to say "nothing writes", and one thing does now, at the
+repository owner's request. Three rules make it defensible rather than merely
+convenient:
+
+- **it needs a word in the query** (`web_paths.h`), so a stray `POST` from a
+  scanner, a link somebody sent or a page reloaded by mistake is not a device that
+  restarts. It is **not authentication and must not be read as any**: §10.3 puts
+  the trust boundary at the router, so anybody on that LAN can send it;
+- **it is the safest write there is.** A reboot takes nothing away that does not
+  come back by itself in ten seconds — which is exactly §10.7's argument for the
+  *console's* `reboot` needing no confirmation word. What it can be abused for is a
+  denial of service, and §10.10 already accepts that class of thing from anything
+  that can reach the bus: ten seconds of a device answering nothing is a hook that
+  times out and a question that goes back to its own terminal. **It cannot produce
+  a verdict**, and that is the line this server does not cross;
+- **and it is two steps on the page**, like the row on the panel (§10.8.5) and for
+  the same reason: nobody typed anything to get here, so one tap must not restart a
+  device somebody else is using. The arming expires on its own after five seconds.
+
+Two details that are the hardware rather than the page. The response is sent and
+then the handler waits half a second before `esp_restart`, which is §10.7's finding
+about the console's `reboot` arriving at a port that goes down with the chip — the
+answer is sitting in a TCP buffer, and restarting on the next statement takes it
+with the stack. And the page treats a **dropped connection as the success case**,
+because from a browser a device that went down and a device that failed are the
+same silence; it then polls `/api/status` for a minute and says which of the two it
+turned out to be, including the honest third answer — that it may have come back on
+another address.
+
+Being a `POST` is load-bearing, not decoration: the file handler is registered for
+`GET` only, so every other route on this server is read-only *by construction*
+rather than by intent.
+
+**Confirmed on the board, in all four of its answers**: `POST /api/reboot` with no
+query is `400 {"ok":false,"error":"not confirmed"}`, and so is `?confirm=reboots` —
+the near-miss that a `strstr` would have accepted; `GET /api/reboot?confirm=reboot`
+is a 404, because there is no `GET` handler for it to reach; and the real one
+answered `200 {"ok":true,"rebooting":true}` and the device came back with the
+registration and every setting intact.
+
+And the thing that looked like a failure and is the design working: **the server
+did not come back with it.** `web on` is memory-only like every other setter
+(§10.15), so after the restart `web.mode` is `auto` again — and `auto` means "only
+while this device is an access point", which a device on a client link is not. The
+page waits a minute, says so, and names the honest third possibility (that it may
+be on another address). `config save` is what makes a server that comes back.
+
+#### What it serves, and the one clever thing in it
+
+Four routes: `/` and the files the pages are made of, `/api/status` — the numbers
+the front page shows, built with `snprintf` into a static buffer — the reboot
+above, and **`/api/devstatus`, which is the console's own dump, byte for byte**.
+
+That last one is the interesting one, and it exists because of §10.7's rule rather
+than in spite of it: `devstatus` is composed of the other commands rather than
+printing its own version of each, because "a second copy of the `power` readout
+would drift from the first the day somebody adds a field to one of them". A dump
+served over HTTP is exactly that temptation, at the scale of fifteen sections. So
+there is no second copy: `console::PrintDevStatus` prints with `printf` like every
+other readout here, and the server swaps `stdout` for the length of the call.
+
+**Which is only safe because of what the sink knows.** This firmware's libc is
+**picolibc** (`CONFIG_LIBC_PICOLIBC`), where `stdout` is *one global pointer* —
+not a per-task one — so for the few milliseconds the dump takes, every task's
+`printf` arrives at that sink, an `ESP_LOG` line from the screen task included.
+Two consequences, and the second is not cosmetic:
+
+- a foreign line landing in the middle of the response would be read as part of
+  the dump;
+- and it would reach `httpd_resp_send_chunk` **from a task that does not own the
+  request**, which is a socket written from two places at once.
+
+So the cookie records the task that opened it: its own writes become chunks, and
+anybody else's are forwarded to the real `stdout` — where they were going anyway.
+Nothing is interleaved, nothing is lost from the boot log, and the console is
+still there afterwards, which is checked rather than assumed. The stream is also
+deliberately **unbuffered**: a buffer would be shared with whatever foreign
+`printf` the global `stdout` catches, and the whole point of the cookie is that
+foreign text never lands in this response. The cost is one small chunk per
+`printf`, for a diagnostic nobody is timing.
+
+The dependency runs the way it has to: **`web` never mentions the console.**
+`cli` already depends on `web` for its command, so `console::Init` hands its
+printer over (`web::SetDiagnostics`) and the endpoint answers `503` until
+somebody does — the same inversion `screens::OnDecision` and `wifimgr::OnTick`
+make, for the third and fourth time in this firmware.
+
+**Measured, serving it over the LAN**: 4,827 bytes of dump, the heap's low-water
+mark at 12,644 free while it streamed, and the server task with **2,000 of its
+4,096 bytes never used** — which is what settles the 4 KB default against the
+house firmware's 8 KB (§10.14.4), on the heaviest handler there is: `devstatus`
+reads a dozen I²C registers through the lease and formats a few hundred lines.
+
+#### It is a wish, not a call
+
+The operator sets a **desired state** and the server comes up only when the
+network allows it — the repository owner's shape, and the same split §10.9 draws
+between what was asked for and what is happening:
+
+| | |
+|---|---|
+| `web off` | never |
+| `web on` | whenever there is a network — a client link or an access point |
+| `web auto` | **only while this device is an access point**, its own by request or §10.9's fallback one. That is the case the server exists for: nothing would have this device, so it became findable, and an operator has no other way in. On a working client link `auto` keeps it down and the seven kilobytes stay free |
+| `web.mode` in `config.json` | the same three words, and **`auto` is the default** — including for a file written before this field existed |
+
+Three things about that which are not obvious from the table:
+
+- **the reconcile runs on the Wi-Fi manager's tick**, not on a task of its own.
+  That manager already polls the radio five times a second and the server has
+  nothing to do between link changes — which is `components/watcher`'s argument
+  for having no task, arriving a second time. It cost a function pointer
+  (`wifimgr::OnTick`) instead of 2.5 KB of permanent RAM, and `wifimgr` still
+  knows nothing about what is on the other end of it;
+- **the console sets the wish and waits for the tick**, so the readout it prints
+  afterwards is the answer rather than the question — the same reason
+  `screens::Navigate` waits for the screen task to take a move;
+- **a failed start is not retried five times a second.** Five seconds, and typing
+  a mode clears the wait, because an operator who just asked for something expects
+  it tried now.
+
+**What it looks like on the board**, and both directions of it are the point:
+`web on` while connected to a network brought the server up inside one tick and
+printed `reach http://192.168.11.134/`; `wifi mode off` took it back down *before*
+the radio went, with `web` then saying `stopped - the radio is switched off`; and
+`wifi mode client` brought it back **by itself**, no command typed, as soon as the
+link returned.
+
+**What it is configured to, against `HTTPD_DEFAULT_CONFIG`**, and each of the four
+is a number this device cannot afford at its default:
+
+- **three sockets, not seven.** Each open one is a `sock_db` and an lwIP PCB, and
+  each *active* one can hold up to `CONFIG_LWIP_TCP_SND_BUF_DEFAULT` — 5,760
+  bytes — of pbufs in flight. A browser opens two or three for one page;
+- **LRU purge on**, which the default leaves off: with three sockets, a browser
+  that leaves one open would otherwise make the next request fail rather than
+  closing the oldest;
+- **priority 2, not 5.** At 5 it preempts LVGL (4) and the screen task (3) to
+  serve a page, and a page is never more urgent than the press on a permission
+  request (§10.8.1);
+- **the 4 KB stack kept**, where the house firmware of §10.14.4 raises it to 8 —
+  because its handlers put a 2,500-byte buffer *on that stack* and ours puts a
+  1 KB one in `.bss` (§10.14.1).
+
+#### The page that hung, and the 16 kilobytes it took to fix
+
+The site of the section above did not work when it was first flashed: a page loaded,
+then a second one hung, and the heap did not come back. It is the most useful thing
+in this section and the diagnosis went through three wrong answers, so it is written
+down in the order it happened.
+
+**What was observed.** An 11.7 KB page served *on its own* went out in 0.3 s and gave
+every byte back. The same page after two others timed out, and about 5 KB stayed
+gone. `web` reported `cost 22108 bytes while up` where §10.16 had measured 6,824.
+
+**The first wrong answer: the TCP window.** Three sockets able to queue
+`CONFIG_LWIP_TCP_SND_BUF_DEFAULT` (5,760) bytes each is 17 KB of in-flight data on a
+device with 18 KB free, and a browser opening three sockets for a page and its two
+files is exactly that. So the send buffer was lowered to 2,880 — and the result was
+*worse*: 2.4 KB took eleven seconds. Two segments of window against a peer that ACKs
+every second segment is a round trip per 2,880 bytes, and a slow socket is a socket
+held open longer, so the pressure went up rather than down. The value is back at the
+framework's default and `sdkconfig.defaults` carries that finding where somebody will
+reach for the knob again.
+
+**The second wrong answer: the socket count.** Two sockets instead of three, which
+bounds the same arithmetic more cheaply. It changed nothing: pages still hung.
+
+**What it actually was, and the device said it in four characters.** Watching the
+console during a fetch:
+
+```
+>>> fetching /index.html
+W (19924) wifi:m f null
+>>> failed after 12.6 s: timed out
+```
+
+`m f null` is the Wi-Fi driver failing to *malloc a transmit buffer*
+(`CONFIG_ESP_WIFI_TX_BUFFER_TYPE=1` — dynamic, from the heap). And the counters said
+`served 1 file(s), 2774 byte(s)`: the handler had read the whole file and handed every
+chunk to `httpd_resp_send_chunk` successfully. **The response was complete and the
+packets never left**, because there was no memory to put them in — at 10 KB free,
+fragmented, a 1.6 KB DMA-capable buffer is not there.
+
+So the problem was never the protocol, the window or the socket count. It was that
+this firmware had about 20 KB of heap with the server up, and a web server needs the
+radio to be able to allocate while it works.
+
+**The fix was 16 KB from LVGL.** `CONFIG_LV_MEM_SIZE_KILOBYTES` was the vendor's 64;
+that pool is a static buffer, so every kilobyte of it is a kilobyte the heap does not
+have. At **48 KB** the seven screens of §10.8 still build — the request card, the
+heaviest of them, was photographed afterwards — and the numbers changed like this:
+
+| | before | after |
+|---|---|---|
+| free at a fresh boot | 27,904–29,440 | **47,328** |
+| free with the server up | ~18,500 | **37,920** |
+| the low-water mark through a whole page and its script | 296–6,140 | **21,736** |
+| a page, its script and an API poll at once | timed out | **0.08–0.47 s each** |
+
+Two smaller things went with it, and they are worth the lines they cost: the chunk
+buffer is 512 bytes rather than 1,024, the settings body is 1,280 rather than 2,048,
+the scan list holds ten networks rather than sixteen, and the JSON document shares
+the body's buffer — no request is ever both. About 2.3 KB of `.bss` back.
+
+**The rule that came out of it**, and it is the one to keep: on this device the
+number that matters is **how many requests a page makes**, not how big any of them
+is. A 23 KB script on its own is fine; three 8 KB files at once is not. That is why
+no page here has a stylesheet link.
+
+#### What the board said, and one of them was a reboot
+
+- **`httpd_start` before lwIP exists is a panic, not an error.** §10.9 brings the
+  network stack up lazily — `esp_netif_init` and the netifs happen inside the
+  radio's first use — so on a freshly flashed device, where `wifi.active` is
+  false, `web on` walked into `assert failed: tcpip_send_msg_wait_sem (Invalid
+  mbox)` and rebooted the board. It refuses now, in two places: the component
+  checks `wifimgr::Snapshot::stack_up` — a field that exists because of this —
+  and the console prints the fix rather than the error code. That snapshot field
+  is the general lesson: **"is the radio ready" and "does the TCP/IP stack exist"
+  are different questions**, and everything that opens a socket wants the second
+  one.
+- **Closing a socket after its netif is destroyed is a null call, and that cost a
+  second reboot.** `wifi mode off` under a running server panicked with
+  `MEPC 0x00000000`, and the return address named it exactly: `lwip_close` →
+  `netconn_delete` → `netconn_drain` → `pbuf_free` → `esp_pbuf_free` →
+  **`esp_netif_free_rx_buffer`**, which calls the free-callback of a driver that
+  `esp_netif_destroy` had already taken away. So the rule is an ordering rather
+  than a check: **the server has to let go while the radio is still up and merely
+  no longer wanted.** Two lines make it true — the manager calls the tick handler
+  *before* its own pump rather than after, and `web::ShouldRun` takes
+  `network_wanted` (the radio is *supposed* to be up) as a separate input from
+  `stack_up` (it currently is). Both are host-tested; the first would otherwise be
+  a comment nobody could check.
+
+  Worth reading next to the assert above, because they are the same lesson from
+  either end: **a socket needs the network stack to exist for its whole life, not
+  just at `bind`.** Starting one before lwIP is an assert; closing one after lwIP
+  has been dismantled underneath it is a jump to zero.
+- **A full flash takes the device's settings with it.** Adding a page under
+  `spiffs_image/` means `idf.py flash` rather than `app-flash`, and that writes
+  `storage.bin` over the *whole* partition — so the live `config.json` (the real
+  networks and their passwords) and `registration.json` are gone, and the device
+  comes back on the factory defaults, unregistered. §10.15 designs for a config
+  that can be restored; it does not design for one that is overwritten by a
+  build. **`cat config.json` before a full flash** is the cheap habit, and
+  §10.12's flashing notes now say so.
+
+  **And there is a way round it that costs nothing**, used to flash the site onto
+  a registered board: read both files off the console, stage them over a copy of
+  `spiffs_image/` *outside the repository* — a real WPA key must never land in a
+  committed file — and run `spiffsgen.py` with the arguments the build itself uses
+  (they are in `build/build.ninja`: `0xae0000`, page 256, name 32, meta 4,
+  `--use-magic --use-magic-len`). Then `idf.py app-flash` and one `esptool
+  write-flash 0x520000` of that image. The device came back with its networks, its
+  pinned handler key and its registration date unchanged, which is a token not
+  minted and a registration not repeated.
+
+#### What it deliberately does not do yet
+
+- **Nothing writes a setting.** No form, no config endpoint — the pages read, and
+  the one action there is restarts the device (above). A writable config over HTTP
+  is a way to point this device at another NATS server, and that decision is
+  below.
+- **Nothing decides for the operator.** `web auto` is as close as this gets to
+  automatic, and it is deliberately about the *access point* rather than about
+  §10.9's window: the fallback AP going up is what raises the server, and its
+  expiry takes it down again, without the manager having to know that the web
+  server exists. What is still not wired is a *screen* for any of it — the Wi-Fi
+  screen of §10.8.6 has no row that says whether the page is up, and it should.
+- **It can never reach a verdict** (§10.10). It serves files and reports state;
+  the only path to `allow` is a human press on a card.
+
+#### The one rule that is not about memory
+
+**The pages and `config.json` are on the same flat filesystem.** SPIFFS carries
+`index.html` next to the Wi-Fi passphrase, the pinned handler key and the factory
+defaults — so a server that serves whatever is asked for hands the WPA password to
+anyone who types `/config.json`. §10.15's rule is that a password is a secret from
+the moment it is typed: never logged, never in a console dump. A URL is a wider
+audience than either.
+
+So `web_paths.h` is a **whitelist of extensions** rather than a blacklist of
+names: `.html`, `.css`, `.js`, `.png`, `.ico`, `.svg`, `.txt`, and nothing else.
+`404.html` is on that whitelist like any other page, deliberately — the server
+opens it by name rather than from a URL, and a file it may open under a rule the
+rest of it does not follow is exactly the hole this file exists to keep shut. A
+device flashed before that page existed falls back to the one-line answer, because
+a 404 that failed to be a 404 would be the confusing outcome.
+A secret added to that filesystem next year is refused by a rule that already
+exists rather than by somebody remembering to add its name. Two smaller rules come
+from the same place: **SPIFFS is flat**, so a name has no directories in it and a
+second `/` is refused outright — traversal is unrepresentable rather than
+defended against — and **nothing is percent-decoded**, because decoding is where
+the traversal bugs live. All of it is `<cstddef>`-only and host-tested (11 tests),
+and the suite reads as a list of things that must not leave the device.
+
+And the decision that is still open, which is the *write* path: a configuration
+endpoint needs either authentication (the house firmware answers this with
+`users.json` and basic auth) or, more likely for this device, **binding to the
+access-point interface only** — the server exists to configure a device that has
+no network yet, and on the LAN §10.3 already put the trust boundary at the router
+for *reading*. A writable config moves that boundary, and it should be moved on
+purpose.
+
 ### 10.13 Not in scope, but decided
 
 - **Build it in this order** — after the library layer of §10.14, which comes
@@ -3482,8 +4332,9 @@ back out of the segment boxes of the PNG, at a drift of `+10,-8`.
   none of that moved is the order for the rest, and step 2 is what is next:
   1. bus + registration + the **request** screen (§10.8.4) — the loop closes here,
      and until it does the rest is decoration;
-  2. **Wi-Fi** (§10.9) and its screen — until then, credentials compiled in or set
-     over the console;
+  2. **Wi-Fi** (§10.9) and its screen — **both done now**, the screen in the
+     reduced shape §10.8.6 records; a *password* is still set over the console,
+     which is the one part of this step the keyboard would finish;
   3. **clock** (§10.8.2) and **settings** (§10.8.5);
   4. **limits** (§10.8.3) — last, because it is the only screen whose removal
      leaves everything else working, which is also the test that it stayed a
@@ -4175,6 +5026,28 @@ knowing before somebody reads the two paragraphs as contradicting each other.
 The server's address is `nats.url` rather than `bus.url` for the reason the
 name suggests: there is one bus here and it is NATS, so an address reads as an
 address instead of as an abstraction with a single implementation.
+
+**`web.write` is the newest field and the only one that is a permission rather
+than a setting** (§10.16): false makes the configuration site read-only — the pages
+still draw, every form greys itself out and says why, and every `POST` answers 403.
+True is the shipped value in both files, because a configuration site that cannot
+configure anything is not what it was asked for; what it costs is that anybody who
+can reach the server can submit the form, which is §10.3's trust boundary and not a
+new one. It cannot be written *through* the form, which is a test.
+
+**And who is told when a reload replaces every field at once is a hook, not a
+list at each caller.** `config::OnChanged`, registered by `main`, called by
+`Reload` and `Restore` themselves — the codec's volume, the panel's brightness,
+the touch correction, the Wi-Fi manager's network list, the clock's sync interval,
+the bus's URL, the web server's mode. It used to be a block at the bottom of the
+console's `config reload`, which was correct while the console was the only
+caller; there are three now (that command, the settings screen's row of §10.8.5,
+and the boot restore), and three copies of that list is two of them going stale.
+Two things came out of moving it: a reload from a finger and a reload from a cable
+became the same reload, and `web::Apply` got called for the first time — `web.mode`
+was read at boot and never again. **`Init` deliberately does not call it**: at boot
+nothing it would tell exists yet, and `main` applies each of them explicitly in an
+order that is written down there.
 
 **Editing and persisting are two commands, deliberately.** `config set <field>
 <value>` writes the field and nothing else — the settable ones are `volume`,

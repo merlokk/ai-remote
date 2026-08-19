@@ -356,6 +356,49 @@ ffmpeg -y -i poweron.mp3 -ac 1 -ar 16000 -c:a pcm_s16le -map_metadata -1 -fflags
 required** — `app-flash` does not write the image, and the symptom is a device
 happily playing yesterday's file.
 
+**And the full flash takes the device's own files with it.** `storage.bin` is
+written over the *whole* partition, so a live `config.json` — the real networks
+and their passwords — and `registration.json` are gone, and the device comes back
+on the factory defaults, unregistered (§6 has what re-registering costs: a token
+minted on the host and typed over USB). §10.15 designs for a config that can be
+*restored*; it does not design for one overwritten by a build. So before a full
+flash:
+
+```
+cat config.json          # on the device's console, and keep what it prints
+cat registration.json
+```
+
+Learned the expensive way while adding a page for §10.16.
+
+**And there is a way to keep them, which is what the §10.16 site was flashed
+with.** Build the image from a staging copy rather than from `spiffs_image/`, with
+those two files put back into it — and stage it **outside the repository**, because
+a real WPA key in a committed file is a real WPA key in the history:
+
+```powershell
+# 1. read both files off the console (the snippet above), saving each as JSON
+# 2. stage: copy spiffs_image\ to a scratch directory, then overwrite
+#    config.json and registration.json there with what the device gave you
+# 3. the same spiffsgen the build runs — the arguments are in build\build.ninja,
+#    not guessed: size, page 256, name 32, meta 4, and both magic flags
+& 'C:\Espressif\tools\python\v6.0.2\venv\Scripts\python.exe' `
+    E:\esp\v6.0.2\esp-idf\components\spiffs\spiffsgen.py 0xae0000 `
+    <staging-dir> <out.bin> `
+    --page-size=256 --obj-name-len=32 --meta-len=4 --use-magic --use-magic-len
+
+# 4. the app, then that image at the `storage` offset from partitions.csv
+idf.py -p COM4 app-flash
+python -m esptool --chip esp32c6 -p COM4 -b 460800 --before default-reset `
+    --after hard-reset write-flash --flash-mode dio --flash-size 16MB `
+    --flash-freq 80m 0x520000 <out.bin>
+```
+
+Done this way the board comes back with its networks, its pinned handler key and
+its registration date unchanged — a token not minted and a registration not
+repeated. `ls` on the console is the check: the new files are there and
+`registration.json` is still 139 bytes.
+
 ## The host tests (§10.11, tier 1)
 
 One command, no board, nothing to install:

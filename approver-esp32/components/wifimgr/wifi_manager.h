@@ -63,6 +63,16 @@ struct Snapshot {
     wifi::Status radio;
 
     bool radio_ready = false;
+
+    // **Whether the TCP/IP stack exists**, which is a different question from
+    // whether the radio is ready and a much sharper one for anything that opens a
+    // socket: §10.9 brings `esp_netif_init` and the netifs up lazily, inside the
+    // first `StartClient` / `StartAp` / `Scan`. Before that, lwIP's mailboxes do
+    // not exist — and a `listen()` against them is an `assert` inside
+    // `tcpip_send_msg_wait_sem`, not an error code. §10.16's server is the first
+    // thing in this firmware that could reach it, and this is what it asks.
+    bool stack_up = false;
+
     esp_err_t radio_error = ESP_OK;
 
     // **Whether anything is reachable through the link**, which is a separate
@@ -101,6 +111,25 @@ void ApplyInternetCheck();
 void SetDesired(Desired desired);
 
 Snapshot Get();
+
+// --- Somebody else's tick (§10.16) ---------------------------------------
+//
+// **A hook, so that this manager can be the clock for something without knowing
+// what it is.** The configuration web server has to come up when there is a
+// network and go down when there is not, and it has nothing at all to do in
+// between — which is `components/watcher`'s argument for having no task of its
+// own, arriving a second time. This task already polls the radio five times a
+// second; lending that tick out costs a function pointer, and a task of its own
+// would have cost 2.5 KB of permanent RAM.
+//
+// The dependency runs one way, like `screens::OnDecision`: `wifimgr` holds a
+// pointer and never learns what is on the other end of it.
+//
+// **It is called with no lock of this manager held**, deliberately: the handler
+// is expected to call `Get()`, and that takes the same non-recursive mutex the
+// pump holds. One handler; setting a second replaces the first.
+using TickHandler = void (*)(void *user);
+void OnTick(TickHandler handler, void *user);
 
 // Ask about the internet now instead of at the next interval — the console's
 // `wifi ping`. Does nothing when there is no client link to ask through.

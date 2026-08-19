@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#0b0d0c">
+<title>device status</title>
+<style>html,body{margin:0;background:#0b0d0c;color:#d6ded8;
+font:16px/1.5 system-ui,-apple-system,sans-serif}
+body{padding:0 16px 40px}</style>
+</head>
+<body data-page="devstatus">
+<div class="wrap">
+<header>
+  <h1>Device status</h1>
+  <span class="lamp" id="lamp">reading&hellip;</span>
+</header>
+
+<p class="lead">
+  The <code>devstatus</code> dump, byte for byte &mdash; the same fifteen sections
+  the USB console prints, composed of the same commands rather than a second copy
+  of each. Every heading is the name of a command you can type.
+</p>
+
+<nav>
+  <a class="btn" href="/">
+    <span class="chev">&lsaquo;</span>
+    <span class="grow"><span class="name">Back</span></span>
+  </a>
+  <button class="btn" type="button" id="again">
+    <span class="grow"><span class="name">Read it again</span>
+      <span class="sub" id="taken">&nbsp;</span></span>
+  </button>
+</nav>
+
+<pre id="dump">reading&hellip;</pre>
+
+<footer>
+  It reads a dozen I&sup2;C registers through the bus lease and formats a few
+  hundred lines, so it takes a moment. Nothing in it is a secret: passwords and
+  keys are kept out of every dump on purpose.
+</footer>
+</div>
+<script src="/app.js"></script>
+</body>
+</html>

@@ -126,6 +126,12 @@ bool reported_failed = false;
 Action pending = Action::kNone;
 
 bool radio_ready = false;
+
+// Whoever asked to be told about every pass (§10.16). Written once at boot,
+// before the task exists, and read by it — so no lock: a pointer that changes
+// while the task runs is a design nobody asked for.
+TickHandler tick_handler = nullptr;
+void *tick_user = nullptr;
 esp_err_t radio_error = ESP_OK;
 bool started = false;
 
@@ -387,6 +393,22 @@ void Pump() {
 
 void Task(void *) {
     for (;;) {
+        // **Before the pump, and that ordering is a crash this cost us once**
+        // (§10.16). The handler's job is to let go of the network *before* this
+        // loop takes it away: `Pump` can decide, in one pass, that the radio is
+        // no longer wanted and call `radio.Stop()`, which destroys the netifs —
+        // and closing a socket after its netif is gone is a null call inside
+        // `esp_netif_free_rx_buffer`, not an error. Called afterwards, the web
+        // server was closing its listening socket into a netif that no longer
+        // existed, and the device rebooted with `MEPC 0x00000000`.
+        //
+        // **And outside the lock, which is the other half of the contract**: the
+        // handler reacts to the link state, so it asks `Get()` for it — and
+        // `Get()` takes the mutex the pump below holds. Inside it, this would be
+        // a deadlock on the first tick.
+        if (tick_handler != nullptr) {
+            tick_handler(tick_user);
+        }
         if (xSemaphoreTake(lock, pdMS_TO_TICKS(kPollMs)) == pdTRUE) {
             Pump();
             xSemaphoreGive(lock);
@@ -396,6 +418,11 @@ void Task(void *) {
 }
 
 }  // namespace
+
+void OnTick(TickHandler handler, void *user) {
+    tick_handler = handler;
+    tick_user = user;
+}
 
 Desired DesiredFromConfig() {
     const config::Wifi &wifi_config = config::Get().wifi;
@@ -510,6 +537,7 @@ Snapshot Get() {
     // deadlock nobody finds twice.
     if (radio_ready) {
         snapshot.radio = radio.Get();
+        snapshot.stack_up = radio.StackUp();
     }
     return snapshot;
 }
