@@ -76,42 +76,6 @@ characters or more &mdash; anything in between is refused by the radio.</p>
 
 </div>
 
-<script>
-(function () {
-  "use strict";
-  var D = window.Device;
-  var by = function (id) { return document.getElementById(id); };
-
-  var state = { mode: "off", networks: [], max: 4, writable: true };
-
-  function drawMode() {
-    var buttons = by("mode").querySelectorAll("button");
-    for (var i = 0; i < buttons.length; i++) {
-      buttons[i].className = buttons[i].getAttribute("data-mode") === state.mode ? "on" : "";
-    }
-  }
-
-  function drawNetworks() {
-    var box = by("networks");
-    box.innerHTML = "";
-    if (state.networks.length === 0) {
-      var empty = document.createElement("p");
-      empty.className = "hint";
-      empty.textContent = "None. This device will raise its own access point.";
-      box.appendChild(empty);
-    }
-    state.networks.forEach(function (network, index) {
-      var card = document.createElement("div");
-      card.className = "card";
-      card.innerHTML =
-        '<div class="card-head"><b>' + (index + 1) + '</b>' +
-        '<button class="drop" type="button" title="forget">&times;</button></div>' +
-        '<div class="field"><label>Name</label>' +
-        '<input class="ssid" type="text" autocapitalize="off" autocomplete="off" spellcheck="false"></div>' +
-        '<div class="field"><label>Password</label>' +
-        '<input class="pass" type="password" autocomplete="new-password">' +
-        '<button class="reveal" type="button">show</button>
-</div>
 <script src="/app.js"></script>
 </body>
 </html>

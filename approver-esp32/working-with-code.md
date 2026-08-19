@@ -372,33 +372,93 @@ cat registration.json
 
 Learned the expensive way while adding a page for §10.16.
 
+**Only a full flash does that, and most changes are not one.** `idf.py -p COM4
+app-flash` writes the app partition and nothing else, so a firmware change — no
+edit under `spiffs_image/` — needs none of what follows: the device keeps its
+files because nothing wrote over them. The staging below is for the case where a
+*page*, a sound or the splash changed and the board is one you do not want to
+re-register.
+
 **And there is a way to keep them, which is what the §10.16 site was flashed
-with.** Build the image from a staging copy rather than from `spiffs_image/`, with
-those two files put back into it — and stage it **outside the repository**, because
-a real WPA key in a committed file is a real WPA key in the history:
+with.** Read the two files off the console, build the image from a staging copy
+rather than from `spiffs_image/` with those two put back into it, and write only
+the `storage` partition. Stage it **outside the repository**: a real WPA key in a
+committed file is a real WPA key in the history.
+
+Step 1, and it is the one with a trap in it — read them back, and check what you
+read:
 
 ```powershell
-# 1. read both files off the console (the snippet above), saving each as JSON
-# 2. stage: copy spiffs_image\ to a scratch directory, then overwrite
-#    config.json and registration.json there with what the device gave you
-# 3. the same spiffsgen the build runs — the arguments are in build\build.ninja,
-#    not guessed: size, page 256, name 32, meta 4, and both magic flags
+$stage = "$env:TEMP\spiffs_stage"          # outside the repo, deliberately
+& 'C:\Espressif\tools\python\v6.0.2\venv\Scripts\python.exe' -c @'
+import serial, time, os, json, sys
+stage = sys.argv[1]
+s = serial.Serial(); s.port = "COM4"; s.timeout = 0.2
+s.dtr = False; s.rts = False          # the three-line form, always
+s.open()
+
+def cat(name):
+    s.reset_input_buffer()
+    s.write(("cat " + name + "\r\n").encode()); s.flush()
+    end = time.time() + 3.0; buf = b""
+    while time.time() < end:
+        buf += s.read(4096)
+    # **The port doubles the carriage returns**, and this is the whole trap: a
+    # file whose lines end `\r\n` arrives as `\r\r\n`, because the USB console
+    # translates the `\n` a second time. Undo that pair *first* -- the obvious
+    # `.replace("\r\n", "\n")` on its own turns each break into two.
+    text = buf.replace(b"\r\r\n", b"\n").replace(b"\r\n", b"\n")
+    head = ("cat " + name + "\n").encode()
+    return text.split(head, 1)[1].split(b"\napprover>", 1)[0]
+
+cfg, reg = cat("config.json"), cat("registration.json")
+c, r = json.loads(cfg.decode()), json.loads(reg.decode())
+print("config.json", len(cfg), "| networks:", [n["ssid"] for n in c["wifi"]["networks"]])
+print("registration.json", len(reg), "| key_id", r["key_id"], "| ts", r["registered_ts"])
+print("server_key", r["server_key"], len(r["server_key"]), "chars")
+open(os.path.join(stage, "config.json"), "wb").write(cfg)
+open(os.path.join(stage, "registration.json"), "wb").write(reg)
+s.close()
+'@ $stage
+```
+
+**Check the values, not the byte count.** `ls` on the console prints each file's
+size and comparing against it is the obvious check — `config.json` came back at
+exactly its 1,138 bytes here — but `registration.json` did not: 133 captured
+against 144 on the device, and the difference is line endings in whatever wrote
+it rather than anything lost. What matters is that the device *parses* the file,
+so what has to be right is the content: the `key_id`, a `server_key` of exactly
+44 characters and equal to the one `keys` prints, and `registered_ts`. Assert
+those three before writing anything, and a truncated capture cannot get past you.
+
+**And never print a password into anything that gets committed.** `config.json`
+carries the real WPA keys; the capture above puts them straight into a scratch
+directory and nowhere else, and the sizes and SSIDs are all it echoes.
+
+Then the image, and only the partition that changed:
+
+```powershell
+# the same spiffsgen the build runs -- the arguments are in build\build.ninja,
+# not guessed: size, page 256, name 32, meta 4, and both magic flags
 & 'C:\Espressif\tools\python\v6.0.2\venv\Scripts\python.exe' `
     E:\esp\v6.0.2\esp-idf\components\spiffs\spiffsgen.py 0xae0000 `
-    <staging-dir> <out.bin> `
+    $stage "$env:TEMP\storage-live.bin" `
     --page-size=256 --obj-name-len=32 --meta-len=4 --use-magic --use-magic-len
 
-# 4. the app, then that image at the `storage` offset from partitions.csv
+# the app if it changed, then that image at the `storage` offset from
+# partitions.csv -- 0xae0000 above and 0x520000 here are that file's own numbers
 idf.py -p COM4 app-flash
 python -m esptool --chip esp32c6 -p COM4 -b 460800 --before default-reset `
     --after hard-reset write-flash --flash-mode dio --flash-size 16MB `
-    --flash-freq 80m 0x520000 <out.bin>
+    --flash-freq 80m 0x520000 "$env:TEMP\storage-live.bin"
 ```
 
 Done this way the board comes back with its networks, its pinned handler key and
 its registration date unchanged — a token not minted and a registration not
-repeated. `ls` on the console is the check: the new files are there and
-`registration.json` is still 139 bytes.
+repeated. Three checks on the console, and each answers a different question:
+`ls` says the new files are there and the sizes moved the way you expected,
+`keys` says the pinned handler key and the registration date are the ones from
+before, and `wifi` says it rejoined a network it could only know from the file.
 
 ## The host tests (§10.11, tier 1)
 

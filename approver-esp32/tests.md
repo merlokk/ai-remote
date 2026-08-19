@@ -538,6 +538,27 @@ Three tiers, and the first one is where nearly everything belongs:
      under `/W4 /WX` is an error and inside a braced initialiser is ill-formed
      outright. The generator knows to write `INT64_MIN`, and that is the kind of
      thing a hand-pasted literal never taught anybody.
+
+   **And one guard on this tier that has nothing to do with the protocol.**
+   `tests/test_esp32_web_pages.py` reads the six pages of §10.16 off the disk and
+   checks how they are *wired*: no page carries an inline `<script>`, each loads
+   `app.js` exactly once, each `data-page` has a handler behind it, every element
+   that handler asks for by id is on that page, and every link between pages
+   resolves to a file that ships. It lives on this tier rather than in the Unity
+   suite because the pages are assets rather than code — nothing in
+   `components/web` reads them, and the C++ side can only say what a URL may
+   *reach*, never whether what it reaches works.
+
+   It exists because of a page that shipped broken and could not say so:
+   `wifi.html` had a truncated inline copy of its own script, and an unterminated
+   script block ends at the *first* `</script>` a parser meets — which was the
+   closing half of the shared `<script src="/app.js">` on the next line. So the
+   tag that loads the stylesheet and every page's logic was swallowed as script
+   text, and the page came up with none of the CSS, none of the fetches, no error
+   anywhere and nothing in the device's log. Its only symptom was that it did not
+   look like the other five. Mutation-checked the honest way, against the file
+   that actually shipped: the broken `wifi.html` out of git fails two of the five,
+   and the fixed one passes.
 3. **Device tier — opt-in, like §8.6's touch tests.** A board, a real bus, and a
    real `hook.py`: the acceptance test is a device-signed reply that
    `hook.verify_reply` returns `trusted=True` for, plus the same reply with

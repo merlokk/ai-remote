@@ -94,6 +94,22 @@ diagnosis. The cost is that `app.js` carries the stylesheet as a string and ever
 page's script behind a `data-page` attribute: one file of 23 KB, cached for a day,
 instead of two of 12 that arrive together.
 
+**And the one page that broke that rule looked like a different product, which is
+how it was found.** `wifi.html` shipped with an *inline* copy of its own script —
+a leftover from before the pages were consolidated into `app.js` — and that copy
+was truncated mid-string. HTML has no notion of an unterminated script: the parser
+ends the block at the **first** `</script>` it meets, which was the closing half of
+the `<script src="/app.js"></script>` on the next line. So the tag that loads the
+stylesheet and every page's logic was swallowed as script text, and the browser got
+one page with none of the CSS, none of the fetches and no error anywhere — a page
+whose *only* visible symptom is that it does not look like the others. The fix is a
+deletion: `app.js` already had the whole of `wifiPage`, ids and all. The rule to
+take from it is narrower than "do not duplicate": **a page with its own `<script>`
+block cannot fail safely on this site**, because the shared tag is what it takes
+down with it, so every page here carries markup and one script reference and
+nothing else. `tests/test_esp32_web_pages.py` is that rule as five assertions
+read straight off the files that get flashed (§10.11).
+
 Four rules it keeps, and each of them is the panel's rule rather than a new one:
 
 - **the palette is the panel's** (`screens/*.cpp`): near-black, the same greens,
