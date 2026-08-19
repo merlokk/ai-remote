@@ -245,7 +245,7 @@ YubiKey.
 
 ## `esp32-approval.cmd`
 
-The device tier of [`approver-esp32/CLAUDE.md`](../approver-esp32/CLAUDE.md)
+The device tier of [`approver-esp32/tests.md`](../approver-esp32/tests.md)
 §10.11 — the acceptance test for the firmware, and the only place in this
 repository where the key bound to that chip meets the allowlist Claude Code
 verifies against.

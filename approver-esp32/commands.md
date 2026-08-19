@@ -6,7 +6,8 @@ monitor uses. **How to open it** — the monitor command, the pyserial snippet f
 driving it from a script, and what to do when something else is holding the
 port — is in [`working-with-code.md`](working-with-code.md). **Why the console
 exists and why each command behaves the way it does** is in
-[`CLAUDE.md`](CLAUDE.md) §10.7. This file is the reference: what you can type,
+[`protocol.md`](protocol.md) §10.7 — and [`CLAUDE.md`](CLAUDE.md) is the map of
+which of these documents owns which section. This file is the reference: what you can type,
 and what happens.
 
 `help` lists everything; `<command> help` prints the forms where a command has
@@ -77,7 +78,8 @@ the threshold, and the firmware writes that threshold at every boot rather than
 trusting what it finds. And if the board ever comes up dark with a silent
 console, **hold `PWR` for six seconds and then press it**: that is a real
 power-on reset, and it is the only thing that clears the ROM's download-boot
-latch. `CLAUDE.md` §10.8.5 has the account of the day that mattered.
+latch. [`screens.md`](screens.md) §10.8.5 has the account of the day that
+mattered.
 
 ---
 

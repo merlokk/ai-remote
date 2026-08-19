@@ -1,8 +1,9 @@
 # Working with the code — the commands, and the toolchain on this machine
 
 Everything you actually type to build, flash, talk to the board, render a screen
-or regenerate a test vector. The **design** lives in [`CLAUDE.md`](CLAUDE.md) §10
-and stays there; this file is the mechanics, which have machine-specific answers
+or regenerate a test vector. The **design** lives in §10 — [`CLAUDE.md`](CLAUDE.md) is
+its map, and `hardware.md`, `protocol.md`, `firmware.md`, `screens.md`, `web.md`,
+`tests.md` and `build.md` own the sections between them — and stays there; this file is the mechanics, which have machine-specific answers
 and no place in a document made of decisions. Where a command exists because of
 a decision, the section number is next to it — follow it for the *why*.
 
@@ -207,7 +208,7 @@ prints `boot:0x15 (DOWNLOAD…)` and `waiting for download`; every reset esptool
 can send arrives as `rst:0x15 (USB_UART_HPSYS)`, which does not clear the latch,
 and `--after watchdog-reset` answers *"not supported on ESP32-C6"*. What clears
 it is a power-on reset: **hold `PWR` for six seconds, then press it briefly.**
-`CLAUDE.md` §10.8.5 has the whole diagnosis.
+[`screens.md`](screens.md) §10.8.5 has the whole diagnosis.
 
 **To capture a boot log you have to reopen the port**, because a hardware reset
 drops the USB device and takes any open handle with it. Loop on `serial.Serial()`

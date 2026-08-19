@@ -29,7 +29,7 @@ JetStream data lives on the named volume `nats_data` (mounted at `/data`, server
 
 **The server runs with `--max_payload=65536`, and that is a fail-safe for a
 device rather than a preference.** The default is 1 MB; the ESP32 responder
-([`approver-esp32/`](../approver-esp32/CLAUDE.md) §10.5) drops its socket on any
+([`approver-esp32/protocol.md`](../approver-esp32/protocol.md) §10.5) drops its socket on any
 message whose receive buffer its client library cannot allocate, which starts at
 128 KB — so on the default, anyone on this LAN could publish 1 MB to `approvals.*`
 in a loop and keep the responder reconnecting forever, with a real permission
@@ -72,7 +72,7 @@ trusted.
 
 **The client port is deliberately reachable from the home LAN** — decided so the
 ESP32 responder can reach it over Wi-Fi ([`approver-esp32/`](../approver-esp32/CLAUDE.md)
-§10.3), which is where the trade-off is argued. Read it as one sentence: *every
+§10.3, in that folder's own `CLAUDE.md`), which is where the trade-off is argued. Read it as one sentence: *every
 device on that Wi-Fi can read every permission request in cleartext, and the
 protocol survives that because a decision still cannot be forged.* The boundary
 is now the router, not loopback, so three things hold it up:
