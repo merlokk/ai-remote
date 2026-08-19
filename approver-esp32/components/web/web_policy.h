@@ -46,4 +46,32 @@ const char *Name(Desired desired);
 //     one thing `kAuto` waits for.
 bool ShouldRun(Desired desired, bool network_wanted, bool stack_up, bool ap);
 
+// What the reconciler should do on this tick -- and the answer is a value rather
+// than two `if`s inside `Maintain()` for one reason: the rule that was missing
+// from those `if`s is the rule that crashed the device.
+enum class Reconcile : uint8_t {
+    kNothing = 0,
+    kStart,
+    kStop,
+};
+
+// `ShouldRun` against what is actually up, plus the one input that is about
+// *ownership* rather than about the world.
+//
+// **`held` is the fix for a double free.** `Maintain()` runs on the Wi-Fi
+// manager's task, five times a second; `web cycle` -- the diagnostic that starts
+// and stops the server to measure what it gives back -- runs on the console's.
+// Both used to call `Stop()` directly, both read the same `g_server` pointer,
+// and two tasks passing the same null check is two `httpd_stop` calls on one
+// handle: `httpd_delete` frees the same four blocks twice and the fault lands
+// later, inside the allocator, in whichever task calls `free` next. §10.16 has
+// the panic and the decoded stack.
+//
+// So the diagnostic *takes* the lifetime for its duration, and while it is held
+// this answers `kNothing` whatever else has changed. That is also what makes the
+// measurement mean anything: with `web off` the reconciler used to tear down
+// each round the moment it went up, so every number was two things at once.
+Reconcile Next(Desired desired, bool network_wanted, bool stack_up, bool ap, bool running,
+               bool held);
+
 }  // namespace web

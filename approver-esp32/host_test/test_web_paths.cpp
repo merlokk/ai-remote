@@ -277,6 +277,72 @@ void test_every_wish_has_a_word(void) {
     }
 }
 
+// --- Who is allowed to change it, and when (§10.16) ----------------------
+
+void test_a_held_lifetime_freezes_the_reconciler(void) {
+    // **The rule a double free bought, and the reason this function exists at
+    // all.** `Maintain()` runs on the Wi-Fi manager's task five times a second
+    // and `web cycle` runs on the console's, and both used to call `Stop()`
+    // straight out. Two tasks passing the same null check is two `httpd_stop`
+    // calls on one handle, which is `httpd_delete` freeing the same four blocks
+    // twice -- and the fault surfaces later, inside the allocator, in whichever
+    // task happens to call `free` next. §10.16 has the panic.
+    //
+    // So the diagnostic takes the lifetime and this answers `kNothing` while it
+    // is held, over every combination of everything else -- because "the world
+    // changed underneath" must not be a reason to touch a server somebody else
+    // owns.
+    const web::Desired every[] = {web::Desired::kOff, web::Desired::kOn, web::Desired::kAuto};
+    for (web::Desired desired : every) {
+        for (int bits = 0; bits < 16; ++bits) {
+            const bool network_wanted = (bits & 1) != 0;
+            const bool stack_up = (bits & 2) != 0;
+            const bool ap = (bits & 4) != 0;
+            const bool running = (bits & 8) != 0;
+            TEST_ASSERT_EQUAL(web::Reconcile::kNothing,
+                              web::Next(desired, network_wanted, stack_up, ap, running, true));
+        }
+    }
+}
+
+void test_the_reconciler_is_quiet_when_the_world_already_agrees(void) {
+    // Up and wanted, or down and unwanted: a tick that acted on either would be
+    // a start on top of a running server (`ESP_ERR_INVALID_STATE`) or a stop of
+    // something that is not there, five times a second.
+    TEST_ASSERT_EQUAL(web::Reconcile::kNothing,
+                      web::Next(web::Desired::kOn, true, true, true, true, false));
+    TEST_ASSERT_EQUAL(web::Reconcile::kNothing,
+                      web::Next(web::Desired::kOff, true, true, true, false, false));
+}
+
+void test_it_starts_what_is_wanted_and_is_not_up(void) {
+    TEST_ASSERT_EQUAL(web::Reconcile::kStart,
+                      web::Next(web::Desired::kOn, true, true, false, false, false));
+    TEST_ASSERT_EQUAL(web::Reconcile::kStart,
+                      web::Next(web::Desired::kAuto, true, true, true, false, false));
+}
+
+void test_it_stops_what_is_up_and_no_longer_wanted(void) {
+    // Each of the three ways the answer can turn to no, because they arrive from
+    // different places: the operator, the radio being switched off, and the
+    // fallback access point's window closing under `auto`.
+    TEST_ASSERT_EQUAL(web::Reconcile::kStop,
+                      web::Next(web::Desired::kOff, true, true, true, true, false));
+    TEST_ASSERT_EQUAL(web::Reconcile::kStop,
+                      web::Next(web::Desired::kOn, false, true, true, true, false));
+    TEST_ASSERT_EQUAL(web::Reconcile::kStop,
+                      web::Next(web::Desired::kAuto, true, true, false, true, false));
+}
+
+void test_the_stop_still_happens_while_the_stack_is_up(void) {
+    // The ordering §10.16 records a reboot for: the server has to let go while
+    // there is still a netif to close its socket against. `network_wanted` false
+    // with `stack_up` true is exactly that window, and the answer is `kStop`
+    // rather than `kNothing`.
+    TEST_ASSERT_EQUAL(web::Reconcile::kStop,
+                      web::Next(web::Desired::kOn, false, true, false, true, false));
+}
+
 void RegisterWebPathTests(void) {
     RUN_TEST(test_the_root_is_the_index);
     RUN_TEST(test_a_page_and_the_things_a_page_is_made_of);
@@ -306,4 +372,10 @@ void RegisterWebPathTests(void) {
     RUN_TEST(test_auto_is_up_only_while_this_device_is_an_access_point);
     RUN_TEST(test_a_radio_on_its_way_out_takes_the_server_with_it);
     RUN_TEST(test_every_wish_has_a_word);
+
+    RUN_TEST(test_a_held_lifetime_freezes_the_reconciler);
+    RUN_TEST(test_the_reconciler_is_quiet_when_the_world_already_agrees);
+    RUN_TEST(test_it_starts_what_is_wanted_and_is_not_up);
+    RUN_TEST(test_it_stops_what_is_up_and_no_longer_wanted);
+    RUN_TEST(test_the_stop_still_happens_while_the_stack_is_up);
 }

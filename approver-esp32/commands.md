@@ -409,6 +409,13 @@ It refuses to start with the radio off and says why: lwIP is brought up lazily
 (§10.9), and `httpd_start` without it is an assert inside the TCP/IP stack rather
 than an error — so `wifi mode client` or `wifi mode ap` comes first.
 
+**It takes the server away from the reconciler while it runs**, and gives it back
+afterwards, so the mode does not matter any more — `on`, `off` and `auto` all
+cycle the same way. It used to insist on `web off` first, which was the wrong way
+round: with the wish off, the manager's tick tore down each round the moment it
+went up, and two tasks calling `httpd_stop` on one handle is a double free. The
+only thing it still refuses is a server that is already up: stop it first.
+
 ### `screenshot`
 The frame itself, as base64, for `tools/screenshot.py` to turn into a PNG.
 Nothing here is meant to be read by a person.

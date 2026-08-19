@@ -207,8 +207,23 @@ void SetApprovals(ApprovalsProbe probe);
 // replaced a panic (§10.16).
 esp_err_t Start();
 
-// Stops it, and gives the task and its stack back to the heap. Idempotent.
+// Stops it, and gives the task and its stack back to the heap. Idempotent —
+// and it now *fails* rather than pretending: `httpd_stop` returns without doing
+// anything if it cannot signal its own task, and a handle dropped after that is
+// a running server nobody can reach again (§10.16).
 esp_err_t Stop();
+
+// **Take the server's lifetime away from the reconciler**, for as long as a
+// caller means to drive `Start`/`Stop` itself — which today is exactly one
+// caller, the `web cycle` diagnostic. While it is held, `Maintain()` does
+// nothing at all whatever the radio does.
+//
+// It is not a lock and it does not block: it is the answer to "who owns this",
+// and the lock underneath is the component's own. Release it on every path out —
+// a hold left set is a server the network can no longer bring up or take down.
+// `web_policy.h` argues why this exists, and §10.16 has the double free that
+// bought it.
+void Hold(bool held);
 
 bool Running();
 

@@ -39,4 +39,18 @@ bool ShouldRun(Desired desired, bool network_wanted, bool stack_up, bool ap) {
     return false;
 }
 
+Reconcile Next(Desired desired, bool network_wanted, bool stack_up, bool ap, bool running,
+               bool held) {
+    // First, and before anything about the world is even read: somebody else owns
+    // the server's lifetime right now. The header says what ignoring this cost.
+    if (held) {
+        return Reconcile::kNothing;
+    }
+    const bool want = ShouldRun(desired, network_wanted, stack_up, ap);
+    if (want == running) {
+        return Reconcile::kNothing;
+    }
+    return want ? Reconcile::kStart : Reconcile::kStop;
+}
+
 }  // namespace web

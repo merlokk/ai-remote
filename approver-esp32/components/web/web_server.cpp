@@ -33,6 +33,40 @@ static_assert(kMaxNameLength == storage::kMaxNameLength,
 
 httpd_handle_t g_server = nullptr;
 
+// **The handle above is changed from two tasks, and that is what this guards.**
+// `Maintain()` runs on the Wi-Fi manager's task five times a second; `web cycle`
+// runs on the console's; both call `Start`/`Stop`. Two tasks passing the same
+// `g_server == nullptr` check is two `httpd_stop` calls on one handle, which is
+// `httpd_delete` freeing the same four blocks twice — and the fault lands later,
+// inside the allocator, in whichever task calls `free` next. §10.16 has the
+// decoded stack.
+//
+// Static, like every other FreeRTOS object here (§10.14.1), and **not
+// recursive** — which is why the work below is split into `…Locked` halves the
+// way `Es8311`'s is (§10.14.3): the public entry points take it, and nothing
+// that already holds it calls something that would take it again.
+StaticSemaphore_t g_lock_storage;
+SemaphoreHandle_t g_lock = nullptr;
+
+// **Somebody else owns the lifetime right now.** Only `web cycle` sets this, and
+// only for the length of its loop: while it is true the reconciler answers
+// `kNothing` whatever the world does, so the diagnostic's rounds are its own
+// rather than a race with a tick. `web_policy.h` argues it where the rule lives.
+bool g_held = false;
+
+// Guards the handle for the length of a call. A lock this device cannot fail to
+// take — every path here is a start or a stop, both bounded — so the wait is
+// `portMAX_DELAY` rather than §10.14.3's timeout-and-skip, which is the right
+// answer for a bus that a dropped frame can survive and the wrong one for a
+// pointer that must not be freed twice.
+class Held {
+  public:
+    Held() { xSemaphoreTake(g_lock, portMAX_DELAY); }
+    ~Held() { xSemaphoreGive(g_lock); }
+    Held(const Held &) = delete;
+    Held &operator=(const Held &) = delete;
+};
+
 // **One buffer, in `.bss`, and it is safe because `esp_http_server` is one
 // task.** The instance serves one request at a time — that is what
 // `max_open_sockets` bounds, not concurrency — so the chunk buffer cannot be
@@ -645,7 +679,7 @@ esp_err_t File(httpd_req_t *request) {
 
 }  // namespace
 
-esp_err_t Start() {
+esp_err_t StartLocked() {
     if (g_server != nullptr) {
         return ESP_ERR_INVALID_STATE;
     }
@@ -772,11 +806,22 @@ esp_err_t Start() {
     return ESP_OK;
 }
 
-esp_err_t Stop() {
+esp_err_t StopLocked() {
     if (g_server == nullptr) {
         return ESP_OK;
     }
     const esp_err_t err = httpd_stop(g_server);
+    if (err != ESP_OK) {
+        // **A failed stop is not a stop, and saying otherwise loses the server.**
+        // `httpd_stop` returns before doing anything at all if it cannot send its
+        // own shutdown message, so the task is still alive and the socket is still
+        // bound; dropping the handle here would leave an instance nobody can ever
+        // reach again, while `web` reported it stopped. Keep it, say so, and let
+        // the next tick try again.
+        ESP_LOGE(TAG, "it would not stop (%s) - still running, will try again",
+                 esp_err_to_name(err));
+        return err;
+    }
     g_server = nullptr;
     g_status.running = false;
     Sample();
@@ -789,6 +834,21 @@ esp_err_t Stop() {
              static_cast<int32_t>(g_status.free_after_stop) -
                  static_cast<int32_t>(g_status.free_before_start));
     return err;
+}
+
+esp_err_t Start() {
+    const Held held;
+    return StartLocked();
+}
+
+esp_err_t Stop() {
+    const Held held;
+    return StopLocked();
+}
+
+void Hold(bool held) {
+    const Held lock;
+    g_held = held;
 }
 
 bool Running() { return g_server != nullptr; }
@@ -840,14 +900,19 @@ void Maintain() {
     // file. Either saying off is enough.
     const bool network_wanted = wifimgr::DesiredFromConfig() != wifimgr::Desired::kOff &&
                                 wifi.desired != wifimgr::Desired::kOff;
-    const bool want = ShouldRun(g_desired, network_wanted, wifi.stack_up, ap);
 
-    if (want == (g_server != nullptr)) {
+    // **The lock is taken before the answer is read**, because the answer is
+    // about `g_server` and so is the action: deciding outside it and acting
+    // inside would be the same race one step further along.
+    const Held held;
+    const Reconcile next =
+        Next(g_desired, network_wanted, wifi.stack_up, ap, g_server != nullptr, g_held);
+    if (next == Reconcile::kNothing) {
         return;
     }
-    if (!want) {
+    if (next == Reconcile::kStop) {
         // The network went away under a running server, or somebody said off.
-        Stop();
+        StopLocked();
         return;
     }
 
@@ -856,13 +921,19 @@ void Maintain() {
         return;
     }
     g_retry_pending = false;
-    if (Start() != ESP_OK) {
+    if (StartLocked() != ESP_OK) {
         g_retry_pending = true;
         g_retry_at_ms = now;
     }
 }
 
 esp_err_t Init() {
+    // Before the tick handler below is registered, because the first thing that
+    // tick does is take it.
+    g_lock = xSemaphoreCreateMutexStatic(&g_lock_storage);
+    if (g_lock == nullptr) {
+        return ESP_ERR_NO_MEM;
+    }
     g_desired = DesiredFromConfig();
     // The reconciler, on somebody else's task — `web_server.h` argues why, and
     // the short form is 2.5 KB of permanent RAM not spent.

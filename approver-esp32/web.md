@@ -428,6 +428,52 @@ no page here has a stylesheet link.
 
 #### What the board said, and one of them was a reboot
 
+- **Two tasks, one pointer, and the diagnostic was the one that found it.**
+  `web cycle` — the command this section exists for — panicked the board on its
+  second round: `Load access fault`, and the stack decoded to
+  `web::Stop` → `httpd_stop` → `httpd_delete` → `free` → **inside the ROM's
+  allocator**, walking heap metadata that was no longer a heap. A double free,
+  and the two callers were in the file all along: `Maintain()` runs on the Wi-Fi
+  manager's task five times a second, `web cycle` runs on the console's, and both
+  read `g_server`, compared it with null, and called `httpd_stop` on it. Nothing
+  serialised them.
+
+  What made it a *certainty* rather than a rare race is the guard the command
+  already had. It refused to run unless the wish was `off` — written to stop the
+  reconciler *starting* the server between rounds — and with the wish off the tick
+  does the opposite: it tears down what the loop has just started, every round,
+  50 ms after it goes up. So the two `Stop()` calls were not merely possible, they
+  were scheduled. The tell was in the log and had been read as noise: **two
+  `web: stopped` lines per round** and an `E httpd: Failed to send shutdown signal
+  err=-1` between them, which is the second caller finding a control socket the
+  first had already closed.
+
+  Three things came out of it, and only the first is the crash:
+
+  * **the lifetime is under a lock now** — a static mutex, `Start`/`Stop`/
+    `Maintain` taking it and `…Locked` halves underneath, which is `Es8311`'s
+    shape (§10.14.3) and for the same reason: the mutex is not recursive, so the
+    caller that holds it must not call something that takes it again;
+  * **`web cycle` takes the lifetime away from the reconciler** for the length of
+    its loop, and gives it back on every path out. That is `web::Hold`, and the
+    rule lives in `web_policy.h` as a *value* — `Reconcile Next(…, bool held)`
+    answers `kNothing` while it is held, whatever the radio is doing — so the one
+    thing that crashed the device is a comparison with tests on it rather than an
+    `if` inside a task. The old `set 'web off' first` refusal is gone with it:
+    the mode no longer changes what the loop measures;
+  * **a failed stop is no longer reported as a stop.** `httpd_stop` returns
+    *before doing anything* when it cannot signal its own task — so the previous
+    code, which nulled the handle regardless, left a server task alive with its
+    handle thrown away while `web` printed `stopped`. That was the
+    `512 byte(s) unreturned by its stop` nobody could explain. It keeps the handle
+    and says so now, and the next tick tries again.
+
+  Measured after the fix, on the sequence that used to panic — a browser's worth
+  of pages served over the LAN, then twenty rounds: **`+0` drift on every round
+  but the first, a 104-byte spread, one `stopped` line per round, and the uptime
+  continuous.** Then ten more under `auto`, which the old guard refused outright:
+  `+0`, spread **0**, `all of it came back`.
+
 - **`httpd_start` before lwIP exists is a panic, not an error.** §10.9 brings the
   network stack up lazily — `esp_netif_init` and the netifs happen inside the
   radio's first use — so on a freshly flashed device, where `wifi.active` is

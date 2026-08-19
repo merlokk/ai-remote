@@ -3390,13 +3390,17 @@ int CmdWeb(int argc, char **argv) {
             printf("stop it first - 'web off'\n");
             return 1;
         }
-        if (web::GetDesired() != web::Desired::kOff) {
-            // Otherwise the manager's tick would start the server back up between
-            // this loop's rounds, and every number below would be measuring two
-            // things at once.
-            printf("set 'web off' first - the manager would restart it mid-cycle\n");
-            return 1;
-        }
+        // **The reconciler is held off for the whole loop, not asked politely.**
+        // It runs on the Wi-Fi manager's task five times a second and it used to
+        // race this one: with `web off` set it tore down each round the moment it
+        // went up - two `httpd_stop` calls on one handle, which is a double free
+        // and, a few rounds later, a panic inside the allocator. So this takes the
+        // lifetime and gives it back on every path out, and the mode no longer
+        // matters: `web on` cycles as honestly as `web off` does.
+        struct Owned {
+            Owned() { web::Hold(true); }
+            ~Owned() { web::Hold(false); }
+        } owned;
 
         const uint32_t start = WebFreeHeap();
         uint32_t lowest = start;
