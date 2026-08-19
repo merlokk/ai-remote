@@ -352,6 +352,7 @@ is the radio's own answer rather than something rebuilt.
 | `web off` | never |
 | `web on` | up whenever there is a network |
 | `web auto` | only while this device is an access point — its own, or §10.9's fallback one. The default, and the cheap one |
+| `web help` | the forms, which is also what an unrecognised word prints |
 
 What is on it, once a phone has the address: a front page of buttons with the
 device's state under them, the whole `devstatus` dump, **the Wi-Fi and bus settings**,

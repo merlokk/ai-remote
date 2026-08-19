@@ -3247,8 +3247,10 @@ void PrintWebUsage() {
     printf("       web off               never\n");
     printf("       web auto              only while this device is an access point\n");
     printf("       web cycle [n]         start and stop it n times, and print the drift\n");
+    printf("       web help              this\n");
     printf("the mode is a wish: it comes up only with a network, in memory only\n");
-    printf("it serves pages and one read-only json; nothing on it changes this device\n");
+    printf("the pages can change the wi-fi and bus settings, and can restart this\n");
+    printf("device - they can never approve a permission request\n");
 }
 
 // A settling delay after `httpd_stop`, and it is not padding: **lwIP frees a
@@ -3651,8 +3653,8 @@ const esp_console_cmd_t kCommands[] = {
     },
     {
         .command = "web",
-        .help = "the configuration web server: start it, stop it, and measure what it costs",
-        .hint = "[on|off|cycle]",
+        .help = "the configuration web server: off, on, or only while this device is an access point",
+        .hint = "[on|off|auto|cycle] — 'web help' for the forms",
         .func = &CmdWeb,
         .argtable = nullptr,
         .func_w_context = nullptr,
