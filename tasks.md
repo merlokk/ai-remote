@@ -6,6 +6,15 @@ owed, gathered in one place and checked against the code it describes. Started
 when it is done, not ticked off, because the reason it was done belongs in the
 document that owns the subject and the history belongs in git.
 
+**So the numbering has gaps, and they are not a mistake to tidy up.** Other files
+cite these numbers (`web.md` names §2.5, `protocol.md` names §2.7), so a number
+belongs to the item that was given it — renumbering after a deletion would silently
+repoint every citation. Three gaps so far: **§2.9**, the clock screen's two unbuilt
+promises, struck from §10.8.2 rather than built; **§2.10**, the two shipped config
+files disagreeing about the access point's key, which they no longer do; and
+**§2.12**, three smaller loose ends — a runner for the parity vectors, a way into
+the ESP32 host suite from `scripts/`, and a screenshot no document referenced.
+
 Two things this file is **not**: a list of decisions (those live in the section
 that owns them), and a second `approver-esp32/status.md` (that file is row-by-row
 about the firmware and stays authoritative for it).
@@ -17,12 +26,13 @@ never confused with a broken build:
 
 | Tier | Command | Result |
 |------|---------|--------|
-| Python | `.venv\Scripts\python.exe -m pytest -q` | **448 passed, 40 skipped** (no NATS, no YubiKey, no board, no browser) |
+| Python | `.venv\Scripts\python.exe -m pytest -q` | **453 passed, 40 skipped** (no NATS, no YubiKey, no board, no browser) |
 | Rust | `cargo test -q` (in `statusline/`) | **59 passed** across four binaries |
 | Rust format | `cargo fmt --check` | clean |
 | Node | `npm test` (in `approver-web/`) | **38 passed** |
 | Browser tier | `scripts\web-approval.cmd` | **16 passed** in ~35s (needs NATS and `agent-browser`) |
-| Host tier (ESP32) | `RUN_TEST` count in `approver-esp32/host_test/` | **688**, matching `tests.md` §10.11 |
+| Host tier (ESP32) | `scripts\esp32-host-tests.cmd` | **714 passed, 0 failures** — run rather than counted, which is the honest form of this row: the 688 it held before was a `RUN_TEST` grep, and §10.16's gate plus §10.9's AP assertion added 27 tests on top of what that grep saw |
+| Parity vectors (ESP32) | `scripts\make-vectors.cmd --check` | up to date |
 | Markdown links | every relative link in every tracked `.md` | all resolve |
 
 ---
@@ -86,24 +96,37 @@ a gap in the code — it is a decision about where the app may run.
 Anyone who can open the page in that browser profile can approve a `rm -rf`;
 anyone who can reach the port can hand `POST /api/register` a token. Acceptable on
 loopback, "unacceptable the moment it binds to anything but the loopback
-interface". The same open question as §2.4's, one component over.
+interface". The same open question as §2.4's, one component over — and §2.4 has
+since answered half of it, so the shape of an answer exists to copy: a credential
+in the config that gates every route, off until it is set. `approver-web` runs in a
+browser rather than on a device, so a password box is the cheap half there too.
 
 Note that registering several browsers does not touch it: two browsers are two
 keys, not two identities with different rights.
 
-### 2.4 The ESP32 web server's write path has no authentication decision (§10.16, §10.3)
+### 2.4 The ESP32 web server: authentication done, the interface half is not (§10.16, §10.3)
 
-The write path shipped ahead of the question `web.md` said it would need first.
-What is actually open:
+**The authentication half is closed.** HTTP basic auth is on every route of the
+site — the pages, both API reads, the forms, the actions and the reboot — off until
+`config.json` carries both a `web.user` and a `web.password` (`web login <user>
+<pw>` on the console sets them). It cannot be changed from the site it locks, since
+`web` is not on the write path's whitelist; 21 host tests cover the gate and the
+encoder. `web.md` has the four rules and the size.
 
-- **authentication, or binding to the access-point interface only.** The server
-  exists to configure a device that has no network yet; on the LAN §10.3 already
-  put the boundary at the router *for reading*, and a writable config moves that
-  boundary. `web.write: false` is the only switch today and is explicitly not
-  authentication.
-- **the Wi-Fi screen has no row saying whether the page is up** — `web.md:544`
-  says "it should". The system status page has the row; §10.8.6's screen does
-  not.
+What is still open:
+
+- **binding to the access-point interface only** — the second of the two ways
+  `web.md` named, and it is not made redundant by the first: basic auth puts the
+  password on the wire in base64, so on a LAN it is a speed bump rather than a
+  boundary, and a listener that does not exist on that interface cannot have its
+  password read off it at all. `web auto` is about the access point *being up*, not
+  about which interface the socket binds to — nothing in the code decides this
+  today. TLS on this port would be the other way to fix the same thing, and it is
+  §2.5's company.
+- **the Wi-Fi screen has no row saying whether the page is up** — `web.md` says
+  "it should". The system status page has the row; §10.8.6's screen does not. The
+  `web` console readout now has an `auth` line as well, so there are two facts that
+  screen does not show rather than one.
 
 ### 2.5 TLS and credentials on the bus (§10.3, §3/§4, root §7)
 
@@ -158,45 +181,9 @@ condition at a time; the one that says whether the device is safe is the
 combination. §10.5 makes the same argument from the other end after a 64 KB
 message took the low-water mark to 23,068 free.
 
-### 2.9 The clock screen is missing two things §10.8.2 specifies
-
-§10.8.2's list for the home screen is "the time, the date, the link indicator,
-**`key_id` when registered**, and **a gear**". Neither is drawn —
-`components/screens/clock_screen.cpp` has no reference to either. The reason
-`screens.md:422` gives ("there is no registration to name and nothing to open") is
-no longer true: registration works and settings is a swipe up.
-
-Low stakes — settings is reachable three other ways — but the section still
-promises them.
-
-### 2.10 The two shipped config files disagree about the AP password (§10.9)
-
-`spiffs_image/config.json` raises a **WPA2** access point;
-`spiffs_image/config.init.json` leaves it **open** — so a restore (or holding
-`KEY` at boot) opens the device's own access point. Deliberate when the AP served
-nothing and stayed up two minutes at a time. §10.16 now serves a *writable*
-configuration site on that AP, and §10.9 named this as the line to revisit "when
-§10.8.6 gives it a screen to serve — and the two files should stop disagreeing at
-the same time".
-
 ### 2.11 Battery and sleep (§10.13)
 
 Explicitly deferred: light sleep with a socket open, or waking on Wi-Fi, changes
 the "is it connected" story of §10.8.1. The collision is already named — a screen
 that blanks is fine, a *radio* that sleeps means requests arrive late or not at
 all, and a responder that is asleep is a responder that times out.
-
-### 2.12 Smaller open ends
-
-- **`tools/make_vectors.py` has no repo-level runner.** The staleness guard
-  (`tests/test_esp32_vectors.py`) is in the pytest suite and passing, so this is
-  cosmetic — but regenerating is a hand-typed command under the venv.
-- **The ESP32 host suite is not reachable from `scripts/`.** Every other tier has
-  either a documented one-liner in a `CLAUDE.md` or a `.cmd`; this one is
-  `approver-esp32/host_test/run.cmd`, which `scripts/README.md` does not list. CI
-  runs it now, which is the part that mattered; a developer still has to know
-  where that file is.
-- **`screens/7. web-approver screenshot.png`** is committed and referenced by no
-  document. Root §2 now says so rather than implying `yubikey-hackaton.md` walks
-  through it, so what is left is the choice: give it a place in that walkthrough,
-  or drop it.

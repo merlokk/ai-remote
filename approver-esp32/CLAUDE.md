@@ -76,9 +76,13 @@ what makes a setting picked with a finger survive a reboot without a cable
 (§10.8.5).
 
 **And there is a site to open on a phone** (§10.16): the front page with the
-device's state and the buttons that go anywhere, the whole `devstatus` dump, a
-restart that asks twice, and a 404. Read-only apart from that restart, which is the
-only thing on it that changes the device at all.
+device's state and the buttons that go anywhere, the whole `devstatus` dump, the
+Wi-Fi and bus settings, a restart that asks twice, and a 404. **And a password on
+the door**, if `config.json` carries one — `web.user` and `web.password`, or `web
+login` on the console, put basic auth on every route including the reads. It is off
+until both halves are set, it cannot be changed from the site it locks, and it is
+not TLS: that section says what it buys and what it does not. Nothing on it can
+reach a verdict (§10.10).
 
 What is **not** done, and [`status.md`](status.md) is row by row about it. **The Wi-Fi
 screen is the reduced one the repository owner asked for rather than the one

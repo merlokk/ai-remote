@@ -147,6 +147,24 @@ The whole run, captured step by step, is in [`screens/`](screens/):
 5. registration — [client](screens/5.%20registration%20-%20client.png) / [server](screens/5.%20registration%20-%20server.png)
 6. [an approved request](screens/6.%20approved%20request.png)
 
+And one more that is not part of that run, because it is a different responder
+answering the same bus: [**the same loop through a browser
+tab**](screens/7.%20web-approver%20screenshot.png) — four permission requests
+live off `approvals.*` in the queue group `approvers`, each with its `tool_input`
+whole, its `input_sha256`, and the countdown after which doing nothing sends no
+reply. That is [`approver-web/`](approver-web/CLAUDE.md), and it is the shape of
+the argument this project makes: the *protocol* is the product, so a second
+client is a page rather than a rewrite.
+
+**Read the badges before the buttons, though: that shot is from before the page
+signed.** It says `unsigned (phase 1)`, and the banner under it says what that
+cost — decisions went out unsigned, `hook.py` rejected them, and Claude Code fell
+back to its own prompt. The page signs now, in the browser, with a key that
+survives closing it, and `scripts\web-approval.cmd` is the browser tier that
+proves `hook.verify_reply` calls the result trusted. So it is a picture of the
+plumbing working and the trust not yet, kept for the cards rather than for the
+header.
+
 ## Tech stack & dependencies
 
 | | |

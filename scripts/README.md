@@ -1,6 +1,6 @@
 # `scripts/` — the command files
 
-Windows command files that drive the flows end to end. Three are self-checking
+Windows command files that drive the flows end to end. Five are self-checking
 tests (they pass or fail on their own); four need a human, to press a YubiKey, to
 press a button on the ESP32, or to read what came back.
 
@@ -19,6 +19,8 @@ the two that wrap `tools/`.
 | [`yubikey-arkg.cmd`](#yubikey-arkgcmd) | the five-step ARKG hardware run: version → credential → derive → sign → verify | no — reports what the key returned | **YubiKey** (2 touches) | **yes** |
 | [`yubikey-approval.cmd`](#yubikey-approvalcmd) | the whole approval loop with the key on a YubiKey | yes, apart from the touches | **YubiKey** (2 touches) | **yes** |
 | [`esp32-approval.cmd`](#esp32-approvalcmd) | the whole approval loop against the ESP32 on the desk | yes, apart from the presses | **the board** (1 press, 1 deliberate non-press) | no |
+| [`esp32-host-tests.cmd`](#esp32-host-testscmd) | the ESP32 tests that need no board | yes | no | no |
+| [`make-vectors.cmd`](#make-vectorscmd) | regenerate the cross-language parity vectors | `--check` is | no | no |
 
 ## Before you start
 
@@ -28,8 +30,11 @@ the two that wrap `tools/`.
 cd nats && docker compose up -d && cd ..
 ```
 
+Two of the nine need neither: `esp32-host-tests.cmd` compiles C++ and talks to
+nothing, and `make-vectors.cmd` needs only the venv.
+
 **`uv sync` must have been run**, and that is the whole requirement for six of
-the seven. Every script here resolves `.venv\Scripts\python.exe` **by path** and
+the nine. Every script here resolves `.venv\Scripts\python.exe` **by path** and
 falls back to the `py` launcher with a warning if it is not there.
 `web-approval.cmd` is the exception: it also needs node, `agent-browser` and the
 `approver-web` dependencies, and it checks for each of them before it starts.
@@ -326,6 +331,63 @@ the reason the two YubiKey scripts do: it needs `cryptography` and `nats-py`, an
 the launcher only finds them when a venv happens to be active.
 
 **Exit codes:** `0` PASS, `1` FAIL (or the suite skipped).
+
+## `esp32-host-tests.cmd`
+
+Tier 1 of [`approver-esp32/tests.md`](../approver-esp32/tests.md) §10.11 — every
+test in that firmware that needs no board, in one binary. **A launcher and
+deliberately nothing more**: the build lives in
+`approver-esp32\host_test\run.cmd`, next to the `CMakeLists.txt` it drives. It is
+here because every other tier had a way in from this folder and this one did not:
+CI ran it, and a developer still had to know where that file was.
+
+```bat
+scripts\esp32-host-tests.cmd              REM all of it
+scripts\esp32-host-tests.cmd web auth     REM the configuration site and its gate
+scripts\esp32-host-tests.cmd i2c pmic     REM the bus and one chip on it
+```
+
+Arguments are suite filters — a suite runs when its name contains one of them —
+which is what a debugging loop wants; no arguments runs everything, which is what
+a pre-commit check wants. Scrolling past seven hundred `PASS` lines to find the
+one that matters is how a suite stops being run.
+
+**No NATS, no board, no Python.** It needs MSVC, CMake and Ninja — all on this
+machine for other reasons ([`approver-esp32/build.md`](../approver-esp32/build.md)
+§10.12) — plus an ESP-IDF checkout, for Unity's sources and the cJSON managed
+component. `run.cmd` resolves both and says which one it could not find.
+
+**Exit codes:** `0` every test passed, `1` a test failed or the build did.
+
+## `make-vectors.cmd`
+
+Regenerates tier 2 of §10.11 — the parity vectors the firmware's host tests
+compare against, produced by `approver/protocol.py` and `lib/crypto.py`
+themselves rather than typed out of a design document:
+
+```
+approver-esp32\host_test\vectors\parity_vectors.h      §7's decision bytes, §6's reply bytes
+approver-esp32\components\crypto\selftest_vector.h     the Ed25519 vector §10.6's boot self-test uses
+```
+
+```bat
+scripts\make-vectors.cmd            REM write them, print what changed
+scripts\make-vectors.cmd --check    REM write nothing; exit 1 if a committed file is stale
+```
+
+Both files are **committed**, the way `uv.lock` and `dependencies.lock` are, so a
+fresh checkout builds and tests with no Python step. **You do not have to remember
+to run this**: `tests/test_esp32_vectors.py` regenerates into memory on every
+`pytest` run and fails when what is on disk is not what today's `protocol.py`
+produces. This is the shorter way to make that green again after changing either
+side — and `--check` is the same question asked without writing, for a hook or a
+pre-commit check.
+
+Needs no NATS, no board and no hardware. It does need the venv, because
+`lib/crypto.py` imports `cryptography`.
+
+**Exit codes:** `0` written, or already up to date; `1` `--check` found something
+stale, or the generator failed.
 
 ---
 
