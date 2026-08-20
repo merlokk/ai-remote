@@ -21,6 +21,13 @@
 # So a green run means: the Python suite, the Rust suite and its formatter, the
 # Node suite and its type-check, and the ESP32 host tier — 448 + 59 + 38 + 688
 # assertions' worth, with the hardware-dependent ones skipping as designed.
+#
+# **The actions are on their `node24` majors** (`checkout@v7`, `setup-node@v7`).
+# The `v4` of each still works and warns: they declare `node20`, the runners have
+# dropped it, and GitHub forces them onto 24 anyway — so the pin is a deprecation
+# notice on every run rather than a difference in behaviour. Nothing here reads an
+# input those majors renamed; `node-version`, `cache` and `cache-dependency-path`
+# are the same three.
 
 name: tests
 
@@ -45,7 +52,7 @@ jobs:
     name: python — pytest
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # The repository's own compose file (§3), not a hand-written `docker run`:
       # the 64 KB payload ceiling and the monitoring port come from it, and one
@@ -91,7 +98,7 @@ jobs:
       run:
         working-directory: statusline
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # `tests/nats_publish.rs` prints a reason and returns when there is no
       # server, so this job would be green without a bus — and would silently
@@ -126,9 +133,9 @@ jobs:
       run:
         working-directory: approver-web
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -164,7 +171,7 @@ jobs:
     name: esp32 — host tier
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: fetch Unity and cJSON
         run: |
