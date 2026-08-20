@@ -69,8 +69,9 @@ spending — with one line under them saying what it is *doing*, off §9.10's `a
 subject — the request card over both, the settings list — reached by a swipe up or
 by holding `KEY` — and, behind it, the three status pages, the touch test with its
 calibration, the Wi-Fi screen, and the list of what is on the air that it opens.
-Nothing on that list says `soon` any more. It has seven rows now and five of them
-fit the panel, so it scrolls: `config save` and `config reload` are on it, which is
+Nothing on that list says `soon` any more, and nothing in the firmware can — the
+placeholder mechanism is deleted rather than left answering yes for every row
+(§10.8.5). It has seven rows and five of them fit the panel, so it scrolls: `config save` and `config reload` are on it, which is
 what makes a setting picked with a finger survive a reboot without a cable
 (§10.8.5).
 

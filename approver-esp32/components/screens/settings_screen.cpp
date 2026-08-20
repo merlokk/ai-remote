@@ -308,18 +308,13 @@ void SettingsScreen::Apply(const ui::SettingsMenu &menu, uint32_t now_ms) {
             note = "usb in";
         } else if (reporting) {
             note = ResultText(entry, result);
-        } else if (!ui::SettingsMenu::Built(entry)) {
-            // **A row with nothing behind it says so before it is pressed.**
-            // §10.9's rule that `unknown` is the honest state: a list that looked
-            // complete and then did nothing would be a list nobody presses twice.
-            note = "soon";
         }
         lv_label_set_text_static(row.note, note);
 
         lv_color_t label_colour = Bright();
         if (asking) {
             label_colour = Attention();
-        } else if (blocked || !ui::SettingsMenu::Built(entry)) {
+        } else if (blocked) {
             label_colour = Faint();
         }
         lv_obj_set_style_text_color(row.label, label_colour, LV_PART_MAIN);

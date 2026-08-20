@@ -22,7 +22,7 @@ never confused with a broken build:
 | Rust format | `cargo fmt --check` | clean |
 | Node | `npm test` (in `approver-web/`) | **38 passed** |
 | Browser tier | `scripts\web-approval.cmd` | **16 passed** in ~35s (needs NATS and `agent-browser`) |
-| Host tier (ESP32) | `RUN_TEST` count in `approver-esp32/host_test/` | **690**, matching `tests.md` §10.11 |
+| Host tier (ESP32) | `RUN_TEST` count in `approver-esp32/host_test/` | **688**, matching `tests.md` §10.11 |
 | Markdown links | every relative link in every tracked `.md` | all resolve |
 
 ---
@@ -210,6 +210,3 @@ Four commands would cover it, and three of them need nothing but a checkout:
   document. Root §2 now says so rather than implying `yubikey-hackaton.md` walks
   through it, so what is left is the choice: give it a place in that walkthrough,
   or drop it.
-- **The `soon` rows in §10.8.5's settings list** are the owner's placeholder
-  ("пока непонятно, потом чтото добавим") and deliberately not drawn. Listed here
-  only so it is not rediscovered as a gap.

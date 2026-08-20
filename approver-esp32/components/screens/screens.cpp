@@ -911,11 +911,6 @@ void Activated(uint32_t now_ms) {
             // this is for whoever is reading the log rather than the screen.
             ESP_LOGI(TAG, "not switched off: the cable is in, and it would come straight back on");
             break;
-        case ui::SettingsAction::kNotBuilt:
-            // The row already says `soon` on the glass, so this is for whoever is
-            // watching the log rather than the screen.
-            ESP_LOGI(TAG, "that row has no screen behind it yet");
-            break;
         case ui::SettingsAction::kOpenTouch:
             Apply(ui::Nav::kOpenTouch);
             break;

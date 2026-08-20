@@ -53,8 +53,8 @@ inline constexpr int32_t kSettingsRowHeight = 68;
 inline constexpr int32_t kSettingsRowTextLeft = 22;
 inline constexpr int32_t kSettingsRowTextTop = 17;
 
-// The width of the right-hand note on a row — "soon" on a row with nothing
-// behind it, "press again" on an armed reboot. Right-aligned rather than
+// The width of the right-hand note on a row — "press again" on an armed reboot,
+// "usb in" on a power-off with the cable in. Right-aligned rather than
 // placed, for the reason §10.8.3 gives about its countdowns: the field's width
 // changes with its value.
 inline constexpr int32_t kSettingsNoteWidth = 230;

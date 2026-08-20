@@ -142,26 +142,6 @@ void test_next_walks_every_row_and_wraps(void) {
     TEST_ASSERT_EQUAL_UINT8(0, menu.Selected());
 }
 
-void test_next_does_not_skip_the_rows_with_nothing_behind_them(void) {
-    // A selection that jumps over what it is pointing at is a selection nobody
-    // can predict. The row is what explains why it does nothing, and that is a
-    // better place for the explanation than a gap in the walk.
-    SettingsMenu menu;
-    menu.Next();
-    TEST_ASSERT_EQUAL_UINT8(kStatus, menu.Selected());
-    menu.Next();
-    TEST_ASSERT_EQUAL_UINT8(kTouch, menu.Selected());
-}
-
-void test_every_row_on_the_list_has_a_screen_behind_it(void) {
-    // It was the Wi-Fi row that did not, until §10.8.6 arrived. The assertion is
-    // kept pointing the other way rather than deleted, because a row added later
-    // is added faint — and this is what says the list is not lying today.
-    for (uint8_t i = 0; i < SettingsMenu::kEntryCount; ++i) {
-        TEST_ASSERT_TRUE(SettingsMenu::Built(static_cast<SettingsEntry>(i)));
-    }
-}
-
 void test_a_tap_between_rows_selects_nothing(void) {
     SettingsMenu menu;
     menu.Select(kStatus);
@@ -180,8 +160,8 @@ void test_the_status_row_opens_the_status(void) {
 }
 
 void test_the_wifi_row_opens_the_wifi_screen(void) {
-    // It answered `kNotBuilt` until §10.8.6 arrived, and `settings_menu.cpp` says
-    // why that answer still exists for the next row that has nothing behind it.
+    // It was the last row on the list to get a screen (§10.8.6), and the reason
+    // this layer no longer has a word for a row without one.
     SettingsMenu menu;
     menu.Select(kWifi);
     TEST_ASSERT_EQUAL_INT(static_cast<int>(SettingsAction::kOpenWifi),
@@ -468,11 +448,9 @@ void RegisterSettingsMenuTests(void) {
     RUN_TEST(test_the_menu_opens_at_the_top);
     RUN_TEST(test_the_two_destructive_rows_are_last_and_in_order);
     RUN_TEST(test_next_walks_every_row_and_wraps);
-    RUN_TEST(test_next_does_not_skip_the_rows_with_nothing_behind_them);
     RUN_TEST(test_a_tap_between_rows_selects_nothing);
 
     RUN_TEST(test_the_status_row_opens_the_status);
-    RUN_TEST(test_every_row_on_the_list_has_a_screen_behind_it);
     RUN_TEST(test_the_wifi_row_opens_the_wifi_screen);
     RUN_TEST(test_the_touch_row_opens_the_touch_test);
 

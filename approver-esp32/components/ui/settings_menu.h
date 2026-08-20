@@ -6,18 +6,11 @@
 // of this firmware rather than a choice made per screen — the navigator, the
 // clock face, the request card, the limits, the Wi-Fi policy, the internet
 // check, the sync schedule and the bus link all manage it. What lives here is
-// which row is selected, which rows have something behind them yet, and what a
-// press on each one means; `screens/settings_screen.cpp` turns that into
+// which row is selected and what a press on each row means; `screens/settings_screen.cpp` turns that into
 // widgets and has no rules in it.
 //
-// Two things this owns that are not obvious:
+// The one thing this owns that is not obvious:
 //
-//   * **an entry with nothing behind it is still an entry.** Hiding one would
-//     make the list lie about what this device is going to be, so it selects, it
-//     answers `kNotBuilt`, and the screen draws it faint with `soon` — which is
-//     §10.9's rule about `unknown` being the honest state, applied to a menu.
-//     Every row has a screen behind it today; `settings_menu.cpp` says why the
-//     mechanism stays anyway;
 //   * **reboot is armed before it fires.** §10.7 argues that the *console's*
 //     `reboot` needs no confirmation, because a reboot undoes itself in seconds
 //     and a second word would be friction on the most ordinary debugging action
@@ -37,7 +30,16 @@ namespace ui {
 //
 // The gap §10.8.5 leaves for "a few more, we will know later" is deliberately
 // **not** here: a row that does nothing and says nothing is worse than a short
-// list, and adding one later costs a line.
+// list.
+//
+// **Nor is there anything left for a row with no screen behind it.** There used
+// to be — a `kNotBuilt` action and a `Built()` predicate, so that a row could be
+// put on the list drawn faint with `soon` before its screen existed. Every row
+// has had a screen behind it since §10.8.6, so the mechanism was carrying
+// nothing, and it is gone at the owner's decision: it costs a line to add a row,
+// and whoever adds one that has to say `soon` can bring the faint drawing back
+// with it. Kept as a note rather than as code, because the next row is more
+// likely to be finished than not.
 enum class SettingsEntry : uint8_t {
     kWifi = 0,  // → the Wi-Fi screen (§10.8.6)
     kStatus,    // → the status pages (§10.8.5)
@@ -70,8 +72,7 @@ enum class SettingsAction : uint8_t {
     kOpenWifi,
     kOpenStatus,
     kOpenTouch,
-    kNotBuilt,  // a row that is on the list and has no screen behind it yet
-    kArmed,     // the first press on a destructive row: it now asks
+    kArmed,  // the first press on a destructive row: it now asks
     // **One press each, and no arming.** The arming below means exactly one
     // thing — this takes the device away from whoever is looking at it — and
     // neither of these does. What a reload costs is written on the row instead,
@@ -124,11 +125,6 @@ class SettingsMenu {
     SettingsMenu(const SettingsMenu &) = delete;
     SettingsMenu &operator=(const SettingsMenu &) = delete;
 
-    // Is there a screen behind this row today. Static because it is a fact about
-    // the firmware rather than about this menu's state, and because the screen
-    // needs it to draw the row faint before anybody presses anything.
-    static bool Built(SettingsEntry entry);
-
     // The two rows that take the device away from whoever is looking at it, and
     // therefore the two that ask twice.
     static bool Destructive(SettingsEntry entry);
@@ -150,9 +146,9 @@ class SettingsMenu {
     SettingsEntry SelectedEntry() const { return static_cast<SettingsEntry>(selected_); }
 
 
-    // The next row, wrapping. **Unbuilt rows are not skipped**: a selection that
-    // jumps over what it is pointing at is a selection nobody can predict, and
-    // the row itself is what explains why it does nothing.
+    // The next row, wrapping. Every row, in the drawn order and with no
+    // exceptions: a selection that jumps over something is a selection nobody
+    // can predict.
     void Next();
 
     // Point at a row — what a tap does. Out of range is ignored rather than

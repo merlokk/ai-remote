@@ -2,28 +2,6 @@
 
 namespace ui {
 
-bool SettingsMenu::Built(SettingsEntry entry) {
-    switch (entry) {
-        // **Every row on this list has a screen behind it now**, the Wi-Fi one
-        // included (§10.8.6). This function and `kNotBuilt` stay anyway, and not
-        // out of sentiment: §10.8.5 leaves a gap for "a few more, we will know
-        // later", and the honest way to add one of those is to put the row on the
-        // list drawn faint before the screen exists. Deleting the mechanism the
-        // day nothing uses it means the next row arrives without it.
-        case SettingsEntry::kWifi:
-        case SettingsEntry::kStatus:
-        case SettingsEntry::kTouch:
-        case SettingsEntry::kConfigSave:
-        case SettingsEntry::kConfigReload:
-        case SettingsEntry::kReboot:
-        case SettingsEntry::kPowerOff:
-            return true;
-        case SettingsEntry::kCount:
-            break;
-    }
-    return false;
-}
-
 bool SettingsMenu::Destructive(SettingsEntry entry) {
     return entry == SettingsEntry::kReboot || entry == SettingsEntry::kPowerOff;
 }
@@ -53,15 +31,10 @@ SettingsAction SettingsMenu::Activate(uint32_t now_ms) {
             return SettingsAction::kOpenStatus;
 
         case SettingsEntry::kWifi:
-            // The action the row *will* produce is named even though nothing
-            // consumes it yet, so that building the screen is a change to the
-            // caller rather than a change here.
-            return Built(SettingsEntry::kWifi) ? SettingsAction::kOpenWifi
-                                               : SettingsAction::kNotBuilt;
+            return SettingsAction::kOpenWifi;
 
         case SettingsEntry::kTouch:
-            return Built(SettingsEntry::kTouch) ? SettingsAction::kOpenTouch
-                                                : SettingsAction::kNotBuilt;
+            return SettingsAction::kOpenTouch;
 
         case SettingsEntry::kConfigSave:
             // **No arming, and it is the row's cost that decides that** rather

@@ -926,10 +926,14 @@ What changed against the previous list, and why each one:
   now, the battery and its voltage, why the chip is powered at all, why the
   firmware last restarted, the temperatures and the accelerometer — "в общем что
   поместится, может несколько экранов". It is three pages;
-- **an entry with nothing behind it is still drawn**, faint, with `soon` on the
-  right, and pressing it says so. Hiding them would make the list lie about what
-  this device is going to be, and §10.9's rule that `unknown` is the honest state
-  is the same rule;
+- **an entry with nothing behind it used to be drawn** faint, with `soon` on the
+  right, and pressing it said so — §10.9's rule that `unknown` is the honest state,
+  applied to a menu. The rule stands and the code does not: the last row without a
+  screen got one in §10.8.6, and the mechanism that drew it has been deleted rather
+  than left carrying nothing (`ui/settings_menu.h`, and `build.md` §10.12 for what
+  the deletion weighed). Whoever adds the next unfinished row brings the faint
+  drawing back with it — which is a line of work, and the alternative was a
+  predicate that answered `true` for every row for the rest of the project;
 - **the placeholder rows are not drawn at all**, which is the owner's
   instruction and also the right call: a row that says nothing and does nothing
   is worse than a short list.
@@ -1307,14 +1311,15 @@ The split is the one every screen here takes, and this is the fifth pair:
 
 | File | What it is |
 |---|---|
-| `ui/settings_menu.h/.cpp` | **`ui::SettingsMenu`** — the rows, which have something behind them, the arming, and whether a power-off could actually happen. `<cstdint>` and nothing else: the cable is a `bool` handed in, because this layer has never heard of a PMIC |
+| `ui/settings_menu.h/.cpp` | **`ui::SettingsMenu`** — the rows, the arming, and whether a power-off could actually happen. `<cstdint>` and nothing else: the cable is a `bool` handed in, because this layer has never heard of a PMIC |
 | `ui/status_pages.h` | **`ui::StatusPager`** — three pages and a wrap. Embarrassingly small, and in `ui` for the reason the rest is |
 | `screens/settings_screen.h/.cpp` | four plates, a title that is also the way out, and a tap recorded rather than acted on |
 | `screens/status_screen.h/.cpp` | a title, a page counter and nine label/value rows |
 | `screens/screens.cpp` | where the three inputs meet: a gesture, a button and the console all end at one `Apply(ui::Nav)` |
 
-**What the board has actually done**: the list on the glass with `soon` on the
-two rows that have nothing behind them, all three status pages photographed —
+**What the board has actually done**: the list on the glass — with `soon` on the
+two unbuilt rows when it was first photographed, and no such row on it since
+§10.8.6 — all three status pages photographed —
 `100%, 4.18 V` and `USB plugged in` on one, `usb` and `-36 dBm, ch 1` on the
 next, `-1.012 g` on the third with the board stood on its card-slot edge, which
 is §10.13's own table read back off the panel — and every input confirmed by

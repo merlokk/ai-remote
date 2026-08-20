@@ -124,9 +124,12 @@ Four rules it keeps, and each of them is the panel's rule rather than a new one:
   there says `on usb` rather than drawing an empty gauge (§10.8.2 makes the same
   call about the icon). The `devstatus` page keeps the last good dump when a read
   fails, which is §10.8.3's rule about a document that did not arrive;
-- **rows with nothing behind them are drawn and disabled**, marked `soon`, exactly
-  as the settings list does it (§10.8.5). A link to a page that 404s would be
-  worse than a row that admits it.
+- **rows with nothing behind them are drawn and disabled**, marked `soon` — the
+  rule the settings list was built on (§10.8.5), and there is no row like that on
+  either of them today: every page on this site exists, so the mechanism here is
+  markup nothing selects rather than a thing on the glass. A link to a page that
+  404s would still be worse than a row that admits it, which is why the rule stays
+  written down on this side even though §10.8.5's *code* for it is gone.
 
 The front page's tables are the three questions this device is about, which is
 also what `/api/status` grew to answer: **could it approve something right now**

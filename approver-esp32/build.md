@@ -336,6 +336,15 @@ tool the glass no longer names: `libcli.a` **37,543**, seventy-six more. The app
 under a hundred bytes is what the split between a view that decides and a screen
 that draws is for.
 
+**And a deletion, measured the same way, for the shape rather than the saving.**
+The settings list's placeholder mechanism went — a `kNotBuilt` action, a `Built()`
+predicate and the faint `soon` note the screen drew with them, all of it carrying
+no row since §10.8.6 gave the last one a screen (`ui/settings_menu.h` says why it
+is a note now instead of code). `libui.a` **9,088** (46 fewer), `libscreens.a`
+**68,894** (80 fewer), the app **1,924,992 bytes** — **176 bytes** for a mechanism,
+its drawing and its log line, which is the same point from the other end: a
+decision layer this cheap is a layer nobody has to ration.
+
 Read next to the paragraph below, it is the same shape a third time: the layer
 with every decision in it costs a kilobyte of flash and no RAM at all, and what
 costs is *holding* things — a task stack, sixteen SSIDs, and the label buffers
