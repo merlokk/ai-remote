@@ -81,7 +81,7 @@ loaded last", because two of the transitions are not the operator's:
 
 - **The request overlay outranks everything.** It appears over any screen —
   mid-scroll, mid-password, mid-anything — and while it is up, navigation is
-  gone: no swipe, no gear, no back. There is nothing to reach that is more
+  gone: no swipe, no held button, no back. There is nothing to reach that is more
   urgent than the card, and a device where a stray swipe can hide a pending
   request is a device that will silently time one out.
 - **It is not modal in the other direction either.** The card cannot be
@@ -191,8 +191,18 @@ where it becomes a code rule rather than an observation.
 #### 10.8.2 Clock — the home screen
 
 Big time, small everything else, and it must not lie about the one thing the
-device is for. On it: the time, the date, the link indicator, `key_id` when
-registered, and a gear.
+device is for. On it: the time, the date, and the three indicators — Wi-Fi, the
+bus dot, and the battery with its percentage under it.
+
+**That is the whole of it, and the list is now closed.** An earlier draft of this
+section also named `key_id` and a gear; both are struck rather than owed. The
+`key_id` is what `keys` on the console answers and what the front page of §10.16
+shows, and a device with one identity does not need to caption itself on the screen
+it spends 99 % of its life on — the point of that screen is that a glance says the
+time and whether the loop is alive. The gear went for the reason §10.8.5 already
+records from the other end: settings is reached by a swipe up, by holding `KEY`, and
+from the limits screen, so a gear would have been a fourth way in and a permanent
+object on an AMOLED that §10.8.1 spends a section keeping dark.
 
 - **Time comes from SNTP, is kept by the PCF85063, and survives a reboot.** The
   RTC is the source at boot (instant, offline); SNTP corrects it once the network
@@ -425,14 +435,12 @@ worse than a swipe that does nothing. Both halves are spent: the navigator is
 wired (`screens.cpp`, one `Apply(ui::Nav)` that a gesture, a button and the
 console all reach) and all seven screens are on the glass.
 
-**Two items of §10.8.2's own list are still missing, though, and they are a
-genuine gap rather than a deferral**: `key_id` when registered, and the gear.
-They were the same story once — no registration to name and nothing to open — and
-neither excuse survives, since `register` works and settings is a swipe up. What
-holds them back now is only that settings is already reachable three ways
-(§10.8.5), so a gear buys a fourth rather than a first; the `key_id` has no such
-excuse and is the one worth drawing — a device that cannot say *which* responder
-it is, is one the operator has to reach for a console to identify.
+**And nothing on this screen is owed any more.** This paragraph used to end with
+two items of §10.8.2's own list outstanding — `key_id` and a gear — held back first
+by there being no registration to name and nothing to open, and then by neither
+excuse surviving. The list itself is what changed: both are struck at the
+repository owner's decision, for the reasons the opening of this section now gives,
+so the screen is complete rather than three quarters built.
 
 #### 10.8.3 Limits — the `status` document, when there is one
 
@@ -949,8 +957,8 @@ Three ways, and the third is the reason the second exists:
 | the console's `screen` | not for the operator: it is what lets a screenshot be taken of a list that is otherwise reached only by a gesture (§10.12.2) |
 
 **And settings is now reachable from the limits screen, which this document
-previously forbade.** The old rule was "one way in is one place to look": the
-gear is on the clock, so settings opened from the clock and from nowhere else,
+previously forbade.** The old rule was "one way in is one place to look": the way
+in belonged to the clock, so settings opened from the clock and from nowhere else,
 and `navigator.cpp` refused a swipe up from the limits. That held while the
 limits were something the operator *swiped to* — and §10.8.3 then made them a
 screen that **arrives**, every few seconds, for as long as a Claude Code session
