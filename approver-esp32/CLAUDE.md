@@ -46,6 +46,7 @@ whose long form is [`status.md`](status.md).
 | [`commands.md`](commands.md) | every console command the device answers and what each one does. Design documents describe why; that one describes what you can type |
 | [`status.md`](status.md) | the row-by-row state of every piece — what runs on the board, what is written and untried, what is still a design. No decisions in it, and the fastest-moving file here |
 | [`working-with-code.md`](working-with-code.md) | the mechanics: where ESP-IDF is installed on this machine, how to get a shell in which `idf.py` exists, how to flash, how to talk to the port from a script, and how to photograph the panel |
+| [`user-manual.md`](user-manual.md) | **the one document here written for the operator rather than for whoever changes the code**: the three buttons, every screen with a photograph of it off the real panel, first-time setup, the phone site, and what to do when the device will not approve anything. The pictures live in [`images/`](images/) — the panel shots are `screenshot` captures (§10.12.2), the two photographs are of the board on the desk, and the Wi-Fi password and the neighbours' network names are painted out of the two shots that had them |
 
 ## Status: a working responder, and every screen it was going to have
 

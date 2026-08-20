@@ -35,7 +35,7 @@ already does this job:
 | Also in here | What it is | Its docs |
 |---|---|---|
 | [`approver-web/`](approver-web/) | a third responder: the same allow/deny as a web page (Next.js), signing with a non-extractable key in the browser | [`approver-web/README.md`](approver-web/README.md) to run it, [`approver-web/CLAUDE.md`](approver-web/CLAUDE.md) for the design |
-| [`approver-esp32/`](approver-esp32/) | a fourth responder: firmware for an ESP32-C6 with a touchscreen — a clock on the desk that lights up and takes one press | [`approver-esp32/CLAUDE.md`](approver-esp32/CLAUDE.md) §10, and the subject files its table maps |
+| [`approver-esp32/`](approver-esp32/) | a fourth responder: firmware for an ESP32-C6 with a touchscreen — a clock on the desk that lights up and takes one press | [`approver-esp32/user-manual.md`](approver-esp32/user-manual.md) to use it, with a photograph of every screen; [`approver-esp32/CLAUDE.md`](approver-esp32/CLAUDE.md) §10 for the design, and the subject files its table maps |
 | [`statusline/`](statusline/) | the Claude Code status line, in Rust: the model and the rate limits, on screen and published to NATS — plus what the session is *doing*, from three hooks | [`statusline/CLAUDE.md`](statusline/CLAUDE.md) §9 |
 
 All three are additive, and that is the point: **none of them required a change
@@ -607,6 +607,25 @@ get the read-only tier (enumeration, firmware, `getInfo`) if a key is plugged in
 | `py approver/responder.py register <token> [--key-type ed25519\|p256]` | Software stand-in: generate a key pair and register its public half |
 | `py approver/responder.py serve` | Software stand-in: answer approval requests with the on-disk key (tests / no hardware) |
 | `py approver/hook.py` | The `PermissionRequest` hook (reads stdin, prints the decision) |
+
+## Inspiration
+
+The desk device in [`approver-esp32/`](approver-esp32/) started from two projects
+that had already put Claude Code on a small screen next to the keyboard:
+
+- **[Clawdmeter](https://github.com/HermannBjorgvin/Clawdmeter)** — an ESP32 desk
+  display for Claude Code usage: session and weekly utilisation on a Waveshare
+  AMOLED board, paired to the computer over Bluetooth, with a Clawd mascot that
+  gets busier as the rate climbs.
+- **[clawdmeter-plus](https://github.com/sorryhumans/clawdmeter-plus)** — a fork
+  that adds a second screen: weather, the health of background agents as a row of
+  coloured dots, an animated pixel mascot, and a spoken greeting twice a day.
+
+Their screen is the one [`statusline/`](statusline/) §9.7 publishes and
+[`approver-esp32/`](approver-esp32/) §10.8.3 shows. What this repository adds is
+the screen neither of them has: **the permission request, and a button that
+answers it** — signed on the device, verified by the hook, and never answerable
+by the machine that asked.
 
 ## Notes & safety
 
