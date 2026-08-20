@@ -33,6 +33,12 @@ is not writable in this sandbox.
   the glass — and §6's queue group means that if the board is *not* there, some
   other responder answers and the suite passes for the wrong key. An env var is
   the honest gate.
+- `requires_web_browser` — the browser tier of `approver-web`, gated on
+  `AI_REMOTE_WEB_BROWSER=1`. Not probed either, and for the plainer of the two
+  reasons: it costs a Chrome, a Next dev server and half a minute, which is not
+  something a bare `pytest` should spend. The device tier's *other* hazard —
+  another responder answering instead — does not apply, because that suite points
+  the app at its own subject and its own queue group.
 - `run_async(coro)` — drives async bodies through `asyncio.run`. We do not add
   `pytest-asyncio`; it is not on the approved list (§1).
 
@@ -56,6 +62,7 @@ is not writable in this sandbox.
 | `test_esp32_vectors.py` | the **Python half** of §10.11 tier 2: the committed parity vectors are still what today's `protocol.py` and `lib/crypto.py` produce | — |
 | `test_esp32_web_pages.py` | the six pages of §10.16 as they ship: no inline `<script>`, `app.js` loaded exactly once, every `data-page` handler present, every id it asks for on the page, every link between pages resolving | — |
 | `test_esp32_device.py` | §10.11 tier 3 — the ESP32 responder answering for real, and every tamper on the reply it signed | the board, and a press |
+| `test_web_browser.py` | the browser tier of `approver-web` — a browser-held non-extractable key registering, signing a reply the hook trusts, surviving a full browser restart, and coexisting with a second browser under a second `key_id` | `agent-browser`, node, NATS |
 
 Two conventions worth keeping:
 
@@ -94,3 +101,19 @@ C++ side cannot check about itself**:
 
 All three keep the invariant at the top of this file: with no board and no env
 var set, they skip or pass on their own.
+
+## And one that is about a browser, for the same reason
+
+`test_web_browser.py` covers a Next.js app that this suite cannot import either,
+and it is here rather than in `approver-web/` on the same argument: **the key it
+is about lives in neither language.** `npm test` can check every byte string the
+app builds and still never see a signature, because the private half is a
+non-extractable `CryptoKey` inside a browser profile — so the test has to run a
+browser, and the thing that judges what the browser signed is `hook.verify_reply`,
+which is Python. Putting it in `node:test` would mean reimplementing the hook in
+TypeScript and then checking the app against a copy of itself.
+
+It keeps the same invariant: with `AI_REMOTE_WEB_BROWSER` unset, all sixteen
+skip. It also does what the device tier only asks for — it cannot be answered by
+another responder, because it gives the app under test its own subject and queue
+group rather than sharing `approvals.*`.

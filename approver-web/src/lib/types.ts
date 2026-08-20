@@ -25,6 +25,24 @@ export interface PendingRequest {
   expires_at: number;
 }
 
+/**
+ * One registered browser as the page sees it: **public material only**, which is
+ * all this app ever has (custody is in the browser — `browser-key.ts`).
+ *
+ * There can be several, one per `key_id`, which is what lets two operators each
+ * hold their own key. A browser finds itself in this list by its own `key_id`,
+ * and compares `public_key` to know whether the key it holds is still the
+ * registered one.
+ */
+export interface RegisteredClientView {
+  key_id: string;
+  key_type: KeyType;
+  /** base64, 33-byte compressed point — what the allowlist holds. */
+  public_key: string;
+  /** Epoch seconds, or null for an entry migrated from the pre-`clients` shape. */
+  registered_ts: number | null;
+}
+
 export interface ResponderStatus {
   connected: boolean;
   servers: string;
@@ -34,13 +52,11 @@ export interface ResponderStatus {
   status_subject: string;
   /** The activity subject (§9.10) — watched the same way, and just as read-only. */
   activity_subject: string;
-  key_id: string;
-  key_type: KeyType;
+  /** Every registered browser, sorted by `key_id`. Empty until one registers. */
+  clients: RegisteredClientView[];
   signing_mode: SigningMode;
-  /** True once a key has been registered — says nothing about who holds it. */
+  /** True once *some* key is registered — says nothing about who holds it. */
   registered: boolean;
-  /** The registered public key (base64 compressed point), or null. */
-  public_key: string | null;
   /**
    * The registration handler's public key, pinned when this app registered
    * (§6). Shown so it can be compared with what the handler printed — that

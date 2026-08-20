@@ -1,6 +1,6 @@
 # `scripts/` — the command files
 
-Windows command files that drive the flows end to end. Two are self-checking
+Windows command files that drive the flows end to end. Three are self-checking
 tests (they pass or fail on their own); four need a human, to press a YubiKey, to
 press a button on the ESP32, or to read what came back.
 
@@ -14,6 +14,7 @@ the two that wrap `tools/`.
 |--------|--------------|----------------|-----------------|-----------|
 | [`e2e-registration.cmd`](#e2e-registrationcmd) | registers a responder against a real handler and checks the allowlist | yes | no | no |
 | [`e2e-approval.cmd`](#e2e-approvalcmd) | a full allow decision through real `responder.py` + `hook.py` | yes | no | no |
+| [`web-approval.cmd`](#web-approvalcmd) | the whole approval loop through a real browser, with the key inside it | yes | no — a browser | no |
 | [`test-request.cmd`](#test-requestcmd) | sends one permission request and prints the answer | no — you read it | no | no |
 | [`yubikey-arkg.cmd`](#yubikey-arkgcmd) | the five-step ARKG hardware run: version → credential → derive → sign → verify | no — reports what the key returned | **YubiKey** (2 touches) | **yes** |
 | [`yubikey-approval.cmd`](#yubikey-approvalcmd) | the whole approval loop with the key on a YubiKey | yes, apart from the touches | **YubiKey** (2 touches) | **yes** |
@@ -27,9 +28,11 @@ the two that wrap `tools/`.
 cd nats && docker compose up -d && cd ..
 ```
 
-**`uv sync` must have been run**, and that is now the whole requirement. Every
-script here resolves `.venv\Scripts\python.exe` **by path** and falls back to the
-`py` launcher with a warning if it is not there.
+**`uv sync` must have been run**, and that is the whole requirement for six of
+the seven. Every script here resolves `.venv\Scripts\python.exe` **by path** and
+falls back to the `py` launcher with a warning if it is not there.
+`web-approval.cmd` is the exception: it also needs node, `agent-browser` and the
+`approver-web` dependencies, and it checks for each of them before it starts.
 
 That used to be true of only three of them, and the other two were a trap worth
 recording rather than quietly deleting: `py` finds the venv only when
@@ -100,6 +103,44 @@ file rather than typed, so it runs unattended; everything else is the real thing
 including stdin/stdout and the exit codes.
 
 **Exit codes:** `0` PASS, `1` FAIL.
+
+## `web-approval.cmd`
+
+The browser tier of [`approver-web`](../approver-web/CLAUDE.md) — the §7 approval
+loop with the key inside a real browser, and the acceptance test for that app:
+mint a token → click **Register** in a browser → send a `PermissionRequest` →
+click **Allow** → check `hook.verify_reply` calls the reply trusted.
+
+```bat
+scripts\web-approval.cmd
+```
+
+No arguments. It drives `tests\test_web_browser.py`, which also proves the two
+things that were verified by hand and never committed: the key **survives closing
+the browser** (closed, relaunched on the same profile, signs again with the same
+key — and still refuses to be exported), and **two browsers hold two `key_id`s**
+at once without rotating each other out.
+
+Self-checking and unattended — `agent-browser` does the clicking, so unlike the
+YubiKey and ESP32 scripts there is no finger in the loop. About 35 seconds.
+
+**Three preconditions:** NATS up (`cd nats && docker compose up -d`),
+`agent-browser` installed with a browser (`agent-browser doctor`), and
+`approver-web\node_modules` present (`approver-web\run.cmd --install` once). Each
+one is checked before anything starts, and says which it was.
+
+**It touches nothing of yours.** A throwaway handler config and web config under
+the pytest temp root, two throwaway browser profiles, and — unlike
+`esp32-approval.cmd` — **its own subject and its own queue group**, so it neither
+answers a live `PermissionRequest` nor loses one to a responder you already have
+running. That is the one precondition this script does not have to ask for.
+
+If you interrupt it with Ctrl+C, kill the handler and dev server it left behind
+(`taskkill /IM node.exe /F`, and the stray `python.exe`): they hold the log file
+inside `.pytest_tmp`, which pytest clears at the start of the *next* run, and a
+locked file there fails that clear before any fixture gets to run.
+
+**Exit codes:** `0` PASS, `1` FAIL (or the suite skipped).
 
 ## `test-request.cmd`
 

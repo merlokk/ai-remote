@@ -77,6 +77,9 @@ export function DecisionForm({
             reason: values.reason,
             updated_input: updated,
             sig,
+            // Which of the registered browsers this is: the server may hold
+            // several keys (§6) and has to check the signature against ours.
+            key_id: key?.key_id,
           }),
         });
         const result = (await response.json()) as DecisionResult;

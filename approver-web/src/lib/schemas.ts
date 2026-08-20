@@ -11,7 +11,7 @@
  */
 import { z } from "zod";
 
-import { PROTOCOL_VERSION } from "./protocol";
+import { PROTOCOL_VERSION } from "./protocol.ts";
 
 export const KEY_TYPES = ["ed25519", "p256"] as const;
 export const BEHAVIORS = ["allow", "deny"] as const;
@@ -19,23 +19,49 @@ export const BEHAVIORS = ["allow", "deny"] as const;
 export type KeyType = (typeof KEY_TYPES)[number];
 export type Behavior = (typeof BEHAVIORS)[number];
 
+/**
+ * One registered browser: the **public** halves of a key this app will accept a
+ * decision from. There is deliberately no private key here — custody lives in
+ * the browser (`browser-key.ts`).
+ *
+ * `public_key` is the base64 33-byte compressed point the allowlist holds;
+ * `public_key_raw` is the 65-byte uncompressed form, kept only so the server can
+ * verify what the browser signed without doing a modular square root.
+ */
+export const registeredClientSchema = z.object({
+  key_type: z.enum(KEY_TYPES).default("p256"),
+  public_key: z.string().min(1),
+  public_key_raw: z.string().min(1),
+  /** Epoch seconds, for the operator: which of these browsers is the recent one. */
+  registered_ts: z.number().int().nonnegative().optional(),
+});
+
+export type RegisteredClient = z.infer<typeof registeredClientSchema>;
+
 // --- config.json ---------------------------------------------------------------
 export const configSchema = z.object({
   v: z.number().int().default(PROTOCOL_VERSION),
   servers: z.string().min(1).default("nats://127.0.0.1:4222"),
   subject: z.string().min(1).default("approvals.*"),
   queue: z.string().min(1).default("approvers"),
-  /** Registered allowlist identity — set by `register`, from the token prefix. */
-  key_id: z.string().min(1).default("approver-web"),
-  key_type: z.enum(KEY_TYPES).default("p256"),
   /**
-   * The registered **public** key, written only after the handler acks
-   * `ok:true`. There is deliberately no private key here: custody lives in the
-   * browser (`browser-key.ts`). `public_key` is the base64 33-byte compressed
-   * point the allowlist holds; `public_key_raw` is the 65-byte uncompressed
-   * form, kept only so the server can verify what the browser signed without
-   * doing a modular square root.
+   * Every registered browser, keyed by the `key_id` its token named — the same
+   * shape, and for the same reason, as `clients` in `handler-config.json`.
+   *
+   * **One entry per browser, not one per app.** A `key_id` has exactly one key
+   * (§6), so two operators need two tokens; registering a second browser under
+   * its own `key_id` adds an entry here instead of rotating the first one out.
+   * Re-registering the *same* `key_id` still replaces it, which is what
+   * rotation is.
    */
+  clients: z.record(z.string().min(1), registeredClientSchema).default({}),
+  /**
+   * The single-key shape this app wrote before `clients` existed. Accepted so an
+   * existing config keeps working, migrated into `clients` on load, and never
+   * written again — see `migrateLegacyClient`.
+   */
+  key_id: z.string().min(1).optional(),
+  key_type: z.enum(KEY_TYPES).optional(),
   public_key: z.string().min(1).optional(),
   public_key_raw: z.string().min(1).optional(),
   /**
@@ -176,6 +202,18 @@ export type RegistrationReply = z.infer<typeof registrationReplySchema>;
  */
 export const decisionRequestSchema = z.object({
   nonce: z.string().min(1),
+  /**
+   * Which registered browser signed this — the `key_id` the posting browser holds
+   * (§6), so the server knows which of several registered keys to check against
+   * and which name goes in the reply.
+   *
+   * Optional, and not a claim of anything: it selects a key, it does not grant
+   * one. A wrong or missing `key_id` fails verification against whatever key it
+   * did select, and nothing is answered. Absent (an old tab, or a POST by hand)
+   * it resolves only while exactly one browser is registered — see
+   * `config.selectClient`.
+   */
+  key_id: z.string().min(1).optional(),
   behavior: z.enum(BEHAVIORS),
   reason: z.string().max(500).default(""),
   updated_input: z.record(z.string(), z.unknown()).nullish(),

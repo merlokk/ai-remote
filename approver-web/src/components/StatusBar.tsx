@@ -48,7 +48,11 @@ export function StatusBar({
               stream {streamOpen ? "live" : "reconnecting"}
             </Badge>
             <Badge colorPalette={unsigned ? "orange" : "brand"} variant="subtle">
-              {unsigned ? "no key registered" : "key: browser (non-extractable)"}
+              {unsigned
+                ? "no key registered"
+                : status.clients.length === 1
+                  ? "key: browser (non-extractable)"
+                  : `${status.clients.length} keys: browsers (non-extractable)`}
             </Badge>
           </HStack>
 
@@ -60,7 +64,16 @@ export function StatusBar({
               label="activity"
               value={`${status.activity_subject} (what Claude is doing, read-only)`}
             />
-            <Row label="key" value={`${status.key_id} / ${status.key_type}`} />
+            {/* One row per registered browser: several is a normal state, and
+                which key_id answered is what a reply is judged by (§6). */}
+            <Row
+              label={status.clients.length > 1 ? "keys" : "key"}
+              value={
+                status.clients.length
+                  ? status.clients.map((c) => `${c.key_id} / ${c.key_type}`).join(", ")
+                  : "none registered"
+              }
+            />
             <Row
               label="config"
               value={

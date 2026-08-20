@@ -8,6 +8,8 @@ we probe once at collection time and expose ready-made markers.
   ``requires_preview_sign`` / ``requires_yubikey_touch``
 * the ESP32 responder, powered on and registered (CLAUDE.md §10.11 tier 3) ->
   ``requires_esp32_device``
+* a real browser driven by ``agent-browser``, plus node and the ``approver-web``
+  dependencies (``approver-web/CLAUDE.md`` "Testing") -> ``requires_web_browser``
 
 A plain ``py -m pytest`` therefore stays green on a bare checkout with no hardware.
 """
@@ -98,6 +100,27 @@ requires_esp32_device = pytest.mark.skipif(
 )
 
 
+#: Set to 1 to allow the browser tier of the web responder -- a real Chrome,
+#: driven by `agent-browser`, holding a real non-extractable key.
+WEB_BROWSER_ENV = "AI_REMOTE_WEB_BROWSER"
+
+#: Opt-in for the same two reasons as the tiers above, minus the finger.
+#:
+#: It costs a browser download, a Next dev server and a minute of wall clock,
+#: which is why it is not in a bare `pytest`; and it is *driven* rather than
+#: watched, so nothing about it needs a human. The board tier's other hazard --
+#: another responder answering instead -- is designed out rather than declared:
+#: the app under test is pointed at its own subject and its own queue group, so
+#: it cannot be answered for and cannot steal a live request.
+requires_web_browser = pytest.mark.skipif(
+    os.environ.get(WEB_BROWSER_ENV) != "1",
+    reason=(
+        f"needs a browser driven by agent-browser and the approver-web dependencies; "
+        f"set {WEB_BROWSER_ENV}=1 to enable (scripts\\web-approval.cmd does)"
+    ),
+)
+
+
 def run_async(coro):
     """Drive an async coroutine to completion without pytest-asyncio (not an approved dep)."""
     return asyncio.run(coro)
@@ -109,8 +132,10 @@ __all__ = [
     "requires_preview_sign",
     "requires_yubikey_touch",
     "requires_esp32_device",
+    "requires_web_browser",
     "run_async",
     "DEFAULT_SERVERS",
     "TOUCH_ENV",
     "DEVICE_ENV",
+    "WEB_BROWSER_ENV",
 ]

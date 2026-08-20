@@ -21,10 +21,10 @@ never confused with a broken build:
 
 | Tier | Command | Result |
 |------|---------|--------|
-| Python | `.venv\Scripts\python.exe -m pytest -q` | **446 passed, 24 skipped** (no NATS, no YubiKey, no board) |
+| Python | `.venv\Scripts\python.exe -m pytest -q` | **446 passed, 40 skipped** (no NATS, no YubiKey, no board, no browser) |
 | Rust | `cargo test -q` (in `statusline/`) | **58 passed** across four binaries |
 | Rust format | `cargo fmt --check` | clean |
-| Node | `npm test` (in `approver-web/`) | **28 passed** |
+| Node | `npm test` (in `approver-web/`) | **38 passed** |
 | Host tier (ESP32) | `RUN_TEST` count in `approver-esp32/host_test/` | **690**, matching `tests.md` §10.11 |
 | Markdown links | every relative link in every tracked `.md` | all resolve |
 
@@ -100,24 +100,40 @@ bytes of LVGL's pool.
 
 ### 2.3 `approver-web`'s own "What is still missing"
 
-From `approver-web/CLAUDE.md`:
+**Items 1–3 are done.** What is left is item 4, which was never a gap in the app —
+it is a decision about where the app may run:
 
-1. **Tests are not committed.** The two cross-language checks were run as scratch
-   scripts: a browser signature accepted by `hook.verify_reply`, and the
-   non-extractable key surviving a browser restart. Both need `agent-browser`, so
-   they would be an opt-in tier like §8.6's touch tests — not part of a bare
-   `py -m pytest`. The repo's TDD rule (root §1) wants them in `tests/`.
-2. **No `.cmd` script** in `scripts/` for the register → request → signed-decision
-   loop, in the style of `e2e-approval.cmd`. Confirmed absent: `scripts/` has six
-   files and none of them is the web one. `scripts/README.md`'s table has no row
-   for it either.
-3. **Multiple browsers** share one `key_id`, so a second browser registering
-   rotates the first out. Fine for one operator; distinct `key_id`s and tokens
-   would work today if it is ever wanted.
 4. **No authentication on the page.** Anyone who can open it in that browser
    profile can approve a `rm -rf`; anyone who can reach the port can hand
    `POST /api/register` a token. Acceptable on loopback, "unacceptable the moment
-   it binds to anything but the loopback interface".
+   it binds to anything but the loopback interface". It is the same open question
+   as §2.4's, one component over — and note that registering several browsers
+   (item 3) gives two responders two keys, not two *identities with different
+   rights*.
+
+What the first three were, and what closed them:
+
+1. **Tests are not committed** → `tests/test_web_browser.py`, sixteen tests, opt-in
+   on `AI_REMOTE_WEB_BROWSER=1`. A real browser driven by `agent-browser`
+   registers through the page, signs a decision `hook.verify_reply` calls trusted,
+   is **closed and relaunched on the same profile** and signs again with the same
+   key — which is the persistence claim — and its private half is asked to export
+   itself and refuses. The judge is Python because the judge is the hook; the
+   argument for where the file lives is in `tests/CLAUDE.md`.
+2. **No `.cmd` script** → `scripts\web-approval.cmd`, self-checking and
+   unattended (`agent-browser` does the clicking, so there is no finger in the
+   loop as there is in the YubiKey and ESP32 ones). ~35 s. It also does what
+   `esp32-approval.cmd` can only ask for: the app under test gets **its own
+   subject and queue group**, so it neither answers a live `PermissionRequest` nor
+   loses one to a responder already running.
+3. **Multiple browsers** → `config.json` now holds a `clients` map keyed by
+   `key_id`, the same shape as the handler's allowlist. A registration writes one
+   entry, so a second browser with its own token joins instead of rotating the
+   first out; the decision POST carries the `key_id` that signed it and the server
+   verifies against that entry. The pre-`clients` single-key config is migrated on
+   read (in memory — reading a config does not write one). Sharing one `key_id`
+   between two browsers is still a rotation, which is now something you have to
+   ask for rather than the only behaviour.
 
 ### 2.4 The ESP32 web server's write path has no authentication decision (§10.16, §10.3)
 

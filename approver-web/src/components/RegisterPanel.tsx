@@ -32,9 +32,15 @@ import type { RegisterResult, ResponderStatus } from "@/lib/types";
 export function RegisterPanel({ status }: { status: ResponderStatus | null }) {
   const { key, ready, register: registerKey } = useBrowserKey();
   const registered = key !== null;
-  // A key here that the allowlist no longer knows: someone rotated this key_id
-  // elsewhere, and every decision would be rejected with no visible reason.
-  const stale = key !== null && status?.public_key != null && status.public_key !== key.public_key;
+  // This browser's own entry, found by the key_id it holds — the app may have
+  // several (§6), one per browser, and only ours says anything about us.
+  const mine = key && status ? (status.clients.find((c) => c.key_id === key.key_id) ?? null) : null;
+  // A key here that the app no longer knows, or knows differently: someone
+  // rotated this key_id elsewhere, or this browser registered against another
+  // config. Either way every decision it sends would be rejected with no
+  // visible reason. `status` null means "still loading", not "not registered".
+  const stale =
+    key !== null && status !== null && (mine === null || mine.public_key !== key.public_key);
   const [open, setOpen] = useState<boolean | null>(null);
   const [result, setResult] = useState<RegisterResult | null>(null);
 
@@ -92,13 +98,25 @@ export function RegisterPanel({ status }: { status: ResponderStatus | null }) {
                 <Code size="sm">
                   py approver/registration_handler.py --get-token approver-web
                 </Code>
-                .
+                . A second browser needs its own token under its own name —{" "}
+                <Code size="sm">--get-token approver-web-phone</Code> — because one key_id
+                holds one key, so re-using this one would rotate this browser out.
               </Text>
 
               {stale ? (
                 <Text fontSize="sm" color="red.fg">
-                  The allowlist holds a different key for {status?.key_id}. Decisions from
-                  this browser will be rejected until you register again.
+                  {mine === null
+                    ? `Nothing is registered here under ${key?.key_id}.`
+                    : `A different key is registered for ${key?.key_id}.`}{" "}
+                  Decisions from this browser will be rejected until you register again.
+                </Text>
+              ) : null}
+
+              {status && status.clients.length > 1 ? (
+                <Text fontSize="sm" color="fg.muted">
+                  {status.clients.length} browsers are registered (
+                  {status.clients.map((c) => c.key_id).join(", ")}). Each holds its own key and
+                  answers under its own name; a token is for one of them.
                 </Text>
               ) : null}
 

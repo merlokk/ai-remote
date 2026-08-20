@@ -24,7 +24,7 @@ import {
 import { randomBytes } from "node:crypto";
 
 import { type ActivityDoc, activityDocSchema } from "./activity";
-import { loadConfig, saveConfig } from "./config";
+import { loadConfig, saveConfig, selectClient } from "./config";
 import { verifyEd25519, verifyP256 } from "./keys";
 import { PROTOCOL_VERSION, registrationReplySigningBytes } from "./protocol";
 import {
@@ -39,7 +39,13 @@ import {
   registrationReplySchema,
 } from "./schemas";
 import { type StatusDoc, statusDocSchema } from "./statusline";
-import type { PendingRequest, ResponderStatus, SigningMode, Snapshot } from "./types";
+import type {
+  PendingRequest,
+  RegisteredClientView,
+  ResponderStatus,
+  SigningMode,
+  Snapshot,
+} from "./types";
 
 const decoder = new TextDecoder();
 const encoder = new TextEncoder();
@@ -127,7 +133,19 @@ class Responder {
   private loaded = loadConfig();
 
   private get signingMode(): SigningMode {
-    return this.loaded.config.public_key_raw ? "browser" : "unsigned";
+    return this.registeredClients.length > 0 ? "browser" : "unsigned";
+  }
+
+  /** Every registered browser, public material only, sorted so the UI is stable. */
+  private get registeredClients(): RegisteredClientView[] {
+    return Object.entries(this.loaded.config.clients)
+      .map(([key_id, client]) => ({
+        key_id,
+        key_type: client.key_type,
+        public_key: client.public_key,
+        registered_ts: client.registered_ts ?? null,
+      }))
+      .sort((a, b) => a.key_id.localeCompare(b.key_id));
   }
 
   get config() {
@@ -310,25 +328,33 @@ class Responder {
    * key before anything goes on the wire. So a caller cannot post one decision
    * and a signature over another, and a canonicalisation mismatch is caught here
    * — with a message — instead of surfacing as the hook silently falling back.
+   *
+   * `keyId` says *which* registered browser signed it, since there can be
+   * several (§6). It selects a key and nothing else: the signature still has to
+   * verify under it, so naming another browser's `key_id` buys an attacker a
+   * failed check rather than that browser's slot in the allowlist.
    */
-  async decide(nonce: string, decision: Decision, sig: string): Promise<SignedReply> {
+  async decide(
+    nonce: string,
+    decision: Decision,
+    sig: string,
+    keyId?: string | null,
+  ): Promise<SignedReply> {
     const entry = this.entries.get(nonce);
     if (!entry) {
       throw new DecisionError("this request is gone (expired, or already answered)");
     }
-    const { key_id, public_key_raw } = this.loaded.config;
-    if (!public_key_raw) {
-      throw new DecisionError("no key is registered — register this browser first");
-    }
+    const lookup = selectClient(this.loaded.config, keyId);
+    if (!lookup.ok) throw new DecisionError(lookup.error);
 
     const bytes = await decisionSigningBytes(entry.pending.request, decision);
-    if (!verifyP256(public_key_raw, bytes, sig)) {
+    if (!verifyP256(lookup.client.public_key_raw, bytes, sig)) {
       throw new DecisionError(
-        "the signature does not match the registered key — is this browser the one that registered?",
+        `the signature does not match the key registered as ${lookup.key_id} — is this browser the one that registered?`,
       );
     }
 
-    const reply = assembleReply(entry.pending.request, decision, { keyId: key_id, sig });
+    const reply = assembleReply(entry.pending.request, decision, { keyId: lookup.key_id, sig });
     entry.msg.respond(encoder.encode(JSON.stringify(reply)));
     this.entries.delete(nonce);
     this.notify();
@@ -343,6 +369,11 @@ class Responder {
    * verify the handler's signature over the answer → **persist only on
    * `ok:true`**. A rejected registration must not clobber a key that still
    * works, and an unsigned answer is not a registration at all.
+   *
+   * The write touches **one** entry in `clients`: the `key_id` this token named.
+   * So a second browser with its own token joins the config rather than evicting
+   * the first, while re-registering the same `key_id` still rotates it — the
+   * handler's own rule (§6), kept on this side of the wire too.
    */
   async register(token: string, publicB64: string, publicRawB64: string): Promise<string> {
     const keyId = token.split(".", 1)[0];
@@ -396,10 +427,15 @@ class Responder {
 
     this.loaded.config = {
       ...this.loaded.config,
-      key_id: keyId,
-      key_type: "p256",
-      public_key: publicB64,
-      public_key_raw: publicRawB64,
+      clients: {
+        ...this.loaded.config.clients,
+        [keyId]: {
+          key_type: "p256",
+          public_key: publicB64,
+          public_key_raw: publicRawB64,
+          registered_ts: Math.floor(Date.now() / 1000),
+        },
+      },
       server_key: serverKey,
     };
     saveConfig(this.loaded.config, this.loaded.path);
@@ -416,11 +452,9 @@ class Responder {
       queue: this.config.queue,
       status_subject: this.config.status_subject,
       activity_subject: this.config.activity_subject,
-      key_id: this.loaded.config.key_id,
-      key_type: this.loaded.config.key_type,
+      clients: this.registeredClients,
       signing_mode: this.signingMode,
       registered: this.signingMode !== "unsigned",
-      public_key: this.loaded.config.public_key ?? null,
       server_key: this.loaded.config.server_key ?? null,
       config_path: this.loaded.path,
       config_from_file: this.loaded.fromFile,

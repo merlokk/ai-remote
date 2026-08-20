@@ -32,12 +32,13 @@ export async function POST(request: Request): Promise<Response> {
     return json({ ok: false, error: detail }, 400);
   }
 
-  const { nonce, behavior, reason, updated_input, sig } = parsed.data;
+  const { nonce, behavior, reason, updated_input, sig, key_id } = parsed.data;
   try {
     await getResponder().decide(
       nonce,
       { behavior, reason, updatedInput: updated_input ?? null },
       sig,
+      key_id,
     );
     return json({ ok: true }, 200);
   } catch (err) {

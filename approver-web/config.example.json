@@ -3,8 +3,7 @@
   "servers": "nats://127.0.0.1:4222",
   "subject": "approvals.*",
   "queue": "approvers",
-  "key_id": "approver-web",
-  "key_type": "p256",
+  "clients": {},
   "request_ttl": 120,
   "status_subject": "status",
   "activity_subject": "activity"

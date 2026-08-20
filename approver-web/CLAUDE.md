@@ -19,6 +19,8 @@ gets a page that lists pending requests and answers them with a button.
 | Register a key with a one-time token (§6), from the page | done |
 | Sign each decision so `hook.py` accepts it (§7) | done |
 | Key custody: **non-extractable WebCrypto key in the browser**, surviving restarts | done |
+| Several browsers at once, one `key_id` and one key each | done |
+| All of the above as a committed, unattended test tier | done — `scripts\web-approval.cmd` |
 
 **There is no private key on disk anywhere.** The pair is generated in the
 browser with `extractable: false` and the `CryptoKey` is kept in IndexedDB, so
@@ -32,6 +34,11 @@ then a decision the browser signed coming back `trusted=True`, with a flipped
 `behavior` rejected. Persistence was verified the only way that means anything —
 register, **close the browser completely**, relaunch it against the same profile,
 and sign again: still `trusted=True`.
+
+**And none of that is a claim about one afternoon any more.** All of it is
+`tests/test_web_browser.py` — sixteen tests that start a handler and a dev server,
+drive a real browser, and hand what it signs to `hook.verify_reply`, including the
+close-and-relaunch and a second browser under a second `key_id`. See "Testing".
 
 **A browser with no key cannot answer at all** — the decision form says so
 instead of offering buttons, and the request simply expires, which is the §7
@@ -105,7 +112,8 @@ src/lib/
   protocol.test.ts       cross-language parity vectors (node:test)
   keys.test.ts           parity vectors for the handler's ed25519 replies (node:test)
   schemas.ts             every zod schema: config, bus request, token, both POSTs, the registration reply
-  config.ts              config.json loader + atomic save (server)
+  config.ts              config.json loader + atomic save (server), plus the `clients` map: which key a decision is checked against, and the pre-`clients` migration
+  config.test.ts         that map — two browsers coexisting, the lookup, the migration, a file round trip (node:test)
   keys.ts                verify a P-256 DER signature and an ed25519 one (server) — it cannot sign
   browser-key.ts         the key itself: generate, IndexedDB, sign (client only)
   browser-key-context.tsx  shares that key between the register panel and the cards
@@ -149,7 +157,7 @@ both sides compute them with one implementation — which is also why
 | Route | Shape |
 |-------|-------|
 | `GET /api/stream` | `text/event-stream`. Every frame is a **whole** `{status, requests, statusline, activity}` snapshot, so a reconnect needs no resync. `: ping` every 15 s. Opening the stream is what triggers the NATS connect — there is no connect button, because having the page open *is* being a responder. |
-| `POST /api/decision` | `{nonce, behavior, reason, updated_input?, sig}` → `{ok}`. The signature is made in the browser; the server re-derives the signing bytes **from the pending request it holds** and verifies before answering, so a caller cannot post one decision with a signature over another. `409` = gone (expired/answered), no key registered, or the signature does not match. |
+| `POST /api/decision` | `{nonce, behavior, reason, updated_input?, sig, key_id?}` → `{ok}`. The signature is made in the browser; the server re-derives the signing bytes **from the pending request it holds** and verifies before answering, so a caller cannot post one decision with a signature over another. `key_id` says which registered browser signed it — it *selects* a key and grants nothing, since the signature still has to verify under it. Absent, it resolves only while exactly one browser is registered. `409` = gone (expired/answered), no key registered, an unknown `key_id`, or the signature does not match. |
 | `POST /api/register` | `{token, public_key, public_key_raw}` → `{ok, key_id}` \| `{ok:false, error}`. Only public material crosses; the private half never leaves the browser. `409` = the handler or the bus said no (bad/spent token, nothing listening), or the answer was not the registration handler's (unsigned, replayed, or signed by a key other than the pinned one) — and **nothing was persisted**. |
 
 `nonce` is the entry id: it is unique per request and already on the wire.
@@ -158,9 +166,13 @@ both sides compute them with one implementation — which is also why
 
 ```json
 { "v": 1, "servers": "nats://127.0.0.1:4222", "subject": "approvals.*",
-  "queue": "approvers", "key_id": "approver-web", "key_type": "p256",
-  "request_ttl": 120, "status_subject": "status", "activity_subject": "activity",
-  "public_key": "<b64 33-byte compressed>", "public_key_raw": "<b64 65-byte>",
+  "queue": "approvers", "request_ttl": 120,
+  "status_subject": "status", "activity_subject": "activity",
+  "clients": {
+    "approver-web": { "key_type": "p256", "registered_ts": 1787240184,
+                      "public_key": "<b64 33-byte compressed>",
+                      "public_key_raw": "<b64 65-byte>" }
+  },
   "server_key": "<b64 32-byte ed25519 — the registration handler>" }
 ```
 
@@ -170,19 +182,35 @@ signature without recovering `y` from a compressed point (a modular square root)
 `server_key` is the registration handler's own public key, pinned at registration
 (§6) so a later registration can only be answered by the same handler.
 
+**`clients` is keyed by `key_id`, deliberately the same shape as the allowlist in
+`handler-config.json`** — one entry per registered browser, and the reason there
+can be more than one (see "Registering more than one browser"). A registration
+writes exactly one entry, so a second browser joins rather than evicting the
+first, while re-registering the same `key_id` still rotates it — the handler's own
+rule, kept on this side of the wire too.
+
+**The single-key shape this app wrote before `clients`** — top-level `key_id`,
+`key_type`, `public_key`, `public_key_raw` — is still accepted and migrated into
+`clients` when the file is read, with a line on the console saying so. Reading a
+config must not write one, so the file stays as it is until the next registration
+saves the new shape. `config.test.ts` pins both directions.
+
 Every field has a default, so the app runs with **no config file at all**;
 `register` then writes it atomically (temp + fsync + rename, the way
 `lib/config.py` does). `AI_REMOTE_WEB_CONFIG` overrides the location — how the
 e2e run keeps its state out of the repo working copy.
 
-**Two halves that can drift.** The server's `config.json` says *a key is
-registered*; IndexedDB says *this browser holds one*. Losing either is a normal
-state, and each is reported separately: a browser with no key gets no decision
-buttons, and a browser whose key is not the registered one gets a red line in
-the register panel (someone rotated that `key_id` elsewhere) instead of silently
-signing replies the hook throws away — the check
-`responder_yubikey.py serve` does at startup, moved to where the mismatch is
-visible.
+**Two halves that can drift.** The server's `config.json` says *which keys are
+registered*; IndexedDB says *this browser holds one of them*. Losing either is a
+normal state, and each is reported separately: a browser with no key gets no
+decision buttons, and a browser that finds no entry under its own `key_id` — or an
+entry with a different key — gets a red line in the register panel (someone
+rotated that `key_id` elsewhere, or this browser registered against another
+config) instead of silently signing replies the hook throws away. That is the
+check `responder_yubikey.py serve` does at startup, moved to where the mismatch is
+visible. A browser looks itself up **by its own `key_id`**, not by "the"
+registered key: with two browsers registered, the other one's entry says nothing
+about this one.
 
 `request_ttl` should be ≥ the hook's own `timeout` in `handler-config.json`,
 otherwise a card disappears while Claude Code is still waiting.
@@ -704,6 +732,26 @@ A normal start looks like this — three numbered steps, then Next takes over:
   no node/npm on PATH, `npm install` failed, or `--prod` failed to build. Each
   prints which one.
 
+**`allowedDevOrigins` in `next.config.ts` is why any of the spellings work.**
+`next dev` serves its own client chunks and HMR socket to the origin it prints —
+`localhost` — and *only* that one; `http://127.0.0.1:3000/` is a different origin
+by that rule. Hit it without the setting and the page arrives server-rendered and
+looks right, never hydrates, and every live part of it — the cards, the buttons,
+the register panel — sits in its loading state forever, with nothing to go on but
+a `Blocked cross-origin request to Next.js dev resource` line in this server's own
+output that nobody is reading.
+
+So the config lists both spellings of loopback and the private LAN ranges, the
+last of those because a second responder on a phone ("Registering more than one
+browser") reaches this machine by address rather than by name. Verified on all
+three: `localhost`, `127.0.0.1` and this machine's LAN address all hydrate and
+answer, with no blocked-resource line left in the log.
+
+**It opens nothing** — it gates who may fetch a chunk, not who may reach the page.
+`next dev` binds every interface either way, and the page has no authentication
+(the last section here). Whether this app may be reachable off this machine at all
+is that decision; this list only stops the dev server lying about it.
+
 Unlike everything in `scripts\`, this needs **no elevation and no venv**: it is
 the Node half of the repo and touches no FIDO device. The file is CRLF and opens
 no parenthesised `if` blocks, for the reason `scripts\yubikey-approval.cmd`
@@ -711,12 +759,45 @@ documents at length.
 
 ## Testing
 
+Two tiers, and the split is where the key is.
+
 ```powershell
 npm test        # protocol parity vs. the Python vectors, plus the §9.7 status
-                # document, the §9.2 gauge scales and the §9.10 activity
-                # document — no NATS, no browser
+                # document, the §9.2 gauge scales, the §9.10 activity document
+                # and the `clients` map — no NATS, no browser
 npm run build   # type-checks everything, including the tests
 ```
+
+```powershell
+scripts\web-approval.cmd    # the browser tier: a real browser, a real key,
+                            # a reply hook.verify_reply calls trusted
+```
+
+**`npm test` can never see a signature.** It checks byte strings, which is most of
+the interop risk (canonical JSON, both signing-bytes shapes, the two watch-only
+documents) — but the private key exists in no file this suite can read, so the
+one thing it cannot check is the thing this app is for.
+
+That is `tests/test_web_browser.py`, on the Python side because the judge is
+`hook.verify_reply` (`tests/CLAUDE.md`, "And one that is about a browser"). It
+starts a registration handler and a dev server, drives a real browser through the
+`Register` panel with `agent-browser`, sends a §7 request, clicks Allow, and hands
+the reply to the hook — then closes the browser, relaunches it on the same
+profile, and does it again to show the key survived; then registers a *second*
+browser and has both answer. Sixteen tests, about 35 seconds, opt-in on
+`AI_REMOTE_WEB_BROWSER=1`, and it gives the app under test its own subject and
+queue group so it cannot answer a live request or lose one.
+
+**Two things about running the node tests unbundled.** `node --test` resolves ESM
+specifiers strictly, so the two modules the `clients` test reaches — `config.ts`
+and `schemas.ts` — import their neighbours with an explicit `.ts` extension
+(`allowImportingTsExtensions` is already on, and Turbopack resolves them too).
+Every other module here is only ever bundled and keeps the extensionless form.
+And `config.test.ts` writes real files, because `saveConfig` → `loadConfig` losing
+a registration is exactly the failure that costs a spent token.
+
+For a live check by hand — one request, and the alert firing on demand —
+`scripts\test-request.cmd` is the short way in.
 
 A live check without Claude Code: bring NATS up (`cd nats && docker compose up
 -d`), start the app, then from the repo root send a §7 request with
@@ -774,6 +855,36 @@ The token is a bearer credential for one `key_id`: it is not kept in component
 state after the request and the form clears it on success. Re-registering rotates
 `clients[key_id]`, which the handler allows by design.
 
+### Registering more than one browser
+
+**One `key_id` holds one key** — on the handler's side (§6) and on this app's side
+— and a browser profile holds one key too, so *browser* and *key_id* are the same
+unit. Two operators, or a desktop and a phone, therefore need two tokens under two
+names:
+
+```powershell
+py approver\registration_handler.py --get-token approver-web         # the desktop
+py approver\registration_handler.py --get-token approver-web-phone   # the phone
+```
+
+Both end up in `config.json`'s `clients` map and in the handler's allowlist, and
+each browser answers under its own name: the decision POST carries the `key_id`
+the posting browser holds, the server verifies the signature against *that* entry,
+and the reply the hook receives says who answered. So `/connz`, the allowlist and
+the audit trail all distinguish them — which is the whole reason not to share one
+`key_id` between two browsers.
+
+Sharing one anyway is not an error, it is a **rotation**: the second registration
+replaces the key under that `key_id`, the first browser keeps a key nothing knows
+any more, and the register panel there turns red and says so rather than letting
+it sign replies the hook throws away. That is the old single-key behaviour, now
+reachable only by asking for it.
+
+Nothing about this makes the page multi-*user*: there is still no authentication
+(below), so two browsers are two keys, not two identities with different rights.
+What it buys is telling two responders apart, and being able to revoke one of them
+by rotating a single `key_id`.
+
 ### Key custody
 
 | Option | Key custody | Verdict |
@@ -817,18 +928,20 @@ signing bytes, and so does WebCrypto with `hash: "SHA-256"`. Do not pre-hash.
 
 ### What is still missing
 
-1. **Tests.** The cross-language checks were run as scratch scripts, not
-   committed: a browser signature accepted by `hook.verify_reply`, and the
-   key surviving a browser restart. The repo's TDD rule (root §1) wants them in
-   `tests/`; the awkward part is that the signing half needs a browser, so it
-   would be an `agent-browser`-driven test, i.e. the same tier as the YubiKey
-   touch tests — opt-in, not part of a bare `py -m pytest`.
-2. **A `.cmd` script** in `scripts/`, in the style of `e2e-approval.cmd`, for the
-   register → request → signed-decision loop that is currently driven by hand.
-3. **Multiple browsers.** One `key_id` has one registered key, so a second
-   browser registering rotates the first one out. Fine for one operator; if
-   several are ever wanted, they need distinct `key_id`s and tokens, which the
-   §6 flow already supports.
+**One thing, and it is the one below** — the three that used to be here are done:
+
+- the cross-language checks are committed, as `tests/test_web_browser.py`
+  ("Testing" above): a browser signature `hook.verify_reply` calls trusted, and
+  the key surviving a full browser restart, both driven by `agent-browser` in an
+  opt-in tier;
+- `scripts\web-approval.cmd` runs that loop end to end, unattended;
+- **multiple browsers work.** `config.json` holds a `clients` map, one entry per
+  `key_id`, so a second browser registering with its own token joins instead of
+  rotating the first one out ("Registering more than one browser"). Two of them
+  answering, each under its own name, is the third section of the browser tier.
+
+What is left is **authentication**, below — which was never on this list because
+it is not a gap in the app, it is a decision about where it may run.
 
 ### Not in scope, but worth deciding before shipping to anyone else
 
