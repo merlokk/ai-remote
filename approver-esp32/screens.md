@@ -36,7 +36,7 @@ one arrives with the numbers:
 | # | Screen | Reached by | Exists to |
 |---|--------|-----------|-----------|
 | 10.8.2 | **Clock** — home | the screen it returns to from everywhere | be the thing on the desk for 99 % of its life, and admit in one glyph whether it could answer a request right now |
-| 10.8.3 | **Limits** | swipe left/right from the clock | the §9.7 `status` document: which model is answering and how much of the 5h / 7d windows is spent — present only while a Claude Code session is actually publishing. Plus one line of §9.10's `activity`: what that session is *doing* right now |
+| 10.8.3 | **Limits** | **a `status` document arriving** — it comes up on its own and leaves a minute after the stream stops; a swipe left/right from the clock still reaches it, and nothing depends on that | the §9.7 `status` document: which model is answering and how much of the 5h / 7d windows is spent — present only while a Claude Code session is actually publishing. Plus one line of §9.10's `activity`: what that session is *doing* right now |
 | 10.8.4 | **Request** | **a message on `approvals.*`** | the one screen the device exists for |
 | 10.8.5 | **Settings** | a swipe up, or `KEY` held two seconds — from the clock **and from the limits**, which arrive on their own | a short list of places to go — Wi-Fi, the status pages, the touch test — and three things to do: save the settings, reload them, and restart. Seven rows, five of them on the glass at a time |
 | 10.8.5 | **Status** | from Settings | three pages of what the board is doing — power, system, motion — for the questions a console answers and a desk object cannot |
@@ -102,7 +102,7 @@ happens in the UI task, and the bus task hands work across a queue (or takes
 parse never run inside an LVGL callback — §10.1 already says why, and this is
 where it becomes a code rule rather than an observation.
 
-**Shared across all five:**
+**Shared across all seven:**
 
 - **A link indicator, always visible.** The dot from `statusline` (§9.8) is the
   precedent: the operator must be able to tell "nothing is being asked" from "I
@@ -418,11 +418,21 @@ Five things are decisions rather than plumbing:
   the whole face is one object, so the drift is one `lv_obj_set_pos` and nothing
   below it knows the panel is an AMOLED.
 
-What is **not** here, and is not an omission: the navigator (`ui/navigator.h`) is
-not wired to anything, because four of the five screens it can name do not exist
-and a swipe that reaches a blank screen is worse than a swipe that does nothing.
-`key_id` and the gear of §10.8.2's list are the same story — there is no
-registration to name and nothing to open.
+What is **not** here, and this paragraph has outlived its first reason. It used
+to say the navigator (`ui/navigator.h`) was wired to nothing, because four of the
+five screens it can name did not exist and a swipe reaching a blank screen is
+worse than a swipe that does nothing. Both halves are spent: the navigator is
+wired (`screens.cpp`, one `Apply(ui::Nav)` that a gesture, a button and the
+console all reach) and all seven screens are on the glass.
+
+**Two items of §10.8.2's own list are still missing, though, and they are a
+genuine gap rather than a deferral**: `key_id` when registered, and the gear.
+They were the same story once — no registration to name and nothing to open — and
+neither excuse survives, since `register` works and settings is a swipe up. What
+holds them back now is only that settings is already reachable three ways
+(§10.8.5), so a gear buys a fourth rather than a first; the `key_id` has no such
+excuse and is the one worth drawing — a device that cannot say *which* responder
+it is, is one the operator has to reach for a console to identify.
 
 #### 10.8.3 Limits — the `status` document, when there is one
 
@@ -433,9 +443,9 @@ name, `effort.level`, the `5h` and `7d` gauges with countdowns, `ctx`, and the
 
 **It arrives rather than being navigated to**, which is the one rule below that
 did not survive contact with the repository owner, and the change is the whole
-character of the screen. The table above still lists it under "swipe left/right
-from the clock" and the navigator still honours that; nothing depends on it. What
-actually happens:
+character of the screen. The table above leads with that now; the swipe it used
+to lead with still works, because the navigator still honours it, and nothing
+depends on it either way. What actually happens:
 
 | | |
 |---|---|
@@ -1560,8 +1570,12 @@ card that preempts it (§10.8.1).
 **And the two ways round it stay, because 6 mm is workable rather than
 pleasant.** A 30-character WPA key is `wifi join` on the console (§10.9) — which
 exists, and is what this screen is competing with rather than replacing. The
-fallback access point is the other one, if serving a form from it is ever worth
-it: `esp_http_server` is in-tree, so it would cost no dependency under root §1,
-and a phone's keyboard beats 6 mm every time. What this screen buys is that
-neither has to be reached for to get a device onto a network.
+fallback access point is the other one, and it is no longer the hypothetical this
+paragraph first described: **it was worth it, and it is built** — §10.16 serves a
+configuration site off SPIFFS whose Wi-Fi page writes, over the device's own AP,
+on `esp_http_server` which was in-tree and therefore cost no dependency under
+root §1. A phone's keyboard beats 6 mm every time, and that is now something an
+operator can actually use rather than an argument. What this screen would buy is
+that neither has to be reached for to get a device onto a network — which is why
+it is still worth building even though the way round it exists.
 

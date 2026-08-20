@@ -753,9 +753,11 @@ NVS", and the exception is argued rather than quietly taken:
   feedback that early in boot to make a partial press meaningful, which is the
   argument for a long threshold rather than a short one.
 - **`registration.json` is not touched**, so the device comes back on default
-  settings and still registered. Dropping the registration is `forget`, and
-  wiping both is `Factory reset` (§10.8.5) — two screen entries, both two-step,
-  because both cost a token.
+  settings and still registered. Dropping the registration is `forget` on the
+  console, and wiping both is this button followed by that command. Neither is a
+  row on §10.8.5's list and both used to be: that list is the repository owner's
+  now, and a screen entry that costs a token — one minted on the host and typed
+  over USB — was not worth a place on it while the console has both verbs.
 - **Say it happened.** The panel is not up that early, so: one log line at the
   time, and the screen states `config restored` as soon as there is a screen. A
   restore the operator cannot confirm is a restore they will do twice.
@@ -783,8 +785,12 @@ NVS", and the exception is argued rather than quietly taken:
   crash landed in the window and finishing the rename is the recovery — never
   restoring the defaults, which would throw away a good config to fix a naming
   problem.
-- **The same restore is reachable from Settings** (§10.8.5), where there is a
-  screen to confirm on and the blind five seconds are not needed.
+- **There is no restore row on the settings screen**, and this paragraph used to
+  say there was one. §10.8.5's list has `config save` and `config reload` — the
+  two that are cheap and reversible — and stops there; a restore reached by a
+  finger would be the destructive third, and the owner's list does not have it.
+  So the two ways to restore are this button and `config restore` on the console,
+  and the blind five seconds are the price of the one that needs no cable.
 
 ##### What is written, and the four decisions inside it
 
@@ -945,9 +951,12 @@ order that is written down there.
 
 **Editing and persisting are two commands, deliberately.** `config set <field>
 <value>` writes the field and nothing else — the settable ones are `volume`,
-`brightness`, `dim`, `blank`, `nats`, `tz`, `sntp`, `sync` and `wifi`, and every one of
+`brightness`, `dim`, `dimlevel`, `sleep`, `nats`, `tz`, `sntp`, `sync` and
+`wifi`, and every one of
 them says "in memory only" when it succeeds; `config save` is what reaches the
-filesystem. A console where each keystroke lands in flash is a console that
+filesystem. (Three of those are §10.8.1's idle timer and they are the *new*
+names: a `blank` here would be the field that nothing read, and
+[`commands.md`](commands.md) is the reference with a row per field.) A console where each keystroke lands in flash is a console that
 wears the partition out during an experiment, and `config reload` is then the
 cheap undo for anything not saved. The Wi-Fi networks are the exception and are
 not settable this way: they are a list of ssid/password pairs, and a list needs

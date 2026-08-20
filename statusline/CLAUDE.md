@@ -108,7 +108,7 @@ numbers links the library instead of parsing a terminal line back out of a pipe.
 - `src/main.rs` — the binary, and the fork between its two jobs (§9.10): config
   → stdin → parse → either `render` → stdout → publish (§9.7), or publish an
   activity document and print nothing.
-- `src/lib.rs` — the library root; the six modules below.
+- `src/lib.rs` — the library root; the seven modules below.
 - `src/json.rs` — the payload, read with `serde_json`. `Value` plus a `Lookup`
   trait adding `path("a.b.c")` / `str_at` / `num_at`: dotted paths because that
   is how §9.1 and the Claude Code reference name the fields, where `pointer()`

@@ -23,7 +23,7 @@ file had grown past the point where anybody could find anything in it. The
 numbering is **global and stable** — [`../CLAUDE.md`](../CLAUDE.md) §2 has the
 repository-wide map, and **a section keeps its number wherever it lives**:
 `§10.14.3` is still `§10.14.3` now that it sits in another file. Which is what
-makes the split cheap — the 92 source files that carry a `CLAUDE.md §10.8.2` in a
+makes the split cheap — the ~100 source files that carry a `CLAUDE.md §10.8.2` in a
 comment did not have to be touched, and are to be read as *§10.8.2 of these
 documents*, with the table below saying which one to open. Project-wide rules —
 TDD, the dependency allowlist — stay in that root file.
@@ -201,7 +201,7 @@ costs, because the cost does not disappear by being accepted.
 
 [`nats/CLAUDE.md`](../nats/CLAUDE.md) §4 used to say it plainly: the bus is
 **unauthenticated, every subject on it is open**, and that was acceptable *only*
-because it was bound to localhosлоt — `approvals.*` carries the whole `tool_input`,
+because it was bound to localhost — `approvals.*` carries the whole `tool_input`,
 which for Bash is the full command and for Write the file contents. That
 sentence is now spent: the trust boundary moved from loopback to the router, and
 §4 has been rewritten to say so rather than to keep promising loopback.

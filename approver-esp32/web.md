@@ -566,7 +566,7 @@ exists rather than by somebody remembering to add its name. Two smaller rules co
 from the same place: **SPIFFS is flat**, so a name has no directories in it and a
 second `/` is refused outright — traversal is unrepresentable rather than
 defended against — and **nothing is percent-decoded**, because decoding is where
-the traversal bugs live. All of it is `<cstddef>`-only and host-tested (11 tests),
+the traversal bugs live. All of it is `<cstddef>`-only and host-tested (28 tests, with 29 more next door over the write path),
 and the suite reads as a list of things that must not leave the device.
 
 And the decision that is still open, which the *write* path shipped ahead of:

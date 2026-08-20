@@ -54,6 +54,7 @@ is not writable in this sandbox.
 | `test_responder_yubikey.py` | `approver/responder_yubikey.py` (§8.7), same fakes | `fido2` |
 | `test_yubikey_integration.py` | the real device (§8.6) — three tiers | a YubiKey |
 | `test_esp32_vectors.py` | the **Python half** of §10.11 tier 2: the committed parity vectors are still what today's `protocol.py` and `lib/crypto.py` produce | — |
+| `test_esp32_web_pages.py` | the six pages of §10.16 as they ship: no inline `<script>`, `app.js` loaded exactly once, every `data-page` handler present, every id it asks for on the page, every link between pages resolving | — |
 | `test_esp32_device.py` | §10.11 tier 3 — the ESP32 responder answering for real, and every tamper on the reply it signed | the board, and a press |
 
 Two conventions worth keeping:
@@ -71,12 +72,12 @@ What genuinely cannot be faked here is a *positive* derived-key sign→verify ro
 trip: `fido2` exposes only `derive_public_key`, and the private half exists solely
 inside the authenticator. That one lives in §8.6.
 
-## Two files that are about firmware, and belong here anyway
+## Three files that are about firmware, and belong here anyway
 
-`test_esp32_vectors.py` and `test_esp32_device.py` test C++ that this suite
-cannot import. They are here rather than in `approver-esp32/host_test/` because
-both are **the Python end of a two-language claim**, and neither end can be
-checked from the other side:
+`test_esp32_vectors.py`, `test_esp32_device.py` and `test_esp32_web_pages.py`
+cover an ESP32 that this suite cannot import. They are here rather than in
+`approver-esp32/host_test/` because each is **the Python end of something the
+C++ side cannot check about itself**:
 
 - the parity tier only means something if somebody asserts the committed vectors
   are current. The C++ half compiles them; only Python can say whether they are
@@ -84,7 +85,12 @@ checked from the other side:
 - the device tier verifies a signature made on the ESP32 with `hook.verify_reply`
   — the hook's own code, against the live `handler-config.json`. Reimplementing
   that check in the firmware's test suite would be checking the device against
-  itself (§10.11 tier 3).
+  itself (§10.11 tier 3);
+- the web pages are **assets, not code** — nothing in `components/web` reads them,
+  so the C++ suite can say what a URL may *reach* and never whether what it
+  reaches works. It exists because `wifi.html` once shipped with a truncated
+  inline script that swallowed the shared `<script>` tag after it, and the only
+  symptom was a page that did not look like the other five.
 
-Both keep the invariant at the top of this file: with no board and no env var
-set, they skip or pass on their own.
+All three keep the invariant at the top of this file: with no board and no env
+var set, they skip or pass on their own.

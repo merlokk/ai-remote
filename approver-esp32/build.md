@@ -89,8 +89,10 @@ New dependencies, all four approved:
 
 | Approved | Why | The alternative it beat |
 |----------|-----|-------------------------|
-| `lvgl/lvgl` (v9) + `espressif/esp_lvgl_port` | five screens, a scrolling list of scan results and an on-screen keyboard (§10.8) — hand-drawing that against `esp_lcd` primitives is weeks of work to reach something worse | draw directly against `esp_lcd`: defensible for the request card alone, not for the Wi-Fi screen, which is where the keyboard lives |
+| `lvgl/lvgl` (v9) + `espressif/esp_lvgl_port` | seven screens, a scrolling list of scan results and an on-screen keyboard (§10.8) — hand-drawing that against `esp_lcd` primitives is weeks of work to reach something worse | draw directly against `esp_lcd`: defensible for the request card alone, not for the Wi-Fi screen, which is where the keyboard lives |
 | CO5300 panel driver + CST9220 touch driver | the two chips on this board; the vendor demo carries both | none — they are the hardware. Prefer an Espressif-registry component over a copied vendor tree; if the vendor's is the only one, vendor it into `components/` with its version recorded |
+| **an Ed25519 implementation** — `libsodium` (Espressif publishes it as a managed component) | mbedTLS has **no EdDSA**: it cannot sign or verify Ed25519 at all. §6's server key is Ed25519 *by fixed protocol* (`protocol.SERVER_KEY_TYPE`), so verify is not optional | switch the device's own key to `key_type: p256` (mbedTLS ECDSA, already a first-class scheme in §7 — the YubiKey and the browser both use it) — **but the registration reply still needs Ed25519 verify**, so this removes signing from libsodium's job, not libsodium |
+| **a NATS client** — `debsahu/espidf-nats` (ESP Component Registry, `^1.4.0`, MIT, header-only C++, ESP-IDF 4.4–6.0) | the §10.5 subset without writing and debugging a socket state machine; and it brings TLS 1.2/1.3 with server-cert validation, mTLS and SNI, which is exactly what §10.3 needs and the one part of a hand-written client that would *not* have been ~300 lines | writing it ourselves, and the two options below |
 
 **Two of those four names do not exist, and what they resolved to is the record
 that matters.** The approval stands — these are the same components in intent —
@@ -133,8 +135,6 @@ different kind of answer and has the section below to itself.
 **And the whole display half resolved and built on ESP-IDF v6.0.2**, which is
 the first real evidence in the v5.5.3-versus-v6.0.2 argument of §10.12 — see
 there for what it does and does not settle.
-| **an Ed25519 implementation** — `libsodium` (Espressif publishes it as a managed component) | mbedTLS has **no EdDSA**: it cannot sign or verify Ed25519 at all. §6's server key is Ed25519 *by fixed protocol* (`protocol.SERVER_KEY_TYPE`), so verify is not optional | switch the device's own key to `key_type: p256` (mbedTLS ECDSA, already a first-class scheme in §7 — the YubiKey and the browser both use it) — **but the registration reply still needs Ed25519 verify**, so this removes signing from libsodium's job, not libsodium |
-| **a NATS client** — `debsahu/espidf-nats` (ESP Component Registry, `^1.4.0`, MIT, header-only C++, ESP-IDF 4.4–6.0) | the §10.5 subset without writing and debugging a socket state machine; and it brings TLS 1.2/1.3 with server-cert validation, mTLS and SNI, which is exactly what §10.3 needs and the one part of a hand-written client that would *not* have been ~300 lines | writing it ourselves, and the two options below |
 
 **libsodium resolved to `espressif/libsodium` 1.0.22~1, and it is the cheapest
 entry on this list to have signed off.** It brings **no transitive component at
@@ -218,7 +218,7 @@ to cross a language boundary.
 The rest of root §1's rule now applies to these four: each goes in
 `main/idf_component.yml` with a version, they are locked in `dependencies.lock`
 (committed), and **the exact versions land in these tables when the first build
-resolves them** — "LVGL v9" is the approval, `9.3.0` is the record. Anything
+resolves them** — "LVGL v9" is the approval, `9.4.0` is the record. Anything
 beyond this list is a new question for the owner, including a transitive
 component one of them drags in.
 
@@ -398,7 +398,7 @@ Notes that will otherwise be rediscovered the hard way:
 npm, v2.0.0) is an MCP server that compiles an LVGL snippet against a headless
 desktop build of LVGL and hands back a PNG plus a JSON widget tree —
 `lvgl_render`, `lvgl_render_full`, `lvgl_inspect`, `lvgl_set_resolution`. It is
-how the five screens of §10.8 get drawn and argued about while §10.13's build
+how the seven screens of §10.8 get drawn and argued about while §10.13's build
 order still has the request card at step 1. **A host-side design tool, not a
 dependency**: nothing in `main/` links against it, and it does not enter §10.4's
 list.

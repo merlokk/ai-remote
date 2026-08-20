@@ -10,17 +10,14 @@ about the firmware and stays authoritative for it). This is the cross-repository
 list: where a document has gone stale against its own code, and what every
 document says is still owed, gathered in one place.
 
-**Six defects have already been fixed and are gone from §1** — the README's
-unusable hook entry and its silence about three of the four components, the two
-documents that said `.claude/settings.json` wires only the status line,
-`nats/CLAUDE.md`'s missing `activity` subject, `firmware.md` §10.15's claim that
-a flash dump cannot yield the signing key, and `web.md`'s "nothing writes a
-setting" in a file documenting the write path. What is left below is open.
+**Every documentation defect this pass found has been fixed** — §1 is a summary
+of what they were, not a to-do list. What is open is §2: the work the documents
+themselves say is unfinished.
 
 ## What is verified green
 
-Run before the list below was written, and again after the six fixes, so a
-defect is never confused with a broken build:
+Run before the list below was written, and again after every fix, so a defect is
+never confused with a broken build:
 
 | Tier | Command | Result |
 |------|---------|--------|
@@ -35,144 +32,33 @@ defect is never confused with a broken build:
 
 ## 1. Documentation that contradicts the code
 
-Ordered by how misleading each one is to somebody acting on it. Line numbers are
-as of the fixes above.
+**Empty — all nineteen are fixed.** This section held the places where a document
+had gone stale against its own code; every one of them has been corrected in the
+document that owned it, and the findings are in the git history rather than kept
+here as a list of things already done.
 
-### 1.1 `firmware.md` §10.15's `config set` field list is wrong
+What they were, in one line each, so a reader knows what was swept and can go
+looking if a fix reads oddly: the README's unusable hook entry and its silence
+about three of the four components; two documents claiming `.claude/settings.json`
+wires only the status line; `nats/CLAUDE.md`'s bus table missing `activity`;
+`firmware.md` §10.15 claiming a flash dump cannot yield the signing key, and its
+`config set` list naming a field that no longer exists, and two settings rows that
+were removed; three "not built yet" notes in `screens.md` that the firmware had
+outgrown, and its §10.8 table still routing the limits screen by swipe; a test
+`tests.md` said was owed and had already written; a broken markdown table in
+`build.md` §10.4 plus a stale LVGL version and screen count;
+`statusline/CLAUDE.md` counting six modules and listing seven; a test file missing
+from `tests/CLAUDE.md`; two `nats/` config comments citing a file the section
+moved out of; a Cyrillic typo inside "localhost"; root `CLAUDE.md` §1 a release
+behind its own §2; seven drifted test counts; and two tracked files absent from
+root §2's project-file list.
 
-`firmware.md:948` lists the settable fields as `volume`, `brightness`, `dim`,
-**`blank`**, `nats`, `tz`, `sntp`, `sync`, `wifi`.
-
-`components/cli/console.cpp:798-808` has `volume`, `brightness`, `dim`,
-**`dimlevel`**, **`sleep`**, `sync` (plus the string fields `nats`, `sntp`, and
-`wifi`). There is no `blank` — it was renamed when §10.8.1's idle timer replaced
-`dimSeconds`/`blankSeconds`, and `dimlevel` was never added to this list.
-
-`commands.md:588-597` is correct. `firmware.md` is the one that drifted.
-
-### 1.2 `firmware.md` §10.15 points at two settings rows that do not exist
-
-- `firmware.md:757` — "wiping both is `Factory reset` (§10.8.5) — **two screen
-  entries**, both two-step".
-- `firmware.md:786` — "**The same restore is reachable from Settings**
-  (§10.8.5), where there is a screen to confirm on."
-
-`screens.md` §10.8.5's shipped list is seven rows: Wi-Fi, Status, Touch test,
-Config save, Config reload, Reboot, Power off. There is no restore row and no
-factory reset row — that section explicitly records them being dropped ("Bus,
-display, time, key and registration, restore, factory reset — all of them are
-`config set`, `nats url`, `date`, `keys` and `config restore` on the console
-today").
-
-### 1.3 Stale "not built yet" notes in `screens.md`
-
-Three passages describe a state the firmware left behind, which makes them read as
-open work when they are not:
-
-- `screens.md:422` — "the navigator (`ui/navigator.h`) is **not wired to
-  anything**, because four of the five screens it can name do not exist". It is
-  wired (`screens.cpp:737`, `g_nav.Navigate(nav)`), and all seven screens exist.
-- `screens.md:105` — "**Shared across all five:**". Seven.
-- `screens.md:1563` — "The fallback access point is the other one, **if serving a
-  form from it is ever worth it**: `esp_http_server` is in-tree, so it would cost
-  no dependency". It was worth it and it is built — that is the whole of §10.16.
-
-The first of those hides a real gap, split out as §2.10 below.
-
-### 1.4 The §10.8 screen table still routes the limits screen by swipe
-
-`screens.md`'s §10.8 table gives the Limits screen "Reached by: swipe left/right
-from the clock", and §10.8.3 immediately says "It **arrives** rather than being
-navigated to … The table above still lists it under 'swipe left/right from the
-clock'". Self-acknowledged, but the table is the thing a reader scans first.
-
-### 1.5 `tests.md` owes a test that is already in its own table
-
-`tests.md:499` — "What is still owed is **the limits screen's arithmetic**:
-`countdown()` against `render.rs`'s cases, the staleness threshold, and the §9.2
-gauge scales".
-
-All of it is in the table twelve rows above, and in
-`host_test/test_limits.cpp` (21 tests), including the assertion that the two
-scales cannot drift into each other.
-
-### 1.6 `build.md` §10.4's dependency table is broken markdown
-
-`approver-esp32/build.md`: the "New dependencies, all four approved" table opens
-at line 88 with two rows (LVGL, the panel/touch drivers), then 40 lines of prose
-run from line 95, and then lines **136–137** are two more table rows — libsodium
-and the NATS client — orphaned in the middle of the text. They render as stray
-pipe-delimited prose, and the sentence "all four approved" points at a table that
-visibly holds two.
-
-Two smaller drifts in the same file:
-
-- `build.md:221` — "'LVGL v9' is the approval, **`9.3.0`** is the record".
-  Resolved to **9.4.0** (`dependencies.lock`), which the same file says three
-  paragraphs earlier.
-- `build.md:401` — "the **five** screens of §10.8". Seven.
-
-### 1.7 `statusline/CLAUDE.md` §9.4 says six modules, lists seven
-
-`statusline/CLAUDE.md:111` — "`src/lib.rs` — the library root; the **six** modules
-below." `src/lib.rs` declares seven: `activity`, `config`, `json`, `link`, `nats`,
-`render`, `status` — and the bullet list under that line has all seven.
-
-### 1.8 `tests/CLAUDE.md`'s file table is missing a test file
-
-`tests/test_esp32_web_pages.py` exists, is documented in
-`approver-esp32/tests.md` §10.11 tier 2, and is not in `tests/CLAUDE.md`'s "The
-files" table.
-
-### 1.9 Two `nats/` config comments cite a section that moved
-
-`nats/docker-compose.yml:18` and `nats/nats-server.conf:10` both cite
-`approver-esp32/CLAUDE.md` §10.5. §10.5 now lives in
-`approver-esp32/protocol.md` — `nats/CLAUDE.md` itself already links there
-correctly. Section numbers are stable by design, so the number is right and the
-filename is not.
-
-### 1.10 A Cyrillic typo in a sentence about the trust boundary
-
-`approver-esp32/CLAUDE.md:204` — "it was bound to **localhosлоt**". Two Cyrillic
-characters in the middle of the word, in the paragraph that explains why the bus
-stopped being a localhost bus.
-
-### 1.11 Root `CLAUDE.md` §1's ESP-IDF paragraph is a release behind §2's
-
-`CLAUDE.md:16` opens "**C++ / ESP-IDF (`approver-esp32/` only, §10) — approved;
-the library layer is written, the protocol is not**", and later says "**two of
-§10.8's five screens are on the glass**: the clock face … and the request card".
-
-The protocol is written (§10.2, §10.6, §10.7 are all on the board) and all seven
-screens exist. Root §2's own `approver-esp32/` row is current — the two halves of
-the same file disagree.
-
-### 1.12 Counted things that have drifted
-
-Not wrong in substance, but each is a number a reader would take literally:
-
-| Claim | Where | Actual |
-|---|---|---|
-| "the **92** source files that carry a `CLAUDE.md §10.8.2`" | `approver-esp32/CLAUDE.md:26` | 104 files under `components/`, `main/`, `host_test/` |
-| `web_paths` "host-tested (**11** tests)" | `web.md:569` | 28 (`test_web_paths.cpp`), plus 29 in `test_web_settings.cpp` |
-| web "**52** host tests over what a URL may read and what a form may write" | `status.md` | 57 |
-| the idle timer's "**25** host tests" | `status.md` | 30 (`test_idle.cpp`) |
-| the Wi-Fi screen's "**42** tests" | `status.md`, `screens.md` | 40 (`test_wifi_view.cpp`) |
-| registration's "**25** host tests" | `status.md` | 24 (`test_registration.cpp`) |
-| the signing bytes' "**14** tests" | `status.md` | 11 (`test_signing.cpp`) + 8 (`test_vectors.cpp`) |
-
-The suite total (690) and every other per-file count I checked are correct.
-
-### 1.13 Root `CLAUDE.md` §2's project-file list omits two tracked files
-
-`.mcp.json` (the LVGL preview server, referenced from `build.md` §10.12.1) and
-`LICENSE` are both committed and neither is in the "Project-level files" list.
-Also: `screens/7. web-approver screenshot.png` is tracked, but that row describes
-`screens/` as "the screenshots `yubikey-hackaton.md` walks through" and that file
-walks through 1–6 only.
-
----
+**The pass that produced them is worth repeating rather than the list.** Three
+kinds of drift accounted for nearly all of it, and none is caught by any test:
+a count written as a number (screens, modules, test cases, source files), a
+"not done yet" note left behind by the thing getting done, and a section that
+moved between files while its citations stayed put. A `§10.5` in a comment names
+a section, not a file, and that is exactly what let two of them rot quietly.
 
 ## 2. Unfinished work
 
@@ -362,8 +248,10 @@ Four commands would cover it, and three of them need nothing but a checkout:
 - **The ESP32 host suite is not reachable from `scripts/`.** Every other tier has
   either a documented one-liner in a `CLAUDE.md` or a `.cmd`; this one is
   `approver-esp32/host_test/run.cmd`, which `scripts/README.md` does not list.
-- **`screens/7. web-approver screenshot.png`** is committed and referenced by
-  nothing (see §1.13).
+- **`screens/7. web-approver screenshot.png`** is committed and referenced by no
+  document. Root §2 now says so rather than implying `yubikey-hackaton.md` walks
+  through it, so what is left is the choice: give it a place in that walkthrough,
+  or drop it.
 - **The `soon` rows in §10.8.5's settings list** are the owner's placeholder
   ("пока непонятно, потом чтото добавим") and deliberately not drawn. Listed here
   only so it is not rediscovered as a gap.
