@@ -968,6 +968,20 @@ rather than on every render (§10.8.3 argues the asymmetry). `summary` is the wh
 of what the panel shows scrolling: this is the place a long command can actually be
 read.
 
+**`tool` is printed whenever the document carries one, including when the line
+above will not name it.** On the glass only a *running* tool is named — `thinking`
+is its own word, because a tool that has already returned, drawn, reads as one
+still running (§10.8.3). A console is the opposite case: "which tool just
+finished" is the question somebody types this to answer, so the field is shown
+rather than hidden, with the subagent ahead of it where there is one:
+
+```
+doing      thinking
+           post_tool, thinking, 3 s ago
+tool       Explore > Grep
+summary    TODO
+```
+
 With nothing on that subject yet:
 
 ```

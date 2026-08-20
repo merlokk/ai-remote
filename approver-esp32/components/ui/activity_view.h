@@ -23,13 +23,20 @@
 // trade, and the alternative — this raising a screen of its own — is a bigger
 // change to §10.8's navigation than the line is worth today.
 //
-// ## The state is carried by colour, not by a word
+// ## Only a *running* tool is named
 //
-// The web page has room for `running` beside the headline; a 28-point line on a
-// 480-pixel panel has room for about twenty-eight characters, and spending nine
-// of them on a word the colour already says is the wrong trade (§10.8.3 makes the
-// same call about the percentage). So `running` and `thinking` are bright,
-// `idle` is faint, and the text is the tool and what it is doing.
+// The line says what the session is doing now, so `running` is the one state
+// worth a tool name: `Bash - py -m pytest -q` is true only while Bash is in
+// flight. `thinking` and `idle` are their own word, and a `post_tool` document's
+// tool is read, kept, and deliberately not drawn - `Edit - main.cpp` for a turn
+// that finished editing cannot be told from the same line for one that is editing
+// now, and a readout indistinguishable from a true one is the one thing this line
+// must not be.
+//
+// Colour carries the same distinction a second time rather than instead of the
+// text (§10.8.3): bright while there is a turn, faint once it has ended. On a
+// 480-pixel panel that is about twenty-eight characters to spend, and `thinking`
+// spends eight of them saying the thing a stale tool name would have got wrong.
 
 #include <cstddef>
 #include <cstdint>
@@ -123,10 +130,11 @@ class ActivityView {
     // when it is simply done.
     bool Stale(uint32_t now_ms) const;
 
-    // The line: `Bash - py -m pytest -q`, `Explore > Grep - TODO`, or the state's
-    // own word for a document with no tool in it. Never allocates, always
-    // terminated, and **ASCII only** — the panel's font is Montserrat's default
-    // subset, so a `·` or a `›` would draw as a placeholder box.
+    // The line: `Bash - py -m pytest -q` or `Explore > Grep - TODO` while a tool is
+    // running, and the state's own word - `thinking`, `idle` - for anything else.
+    // Never allocates, always terminated, and **ASCII only** — the panel's font is
+    // Montserrat's default subset, so a `·` or a `›` would draw as a placeholder
+    // box.
     void Headline(char *out, size_t capacity) const;
 
    private:

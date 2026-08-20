@@ -327,6 +327,15 @@ commits sit between them — so the number to read here is the shape, not a
 subtraction: one line of glass, one parser, one enum pair, and the whole of it is
 kilobytes.
 
+**A later rule on that same line moved two of those numbers**, and they are worth
+quoting for how little they moved. Only a *running* tool is named now — `thinking`
+and `idle` are their own word (§10.8.3) — which is one condition inside `Headline`:
+`libui.a` **9,134**, two bytes more. The console gained the row that prints the
+tool the glass no longer names: `libcli.a` **37,543**, seventy-six more. The app is
+**1,925,168 bytes**, the same 27 % of the slot free. A behaviour change that costs
+under a hundred bytes is what the split between a view that decides and a screen
+that draws is for.
+
 Read next to the paragraph below, it is the same shape a third time: the layer
 with every decision in it costs a kilobyte of flash and no RAM at all, and what
 costs is *holding* things — a task stack, sixteen SSIDs, and the label buffers

@@ -78,10 +78,20 @@ void ActivityView::Headline(char *out, size_t capacity) const {
         return;
     }
 
-    // **No tool means the state's own word**, which is every `stop` document and
-    // anything else that arrives without one. The alternative was an empty line,
-    // and a screen with a blank row on it says less than one that says `idle`.
-    if (activity_.tool[0] == '\0') {
+    // **Only a tool that is *running* is named**, and everything else is the
+    // state's own word - every `stop` document, every `post_tool`, and anything
+    // that arrives with no tool in it at all.
+    //
+    // The `post_tool` half is the decision worth arguing over, because that
+    // document does carry the tool that just returned and drawing it costs
+    // nothing. But `Edit - main.cpp` for a session that finished editing a minute
+    // ago cannot be told from the same line for one that is editing now, and a
+    // readout that cannot be distinguished from a true one is the one thing this
+    // line must not be (§10.8.3). `thinking` is less text and more information.
+    //
+    // The alternative for the no-tool case was an empty line, and a screen with a
+    // blank row on it says less than one that says `idle`.
+    if (activity_.state != ActivityState::kRunning || activity_.tool[0] == '\0') {
         size_t at = Append(ActivityStateText(activity_.state), out, capacity, 0);
         out[at] = '\0';
         return;

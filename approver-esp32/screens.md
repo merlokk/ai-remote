@@ -586,7 +586,7 @@ are enabled here and two were being linked.
 ##### The activity line — what the session is *doing* (§9.10)
 
 One line under the bars, at the size the numbers are: `Bash - py -m pytest -q`,
-`Explore > Grep - TODO`, or `idle`. It is the `activity` document — published by
+`Explore > Grep - TODO`, `thinking` or `idle`. It is the `activity` document — published by
 the same status-line binary from Claude Code's `PreToolUse` / `PostToolUse` /
 `Stop` hooks — and on this device it is the fastest-changing thing on the glass,
 which is why it is 28 point and not a footnote at 14.
@@ -594,7 +594,7 @@ which is why it is 28 point and not a footnote at 14.
 | Claude Code event | `event` | `state` | On the line |
 |---|---|---|---|
 | `PreToolUse` | `pre_tool` | `running` | bright: the tool about to run, and its one-line summary |
-| `PostToolUse` | `post_tool` | `thinking` | bright: the tool that just ran — the turn is not over |
+| `PostToolUse` | `post_tool` | `thinking` | bright: `thinking` — the tool that just ran is **not** named (below); the turn is not over |
 | `Stop` | `stop` | `idle` | faint: `idle`, the session is waiting for a human |
 
 **It is a passenger on this screen, not a screen of its own**, and that is the
@@ -615,13 +615,18 @@ navigation of §10.8 than the line is worth today.
 
 Six things that are decisions rather than plumbing:
 
-- **The state is a colour, not a word.** The web page has room for `running`
-  beside the headline; 28 point on a 480-pixel panel has room for about
-  twenty-eight characters, and spending nine of them on what the colour already
-  says is the trade this screen refuses everywhere else — the percentage went to 48
-  point and came back for the same kind of reason. Bright while there is work,
-  faint for a turn that has ended, and **nothing red**: a busy session is not a
-  problem, and red on this screen belongs to a gauge.
+- **Only a *running* tool is named**, and this is the one to argue with. A
+  `post_tool` document carries the tool that just returned, and drawing it costs
+  nothing — but `Edit - main.cpp` for a turn that finished editing a minute ago is
+  the same line as for one editing right now, and a readout that cannot be told
+  from a true one is the thing this screen must not be. It is the clip bug below in
+  a different spelling. So `running` names the tool and its summary, and
+  `thinking` and `idle` are their own word: the document's tool is read, kept, and
+  not drawn. Eight characters of the twenty-eight this line has are cheap for the
+  one thing a glance at a desk object is for — is it working, or is it my turn.
+  Colour then says the same thing a second time rather than instead of the text:
+  bright while there is a turn, faint once it has ended, and **nothing red** — a
+  busy session is not a problem, and red on this screen belongs to a gauge.
 - **The line scrolls when it does not fit, and that replaced a clip.** The first
   version used `LV_LABEL_LONG_MODE_CLIP` and the panel read
   `PowerShell - cd E:\projects\ai-` — a command that looks like it ended there. A

@@ -2523,6 +2523,16 @@ int CmdLimits(int argc, char **) {
         printf("           %s, %s, %" PRIu32 " s ago%s\n", ui::ActivityEventText(now.event),
                ui::ActivityStateText(now.state), doing.age_ms / 1000,
                doing.stale ? " - too old to believe" : "");
+        if (now.tool[0] != 0) {
+            // **The tool, always, even in the state where the line above refuses
+            // to draw it.** A `thinking` headline is deliberately just the word
+            // (§10.8.3) — on the glass, naming a tool that has already returned
+            // reads as one still running. A console is the opposite case: "which
+            // tool just finished" is exactly what somebody typing this is asking,
+            // and a readout that dropped a field it holds would be hiding it.
+            printf("tool       %s%s%s\n", now.agent[0] != 0 ? now.agent : "",
+                   now.agent[0] != 0 ? " > " : "", now.tool);
+        }
         if (now.summary[0] != 0) {
             // The whole of it, where the panel shows what fits: the line on the
             // glass is clipped at the edge of the screen (§10.8.3) and this is the

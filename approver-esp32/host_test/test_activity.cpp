@@ -250,6 +250,30 @@ void test_the_headline_reads_in_the_order_it_is_worth_reading(void) {
     TEST_ASSERT_EQUAL_STRING("idle", line);
 }
 
+void test_only_a_running_tool_is_named(void) {
+    char line[ui::kActivityHeadlineSize];
+
+    // **A tool that has finished is not what the session is doing.** `post_tool`
+    // carries the tool that just returned, and drawing it reads as "still running
+    // Edit" — a line that cannot be told from a true one, which is the one thing
+    // this readout must not be (§10.8.3). So the state's own word, and the tool it
+    // arrived with is dropped rather than drawn.
+    Activity done;
+    TEST_ASSERT_TRUE(Parse("{\"v\":1,\"ts\":42,\"event\":\"post_tool\",\"state\":\"thinking\","
+                           "\"tool_name\":\"Edit\",\"summary\":\"main.cpp\","
+                           "\"agent_type\":\"Explore\"}",
+                           &done));
+    TEST_ASSERT_EQUAL_STRING("Edit", done.tool);
+    TEST_ASSERT_EQUAL_STRING("main.cpp", done.summary);
+    HeadlineOf(done, line, sizeof line);
+    TEST_ASSERT_EQUAL_STRING("thinking", line);
+
+    // The `running` half of the same pair still names it, agent and all — that is
+    // the only state in which a tool name is the truth.
+    HeadlineOf(Sample(), line, sizeof line);
+    TEST_ASSERT_EQUAL_STRING("Explore > Bash - py -m pytest -q", line);
+}
+
 void test_the_headline_is_ascii_and_always_terminated(void) {
     char line[ui::kActivityHeadlineSize];
     HeadlineOf(Sample(), line, sizeof line);
@@ -332,6 +356,7 @@ void RegisterActivityTests(void) {
     RUN_TEST(test_text_longer_than_the_field_is_truncated_not_refused);
     RUN_TEST(test_truncation_never_splits_a_character);
     RUN_TEST(test_the_headline_reads_in_the_order_it_is_worth_reading);
+    RUN_TEST(test_only_a_running_tool_is_named);
     RUN_TEST(test_the_headline_is_ascii_and_always_terminated);
     RUN_TEST(test_nothing_arrived_is_not_a_line);
     RUN_TEST(test_the_view_counts_and_ages_what_arrives);
