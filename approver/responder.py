@@ -295,7 +295,7 @@ async def register(
     )
     pinned = pinned_server_key(config_path)
 
-    async with bus.connect(servers) as b:
+    async with bus.connect(servers, name=bus.client_name("responder-register", key_id)) as b:
         reply = await b.request("registrations", req, timeout=timeout)
 
     server_key = verify_server_reply(reply, nonce=nonce, pinned_pubkey=pinned)
@@ -430,7 +430,11 @@ async def serve(
         prompt=prompt,
     )
 
-    async with bus.connect(servers) as b:
+    # The `key_id` is the identity that matters here: it is what the reply
+    # carries and what the allowlist is keyed by, so `/connz` naming the same
+    # thing is what answers "which of the responders in this queue group
+    # answered?" (§6, "Multiple clients").
+    async with bus.connect(servers, name=bus.client_name("responder", key_id)) as b:
         await b.reply(subject, handler, queue=queue)
         print(
             f"responder key_id={key_id!r} ({key_type}) serving {subject!r} "

@@ -268,7 +268,7 @@ async def register(
     )
     pinned = responder.pinned_server_key(config_path)
 
-    async with bus.connect(servers) as b:
+    async with bus.connect(servers, name=bus.client_name("responder-yubikey-register", key_id)) as b:
         reply = await b.request("registrations", request, timeout=timeout)
 
     # Same check the software responder makes: an unsigned or foreign-signed answer
@@ -368,7 +368,10 @@ async def serve(
         on_signed=on_signed,
     )
 
-    async with bus.connect(servers) as b:
+    # Spelled apart from the software responder on purpose: these two are the
+    # pair most likely to be in the queue group together, and "which one
+    # answered" is the question `/connz` is opened to settle (§6).
+    async with bus.connect(servers, name=bus.client_name("responder-yubikey", key_id)) as b:
         await b.reply(subject, handler, queue=queue)
         print(
             f"yubikey responder key_id={key_id!r} (p256, ctx={cfg['ctx']!r}) serving "

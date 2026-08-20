@@ -351,7 +351,9 @@ async def serve(
             stop.set()
         return reply
 
-    async with bus.connect(servers) as b:
+    # No identity appended: there is one allowlist owner, and two of these on a
+    # bus is a misconfiguration rather than a thing to tell apart (§6).
+    async with bus.connect(servers, name=bus.client_name("registration-handler")) as b:
         await b.reply(subject, handler)
         mode = " (once)" if once else ""
         print(

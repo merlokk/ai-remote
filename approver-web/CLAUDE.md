@@ -118,7 +118,7 @@ src/lib/
   browser-key.ts         the key itself: generate, IndexedDB, sign (client only)
   browser-key-context.tsx  shares that key between the register panel and the cards
   reply.ts               signing bytes + reply assembly, used by BOTH sides
-  responder.ts           server-only: NATS connection, pending map, TTL sweep, decide(), register()
+  responder.ts           server-only: NATS connection (named `approver-web` in /connz, `nats/CLAUDE.md` §4), pending map, TTL sweep, decide(), register()
   types.ts               types shared with the browser (kept out of responder.ts on purpose)
   use-approval-stream.ts client: EventSource -> snapshot, plus a ticking clock
   alert-sound.ts         the chirp, synthesised (client) — no asset, no dependency

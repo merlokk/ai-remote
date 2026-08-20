@@ -358,9 +358,18 @@ All of it is configurable — see §9.9.
 `src/nats.rs` is the access library, the Rust counterpart of `lib/bus.py`:
 `Bus::connect` / `publish_json` / `flush` / `client()` for the async side, and
 `publish_blocking(&Settings, &value)` for callers with no runtime. `Settings`
-(url / subject / timeout / enabled) is the runtime shape; the file it comes from
-is `config::Config`, which builds one with `Config::settings()` (§9.9).
+(url / subject / timeout / enabled / name) is the runtime shape; the file it comes
+from is `config::Config`, which builds one with `Config::settings()` (§9.9).
 Publishing only — nothing in the status line subscribes.
+
+**`name` is the one field in `Settings` that does not come from the file**, and
+is not meant to: it is who this connection says it is in `/connz`, which is a
+property of the job rather than of the configuration
+([`nats/CLAUDE.md`](../nats/CLAUDE.md) §4, "Naming a connection"). Hence two
+values for one binary — `statusline` for the line and `statusline-hook` for the
+three §9.10 hooks. They behave nothing alike on the bus, one connection per
+render against a burst of short-lived ones per tool call, and an operator reading
+that list should not have to guess which is which.
 
 ### 9.8 The dot, and why a dead NATS is free
 

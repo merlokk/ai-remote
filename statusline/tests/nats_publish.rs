@@ -52,7 +52,10 @@ fn settings() -> Settings {
 
 /// `None` plus a printed reason when NATS is not reachable.
 async fn bus_or_skip(what: &str) -> Option<Bus> {
-    match Bus::connect(&settings().url).await {
+    // Named like everything else on this bus (§4), and with the test's own
+    // suffix: the reader of `/connz` should not have to wonder whether a
+    // connection called `statusline` is a real status line or this file.
+    match Bus::connect(&settings().url, "statusline-test").await {
         Ok(bus) => Some(bus),
         Err(e) => {
             println!("skipping {what}: {e} — start it with `cd nats && docker compose up -d`");

@@ -22,6 +22,15 @@ use serde::Serialize;
 pub const DEFAULT_URL: &str = "nats://127.0.0.1:4222";
 /// The subject the status line publishes to.
 pub const DEFAULT_SUBJECT: &str = "status";
+/// What this connection calls itself on the bus — the Rust half of
+/// `lib/bus.py::client_name` (`nats/CLAUDE.md` §4). Only `/connz` shows it, and
+/// that is the point: a bus with this binary, two responders and a hook on it is
+/// otherwise a list of anonymous connections distinguishable by port.
+pub const CLIENT_NAME: &str = "statusline";
+/// And the same binary wired as the three §9.10 hooks. Spelled apart from the
+/// line's own because the two behave nothing alike in `/connz`: one connection
+/// per render against a burst of short-lived ones per tool call.
+pub const HOOK_CLIENT_NAME: &str = "statusline-hook";
 /// The whole publish — connect, write, flush — gets this long. A status line
 /// that blocks is worse than a status line that skips a sample.
 ///
@@ -64,8 +73,12 @@ pub struct Bus {
 }
 
 impl Bus {
-    pub async fn connect(url: &str) -> Result<Bus, Error> {
-        async_nats::connect(url)
+    /// Connect, saying who we are. `name` is what `/connz` reports for this
+    /// connection; `async_nats` sends nothing there unless it is asked to.
+    pub async fn connect(url: &str, name: &str) -> Result<Bus, Error> {
+        async_nats::ConnectOptions::new()
+            .name(name)
+            .connect(url)
             .await
             .map(|client| Bus { client })
             .map_err(|e| Error::Connect(e.to_string()))
@@ -107,6 +120,10 @@ pub struct Settings {
     pub subject: String,
     pub timeout: Duration,
     pub enabled: bool,
+    /// Who to say we are. Not read from `statusline-config.json` and not meant
+    /// to be: it is *who we are*, not where we publish, and the two jobs this
+    /// binary does want different answers.
+    pub name: String,
 }
 
 impl Default for Settings {
@@ -116,6 +133,7 @@ impl Default for Settings {
             subject: DEFAULT_SUBJECT.to_string(),
             timeout: DEFAULT_TIMEOUT,
             enabled: true,
+            name: CLIENT_NAME.to_string(),
         }
     }
 }
@@ -142,7 +160,7 @@ pub fn publish_blocking<T: Serialize>(settings: &Settings, value: &T) -> Result<
         // One budget for connect + publish + flush, not one each: the caller
         // cares how long the whole thing can hold up the process.
         tokio::time::timeout(settings.timeout, async {
-            let bus = Bus::connect(&settings.url).await?;
+            let bus = Bus::connect(&settings.url, &settings.name).await?;
             bus.publish_json(&settings.subject, value).await?;
             bus.flush().await
         })
@@ -154,6 +172,19 @@ pub fn publish_blocking<T: Serialize>(settings: &Settings, value: &T) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_two_jobs_this_binary_does_are_named_apart() {
+        // `/connz` is the only place either name shows up, and the reason to
+        // send one at all is telling clients apart — so these two being equal
+        // would be the bug, not a tidy default.
+        assert_eq!(Settings::default().name, "statusline");
+        assert_ne!(CLIENT_NAME, HOOK_CLIENT_NAME);
+        assert!(
+            HOOK_CLIENT_NAME.starts_with(CLIENT_NAME),
+            "same binary, said so"
+        );
+    }
 
     #[test]
     fn defaults_to_the_local_server_and_the_status_subject() {

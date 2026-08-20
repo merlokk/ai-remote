@@ -8,7 +8,7 @@ import uuid
 
 import pytest
 
-from lib.bus import Bus, NoResponders, RequestTimeout, connect
+from lib.bus import Bus, NoResponders, RequestTimeout, client_name, connect
 from tests.conftest import requires_nats, run_async
 
 pytestmark = requires_nats
@@ -149,3 +149,57 @@ def test_connect_yields_bus():
             assert isinstance(bus, Bus)
 
     run_async(body())
+
+
+# --- who a connection says it is (CLAUDE.md §4, "Naming a connection") --------
+def test_client_name_is_the_role_or_the_role_and_one_identity():
+    """A bare role for a process there is only one of, `role:identity` otherwise.
+
+    The identity is the thing an operator needs when two clients are on one
+    subject and only one is answering: the `key_id` for a responder, the session
+    for a hook. An empty or absent one collapses to the bare role rather than
+    leaving a dangling colon.
+    """
+    assert client_name("registration-handler") == "registration-handler"
+    assert client_name("responder", "approver-1") == "responder:approver-1"
+    assert client_name("hook", "sess-01") == "hook:sess-01"
+    assert client_name("test-request", None) == "test-request"
+    assert client_name("test-request", "") == "test-request"
+
+
+def _connz_names() -> list[str]:
+    """Every connection name the server currently reports, or skip.
+
+    `/connz` on the monitoring port (§3) is the only place a client's name is
+    observable — which is the whole reason to send one, so this test reads it
+    from there rather than trusting the client's own record of what it sent.
+    """
+    import json
+    import urllib.error
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:8222/connz?limit=1024", timeout=2) as r:
+            data = json.load(r)
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        pytest.skip(f"the NATS monitoring port is not reachable: {e}")
+    return [c.get("name") for c in data.get("connections", [])]
+
+
+def test_the_name_reaches_the_server_and_shows_up_in_connz():
+    """The §2.8 property, from the server's side.
+
+    Nothing in the protocol echoes a connection name back, so an operator's only
+    view of it is `/connz` — and an unnamed client is exactly the thing that made
+    two responders on one subject indistinguishable there.
+    """
+    name = client_name("test-bus", uuid.uuid4().hex[:8])
+
+    async def body():
+        async with connect(name=name) as bus:
+            # Round-trip anything at all: the connection has to be established
+            # (and the CONNECT flushed) before the server can report it.
+            await bus.flush()
+            return _connz_names()
+
+    assert name in run_async(body())

@@ -186,7 +186,11 @@ async def request_decision(
 
     request = build_request(payload, nonce=_new_nonce(), ts=int(time.time()))
 
-    async with bus.connect(servers) as b:
+    # Named after the session (§4): a hook connection is short-lived and there is
+    # one per Claude Code session, so the session id is what tells them apart in
+    # `/connz` while several are waiting on their own subjects.
+    name = bus.client_name("hook", payload["session_id"])
+    async with bus.connect(servers, name=name) as b:
         reply = await b.request(f"approvals.{payload['session_id']}", request, timeout=timeout)
 
     trusted, reason = verify_reply(request, reply, allowlist)

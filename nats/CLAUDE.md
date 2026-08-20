@@ -66,6 +66,38 @@ line publishes a current value with no stream behind it (§9.7).
 | `status.test.statusline` | the Rust integration test, so it cannot disturb a live subscriber | [`statusline/`](../statusline/CLAUDE.md) §9.6 |
 | `status.test.statusline.activity` | the same, for the other document | [`statusline/`](../statusline/CLAUDE.md) §9.6 |
 
+### Naming a connection
+
+Every client in this repository tells the server who it is, and `/connz` on the
+monitoring port is the only place that shows up. The convention is one line of
+`lib/bus.py`:
+
+```python
+client_name(role)          # -> "registration-handler"
+client_name(role, ident)   # -> "responder:approver-1"
+```
+
+A bare **role** for a program there is only ever one of; `role:ident` where a
+second one is normal and telling them apart is the whole point — the `key_id` for
+a responder, the session id for a hook. So the bus reads:
+
+| Name in `/connz` | Who |
+|---|---|
+| `responder:<key_id>` | `responder.py serve` — and `responder-register:<key_id>` for the one-shot §6 exchange |
+| `responder-yubikey:<key_id>` | `responder_yubikey.py serve`, spelled apart from the one above because those two are the pair most likely to share the queue group |
+| `approver-web` | the web responder — by its app name rather than a `key_id`, since one instance now holds one key **per browser** ([`approver-web/`](../approver-web/CLAUDE.md), "Registering more than one browser") |
+| `hook:<session_id>` | `hook.py`, one short-lived connection per permission request |
+| `registration-handler` | the allowlist owner; no identity appended, because two of these on a bus is a misconfiguration rather than something to tell apart |
+| `test-request:<session_id>` | `tools/test_request.py` |
+| `statusline` / `statusline-hook` | the Rust binary's two jobs (§9.7 and §9.10) — one connection per render against a burst of short-lived ones per tool call |
+| `null` | **the ESP32.** Its client builds its own `CONNECT` and has no name field ([`approver-esp32/protocol.md`](../approver-esp32/protocol.md) §10.5); the fix is upstream, and until then the anonymous row is the board and its IP is the identifier |
+
+**Why bother.** §6's "Multiple clients" is a real operational problem: the queue
+group hands each request to exactly one responder, so when two are up and the
+wrong one is answering, `/connz` is where an operator looks — and a list of
+`name: null` rows tells them nothing but a port. `tests/test_bus.py` asserts the
+name arrives by reading it back out of `/connz` rather than trusting the client.
+
 The two read-only subjects are published by the same binary and are **not**
 request-reply: a current value with nothing behind it, so a subscriber that was
 not listening missed it by design (§4). Both are read by

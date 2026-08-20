@@ -154,6 +154,8 @@ Reply (`registration-handler` → reply-inbox):
 
 **Multiple clients.** `clients` may hold several `key_id`s. But `approvals.<session_id>` is a regular subject: if several responders are running in parallel, the request reaches **all** of them, and each can reply (the hook takes the first valid reply). Hence the rule: keep **one** responder running at a time, or subscribe responders to `approvals.*` via a **queue group** (then each message goes to exactly one instance). The `registrations` subject is fan-out, but the token is one-time, so duplicate registrations are safe.
 
+**When that bites, `/connz` is where you look**, and it is worth something now: every client here names itself, `responder:<key_id>` and `responder-yubikey:<key_id>` among them, so "who is subscribed and answering" is a list of names rather than of ports ([`nats/CLAUDE.md`](../nats/CLAUDE.md) §4, "Naming a connection"). One row is still anonymous — the ESP32, whose client cannot send a name — so the `name: null` line is the board.
+
 **Token trust model.** A token = authorization to register, bound to its `key_id`. The holder of a valid, unexpired token can register/rotate the key of **only** that `key_id` — claiming or hijacking someone else's slot is impossible. Rotating the key of the same `key_id` (overwriting `clients[key_id]`) is intentional. Tokens are short-lived, issued off the bus, and not logged. The `key_id` is not a secret (it is visible in the token) — only the right-hand part is the secret. The server key is the other half of that model: the token authenticates the approver to the handler, the server key authenticates the handler to the approver.
 
 ```mermaid

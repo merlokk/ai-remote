@@ -72,17 +72,29 @@ Two things follow, and the second is the one that costs something:
   which is the client saying it *can* take those, not this firmware using them.
   §10.4's rule that unused is not absent applies as written: nothing here sends
   or reads a header.
-- **the responder is anonymous on the bus.** §10.2 gives it a `key_id` precisely
-  so that it can be told apart, and `/connz` is where an operator looks when two
-  clients are on one subject and only one of them is answering — so "which of
-  these is the device" is a question the bus cannot currently answer, and it will
-  matter the first time the YubiKey responder and this device are both up (§6's
-  "Multiple clients"). It is not fixable from here: `NATS_CLIENT_LANG` and
-  `NATS_CLIENT_VERSION` are unguarded `#define`s in the component's `config.h`
-  rather than `#ifndef`-wrapped like its `NATS_CONF_*` knobs, and there is no
-  name field in the `CONNECT` builder to fill in. So it is a patch upstream or a
-  vendored fork, both of which cost more than the problem does today — recorded
-  here rather than fixed, and the fallback is that the IP identifies it.
+- **the responder is anonymous on the bus, and now it is the only one.** §10.2
+  gives it a `key_id` precisely so that it can be told apart, and `/connz` is
+  where an operator looks when two clients are on one subject and only one of
+  them is answering (§6's "Multiple clients"). Every other client in the
+  repository answers that question now — `responder:<key_id>`,
+  `responder-yubikey:<key_id>`, `approver-web`, `hook:<session_id>`,
+  `registration-handler`, `statusline` ([`nats/CLAUDE.md`](../nats/CLAUDE.md) §4,
+  "Naming a connection") — so the useful consequence is that **the `name: null`
+  row in `/connz` is the board**, by elimination rather than by design.
+
+  It is still not fixable from here, and the check was repeated rather than
+  assumed: `NATS_CLIENT_LANG` and `NATS_CLIENT_VERSION` are unguarded `#define`s
+  in the component's `config.h` rather than `#ifndef`-wrapped like its
+  `NATS_CONF_*` knobs; `send_connect()` is private and non-virtual, so it cannot
+  be overridden by a subclass; and 1.4.0 is still the newest version on the
+  registry, with no name option in it. That leaves an upstream patch, a vendored
+  fork of 7,228 lines — which would also make the frame parser this repository's
+  to maintain, and §2.7 wants it attacked rather than owned — or a trick: the
+  `lang` macro is expanded straight into the `CONNECT` JSON, so a value carrying
+  a quote and a comma would inject a real `name` field. **All three were weighed
+  and declined**, at the repository owner's decision: the trick would put a
+  malformed handshake one dependency bump away from a device that cannot connect
+  at all, and the IP identifies the board today.
 
 Behaviour that is not about the protocol but about this repo's rules. With a
 third-party client these stop being things to implement and become things to

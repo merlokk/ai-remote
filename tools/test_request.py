@@ -174,7 +174,7 @@ async def probe(payload: dict, *, servers: str, timeout: float, allowlist: dict)
     print(f"-> {subject}  ({payload['tool_name']})", file=sys.stderr)
     print(f"   waiting up to {timeout:.0f}s for a responder", file=sys.stderr)
 
-    async with bus.connect(servers) as b:
+    async with bus.connect(servers, name=bus.client_name("test-request", payload["session_id"])) as b:
         reply = await b.request(subject, request, timeout=timeout)
 
     trusted, reason = hook.verify_reply(request, reply, allowlist)

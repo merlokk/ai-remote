@@ -109,6 +109,7 @@ impl Config {
             subject: self.subject.clone(),
             timeout: Duration::from_millis(self.timeout_ms),
             enabled: self.publish,
+            name: nats::CLIENT_NAME.to_string(),
         }
     }
 
@@ -118,6 +119,9 @@ impl Config {
         nats::Settings {
             subject: self.activity_subject.clone(),
             enabled: self.publish && self.activity,
+            // The one field that is not "the same as the line's": a hook is a
+            // different client on the same bus, and `/connz` should say so.
+            name: nats::HOOK_CLIENT_NAME.to_string(),
             ..self.settings()
         }
     }
@@ -200,6 +204,12 @@ mod tests {
         assert_eq!(hooks.subject, "a");
         assert_eq!(hooks.url, settings.url, "one server for both documents");
         assert_eq!(hooks.timeout, settings.timeout, "and one budget");
+        // ...and two names, because `/connz` should not show one client doing
+        // both jobs when it is one connection per render against a burst per
+        // tool call (§4).
+        assert_eq!(settings.name, nats::CLIENT_NAME);
+        assert_eq!(hooks.name, nats::HOOK_CLIENT_NAME);
+        assert_ne!(hooks.name, settings.name);
     }
 
     #[test]

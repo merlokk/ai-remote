@@ -44,6 +44,22 @@ class NoResponders(BusError):
     """No subscriber was listening on the subject."""
 
 
+def client_name(role: str, ident: str | None = None) -> str:
+    """What this connection calls itself on the bus (``nats/CLAUDE.md`` §4).
+
+    A bare ``role`` for a program there is only ever one of, ``role:ident``
+    where a second one is normal and telling them apart is the point — the
+    ``key_id`` for a responder, the session for a hook.
+
+    Only ``/connz`` ever shows this, which is exactly why it matters: it is the
+    one place an operator can look when two responders share a subject and only
+    one is answering (``approver/CLAUDE.md`` §6, "Multiple clients"). An unnamed
+    client shows up there as ``name: null`` and is then distinguishable only by
+    its IP and port.
+    """
+    return f"{role}:{ident}" if ident else role
+
+
 def _encode(obj: Any) -> bytes:
     return json.dumps(obj, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
 
@@ -123,9 +139,20 @@ class Bus:
 
 
 @asynccontextmanager
-async def connect(servers: str | list[str] = DEFAULT_SERVERS, **kwargs):
-    """Async context manager yielding a connected ``Bus``; drains on exit."""
-    nc = await nats.connect(servers, **kwargs)
+async def connect(
+    servers: str | list[str] = DEFAULT_SERVERS,
+    *,
+    name: str | None = None,
+    **kwargs,
+):
+    """Async context manager yielding a connected ``Bus``; drains on exit.
+
+    ``name`` is what ``/connz`` will call this connection — build it with
+    :func:`client_name` so every client in the repository says who it is the same
+    way. It defaults to ``None`` (anonymous) so that nothing breaks by omitting
+    it, but every caller in this repository names itself.
+    """
+    nc = await nats.connect(servers, name=name, **kwargs)
     try:
         yield Bus(nc)
     finally:

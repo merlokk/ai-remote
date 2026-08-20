@@ -1,18 +1,14 @@
-# tasks.md — what the documentation and the code disagree about, and what is unfinished
+# tasks.md — what is still open
 
-A consistency pass over every `README.md`, `CLAUDE.md` and subject document in the
-repository, checked against the code they describe. Written 2026-08-20 against
-`3506b27`.
+The cross-repository list of what is **still open**: what every document says is
+owed, gathered in one place and checked against the code it describes. Started
+2026-08-20 against `3506b27`, and kept as a list of open work — an item is deleted
+when it is done, not ticked off, because the reason it was done belongs in the
+document that owns the subject and the history belongs in git.
 
 Two things this file is **not**: a list of decisions (those live in the section
 that owns them), and a second `approver-esp32/status.md` (that file is row-by-row
-about the firmware and stays authoritative for it). This is the cross-repository
-list: where a document has gone stale against its own code, and what every
-document says is still owed, gathered in one place.
-
-**Every documentation defect this pass found has been fixed** — §1 is a summary
-of what they were, not a to-do list. What is open is §2: the work the documents
-themselves say is unfinished.
+about the firmware and stays authoritative for it).
 
 ## What is verified green
 
@@ -21,44 +17,28 @@ never confused with a broken build:
 
 | Tier | Command | Result |
 |------|---------|--------|
-| Python | `.venv\Scripts\python.exe -m pytest -q` | **446 passed, 40 skipped** (no NATS, no YubiKey, no board, no browser) |
-| Rust | `cargo test -q` (in `statusline/`) | **58 passed** across four binaries |
+| Python | `.venv\Scripts\python.exe -m pytest -q` | **448 passed, 40 skipped** (no NATS, no YubiKey, no board, no browser) |
+| Rust | `cargo test -q` (in `statusline/`) | **59 passed** across four binaries |
 | Rust format | `cargo fmt --check` | clean |
 | Node | `npm test` (in `approver-web/`) | **38 passed** |
+| Browser tier | `scripts\web-approval.cmd` | **16 passed** in ~35s (needs NATS and `agent-browser`) |
 | Host tier (ESP32) | `RUN_TEST` count in `approver-esp32/host_test/` | **690**, matching `tests.md` §10.11 |
 | Markdown links | every relative link in every tracked `.md` | all resolve |
 
 ---
 
-## 1. Documentation that contradicts the code
+## 1. How these documents drift
 
-**Empty — all nineteen are fixed.** This section held the places where a document
-had gone stale against its own code; every one of them has been corrected in the
-document that owned it, and the findings are in the git history rather than kept
-here as a list of things already done.
+The pass that opened this file found nineteen places where a document had gone
+stale against its own code. All nineteen are fixed and the list of them is in git
+rather than here — but the *shape* of them is worth keeping, because three kinds
+of drift accounted for nearly all of it and none is caught by any test:
 
-What they were, in one line each, so a reader knows what was swept and can go
-looking if a fix reads oddly: the README's unusable hook entry and its silence
-about three of the four components; two documents claiming `.claude/settings.json`
-wires only the status line; `nats/CLAUDE.md`'s bus table missing `activity`;
-`firmware.md` §10.15 claiming a flash dump cannot yield the signing key, and its
-`config set` list naming a field that no longer exists, and two settings rows that
-were removed; three "not built yet" notes in `screens.md` that the firmware had
-outgrown, and its §10.8 table still routing the limits screen by swipe; a test
-`tests.md` said was owed and had already written; a broken markdown table in
-`build.md` §10.4 plus a stale LVGL version and screen count;
-`statusline/CLAUDE.md` counting six modules and listing seven; a test file missing
-from `tests/CLAUDE.md`; two `nats/` config comments citing a file the section
-moved out of; a Cyrillic typo inside "localhost"; root `CLAUDE.md` §1 a release
-behind its own §2; seven drifted test counts; and two tracked files absent from
-root §2's project-file list.
-
-**The pass that produced them is worth repeating rather than the list.** Three
-kinds of drift accounted for nearly all of it, and none is caught by any test:
-a count written as a number (screens, modules, test cases, source files), a
-"not done yet" note left behind by the thing getting done, and a section that
-moved between files while its citations stayed put. A `§10.5` in a comment names
-a section, not a file, and that is exactly what let two of them rot quietly.
+- **a count written as a number** — screens, modules, test cases, source files;
+- **a "not done yet" note left behind by the thing getting done**;
+- **a section that moved between files while its citations stayed put.** A
+  `§10.5` in a comment names a section, not a file, which is exactly what let two
+  of them rot quietly.
 
 ## 2. Unfinished work
 
@@ -98,42 +78,18 @@ The two costs it would have are already paid: Montserrat 28 is enabled and
 referenced since §10.8.3, and a thirty-key `lv_buttonmatrix` is a few hundred
 bytes of LVGL's pool.
 
-### 2.3 `approver-web`'s own "What is still missing"
+### 2.3 `approver-web` has no authentication on the page
 
-**Items 1–3 are done.** What is left is item 4, which was never a gap in the app —
-it is a decision about where the app may run:
+The last of the four things that document listed, and the only one that was never
+a gap in the code — it is a decision about where the app may run.
 
-4. **No authentication on the page.** Anyone who can open it in that browser
-   profile can approve a `rm -rf`; anyone who can reach the port can hand
-   `POST /api/register` a token. Acceptable on loopback, "unacceptable the moment
-   it binds to anything but the loopback interface". It is the same open question
-   as §2.4's, one component over — and note that registering several browsers
-   (item 3) gives two responders two keys, not two *identities with different
-   rights*.
+Anyone who can open the page in that browser profile can approve a `rm -rf`;
+anyone who can reach the port can hand `POST /api/register` a token. Acceptable on
+loopback, "unacceptable the moment it binds to anything but the loopback
+interface". The same open question as §2.4's, one component over.
 
-What the first three were, and what closed them:
-
-1. **Tests are not committed** → `tests/test_web_browser.py`, sixteen tests, opt-in
-   on `AI_REMOTE_WEB_BROWSER=1`. A real browser driven by `agent-browser`
-   registers through the page, signs a decision `hook.verify_reply` calls trusted,
-   is **closed and relaunched on the same profile** and signs again with the same
-   key — which is the persistence claim — and its private half is asked to export
-   itself and refuses. The judge is Python because the judge is the hook; the
-   argument for where the file lives is in `tests/CLAUDE.md`.
-2. **No `.cmd` script** → `scripts\web-approval.cmd`, self-checking and
-   unattended (`agent-browser` does the clicking, so there is no finger in the
-   loop as there is in the YubiKey and ESP32 ones). ~35 s. It also does what
-   `esp32-approval.cmd` can only ask for: the app under test gets **its own
-   subject and queue group**, so it neither answers a live `PermissionRequest` nor
-   loses one to a responder already running.
-3. **Multiple browsers** → `config.json` now holds a `clients` map keyed by
-   `key_id`, the same shape as the handler's allowlist. A registration writes one
-   entry, so a second browser with its own token joins instead of rotating the
-   first out; the decision POST carries the `key_id` that signed it and the server
-   verifies against that entry. The pre-`clients` single-key config is migrated on
-   read (in memory — reading a config does not write one). Sharing one `key_id`
-   between two browsers is still a rotation, which is now something you have to
-   ask for rather than the only behaviour.
+Note that registering several browsers does not touch it: two browsers are two
+keys, not two identities with different rights.
 
 ### 2.4 The ESP32 web server's write path has no authentication decision (§10.16, §10.3)
 
@@ -193,21 +149,7 @@ All three need something pretending to be a NATS server rather than a real one.
 The frame parser is `debsahu/espidf-nats`'s now, not ours, which is exactly why it
 has to be attacked rather than trusted.
 
-### 2.8 The responder is anonymous on the bus (§10.5)
-
-`debsahu/espidf-nats` builds its own `CONNECT` and sends no `name` field, so the
-device shows up in `/connz` as `name: null, lang: "espidf"`. §10.2 gives it a
-`key_id` precisely so it can be told apart, and `/connz` is where an operator
-looks when two clients are on one subject and only one is answering — which is
-§6's "Multiple clients", and will bite the first time the YubiKey responder and
-the device are both up.
-
-Not fixable from here: `NATS_CLIENT_LANG`/`NATS_CLIENT_VERSION` are unguarded
-`#define`s and there is no name field in the `CONNECT` builder. It is an upstream
-patch or a vendored fork. Recorded rather than fixed, with the IP as the fallback
-identifier.
-
-### 2.9 The worst-case heap number has not been measured (§10.14.1, §10.5)
+### 2.8 The worst-case heap number has not been measured (§10.14.1, §10.5)
 
 `firmware.md` §10.14.1 names the measurement it wants and it has not been taken:
 **a request arriving during a Wi-Fi scan with the codec running**, read as
@@ -216,7 +158,7 @@ condition at a time; the one that says whether the device is safe is the
 combination. §10.5 makes the same argument from the other end after a 64 KB
 message took the low-water mark to 23,068 free.
 
-### 2.10 The clock screen is missing two things §10.8.2 specifies
+### 2.9 The clock screen is missing two things §10.8.2 specifies
 
 §10.8.2's list for the home screen is "the time, the date, the link indicator,
 **`key_id` when registered**, and **a gear**". Neither is drawn —
@@ -227,7 +169,7 @@ no longer true: registration works and settings is a swipe up.
 Low stakes — settings is reachable three other ways — but the section still
 promises them.
 
-### 2.11 The two shipped config files disagree about the AP password (§10.9)
+### 2.10 The two shipped config files disagree about the AP password (§10.9)
 
 `spiffs_image/config.json` raises a **WPA2** access point;
 `spiffs_image/config.init.json` leaves it **open** — so a restore (or holding
@@ -237,14 +179,14 @@ configuration site on that AP, and §10.9 named this as the line to revisit "whe
 §10.8.6 gives it a screen to serve — and the two files should stop disagreeing at
 the same time".
 
-### 2.12 Battery and sleep (§10.13)
+### 2.11 Battery and sleep (§10.13)
 
 Explicitly deferred: light sleep with a socket open, or waking on Wi-Fi, changes
 the "is it connected" story of §10.8.1. The collision is already named — a screen
 that blanks is fine, a *radio* that sleeps means requests arrive late or not at
 all, and a responder that is asleep is a responder that times out.
 
-### 2.13 There is no CI
+### 2.12 There is no CI
 
 No `.github/`, no workflow, nothing that runs any of the four test tiers on a
 push. Root §1's TDD rule is enforced by hand today. `firmware.md` §10.14.4 already
@@ -256,7 +198,7 @@ Four commands would cover it, and three of them need nothing but a checkout:
 `approver-esp32/host_test/run.cmd` (which needs `managed_components/`, so one
 `idf.py build` first).
 
-### 2.14 Smaller open ends
+### 2.13 Smaller open ends
 
 - **`tools/make_vectors.py` has no repo-level runner.** The staleness guard
   (`tests/test_esp32_vectors.py`) is in the pytest suite and passing, so this is
