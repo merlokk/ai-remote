@@ -59,13 +59,14 @@ and the twenty rounds that follow are flat at 27,180 bytes with the same AP up.
 A single before/after pair cannot tell those apart, which is the whole argument
 for cycling.
 
-#### The site — four pages, one column, a phone's width
+#### The site — six pages, one column, a phone's width
 
 The single `index.html` this section started with was a table and a `<pre>` on one
 page: enough to answer "does the server work", which is what it was for. What is
 there now is the site the repository owner asked for, in the order they asked for
-it — **the front page of buttons, the `devstatus` page, the restart, and the 404**
-— with Wi-Fi and bus settings drawn on the list and marked `soon`.
+it — **the front page of buttons, the `devstatus` page, the restart, and the
+404**, and then **the Wi-Fi and bus pages**, which were drawn on the list and
+marked `soon` until they were asked for and are the two that write (below).
 
 | File | What it is |
 |---|---|
@@ -522,10 +523,19 @@ no page here has a stylesheet link.
 
 #### What it deliberately does not do yet
 
-- **Nothing writes a setting.** No form, no config endpoint — the pages read, and
-  the one action there is restarts the device (above). A writable config over HTTP
-  is a way to point this device at another NATS server, and that decision is
-  below.
+- **Most settings are unreachable, and that is the whitelist rather than an
+  omission.** Wi-Fi and the bus address write (two sections up); *everything else
+  in `config.json`* — the touch calibration, the idle timers, the clock, the
+  display's brightness, the audio volume, `web.write` itself — is refused by name
+  by `POST /api/settings`, and there is no endpoint that reaches them. This bullet
+  used to read "nothing writes a setting", which was true until the repository
+  owner asked for those two pages; what survived the change is the shape of the
+  answer, which is a list of what may be written rather than a merge of whatever
+  arrives.
+- **Nothing authenticates.** `web.write: false` refuses the whole write path, and
+  it is a switch rather than a lock — anybody who can reach the server can submit
+  the form. That is §10.3's boundary and the decision at the end of this section
+  is where it gets moved on purpose.
 - **Nothing decides for the operator.** `web auto` is as close as this gets to
   automatic, and it is deliberately about the *access point* rather than about
   §10.9's window: the fallback AP going up is what raises the server, and its
@@ -559,11 +569,19 @@ defended against — and **nothing is percent-decoded**, because decoding is whe
 the traversal bugs live. All of it is `<cstddef>`-only and host-tested (11 tests),
 and the suite reads as a list of things that must not leave the device.
 
-And the decision that is still open, which is the *write* path: a configuration
-endpoint needs either authentication (the house firmware answers this with
-`users.json` and basic auth) or, more likely for this device, **binding to the
-access-point interface only** — the server exists to configure a device that has
-no network yet, and on the LAN §10.3 already put the trust boundary at the router
-for *reading*. A writable config moves that boundary, and it should be moved on
-purpose.
+And the decision that is still open, which the *write* path shipped ahead of:
+this section named authentication as the thing a writable config needed first,
+the pages above were then asked for, and what was built is the narrowest write
+there is — a whitelist, write-only passwords, memory until a save, and
+`web.write` to refuse the lot. **None of that is the missing piece.** The
+boundary moved when the first `POST` landed, and moving it back on purpose means
+one of two things: authentication (the house firmware of §10.14.4 answers this
+with `users.json` and basic auth), or — more likely for this device — **binding
+the server to the access-point interface only**. The server exists to configure a
+device that has no network yet; on the LAN §10.3 already put the trust boundary
+at the router for *reading*, and reading is what that argument covers.
+
+Until one of those is taken, `web.write` is the whole of the answer and it is a
+switch rather than a lock: it is what a device on a network its owner does not
+trust has, and it is not authentication.
 

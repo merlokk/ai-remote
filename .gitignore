@@ -21,7 +21,8 @@ statusline-config.json
 # Claude Code, the per-machine half. Permissions granted on this machine and the
 # absolute path to the PermissionRequest hook's interpreter — nothing another
 # checkout can use. (`.claude/settings.json` is project-wide and IS committed:
-# it wires up the status line, §9.5.)
+# it wires the status line and the three PreToolUse/PostToolUse/Stop hooks that
+# publish the `activity` subject, §9.5 and §9.10.)
 #
 # **Unanchored, because a session started inside a subfolder makes that folder
 # the project root** and Claude Code writes a `.claude/` there too — the pattern

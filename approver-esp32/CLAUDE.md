@@ -183,7 +183,7 @@ sequenceDiagram
     D->>D: cJSON parse, validate, queue to the UI
     D->>O: screen lights: tool, cwd, tool_input, countdown
     O->>D: press Allow / Deny
-    D->>D: signing bytes -> ed25519 sign (key derived from eFuse)
+    D->>D: signing bytes -> ed25519 sign (key bound to this chip, §10.6)
     D-->>N: publish to the reply subject
     N-->>H: reply inbox
     H->>H: verify sig against clients["approver-esp32"]

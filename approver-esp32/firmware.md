@@ -686,14 +686,30 @@ The earlier draft of this section put Wi-Fi passwords and the pinned key in
   first `config.json` ships costs a reflash of the partition. Worth deciding at
   the same time as the §10.12 encryption question rather than separately.
 
-**What is still in no file, and this is the one that matters.** The device's
-Ed25519 *private key* is derived per boot from an eFuse key through the HMAC
-peripheral and exists only in RAM (§10.6). Nothing in this section changes that.
-So a dumped flash yields the network password and the device's public identity —
-it does **not** yield the ability to sign a decision. The property §10.10 and §7
-depend on is intact; what is exposed is the same class of thing that a stolen
-device exposes anyway, and §10.13 already accepted that boundary when it decided
-there is no authentication on the device.
+**And the signing key is in flash too, on the build that is running.** This
+paragraph used to say the opposite — that the Ed25519 *private key* is derived per
+boot from an eFuse key and exists only in RAM, so a dumped flash yields the
+network password and the device's public identity and **not** the ability to sign
+a decision. That is §10.6 **as designed**, and §10.6 shipped its *fallback*: no
+eFuse key is burned, so a 32-byte seed sits unencrypted in NVS (the namespace two
+sections down) and `esptool read_flash` gives up the key that signs verdicts.
+
+So the honest accounting for a flash dump today is one sentence rather than two:
+**everything on this device is readable — the WPA passphrase, the pinned handler
+key, and the signing key.** §10.6's table has the row that says so and what closes
+it (`espefuse.py burn-key`, after which the firmware picks the fuse up with no
+reflash, deletes the stale seed, and becomes a different responder needing a new
+token). This section is not what makes that true and cannot fix it: it would be
+equally true with the config in encrypted NVS, because NVS encryption needs the
+same one-way eFuse operation.
+
+What §10.10 and §7 depend on is narrower than "the key cannot be read", and it
+does still hold: a decision cannot be forged **by the host being asked about**,
+and the only path to `allow` is a human press on a card. What a stolen or
+flash-dumped device costs is that whoever holds it can sign as this responder
+until `forget` and a re-registration take the `key_id` back — the same class of
+thing §10.13 accepted when it decided there is no authentication on the device,
+and one notch worse than it was written to be.
 
 #### The `nvs` partitions, and the one namespace of ours that is in them
 

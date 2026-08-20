@@ -126,9 +126,12 @@ sudo .venv\Scripts\python.exe approver\responder_yubikey.py register approver-yk
 sudo .venv\Scripts\python.exe approver\responder_yubikey.py serve
 ```
 
-Then wire it into Claude Code's `settings.json` as a `PermissionRequest` hook
-(matcher `*`, command `py <repo>\approver\hook.py`) and every permission prompt
-becomes a YubiKey touch. There is also a software responder with the key on disk
+Then wire it into Claude Code's `.claude/settings.local.json` as a
+`PermissionRequest` hook (matcher `*`, running `<repo>\approver\hook.py` under
+the venv interpreter named by path — the exact entry, and why both of those
+matter, is under ["Wire it into Claude Code"](README.md#wire-it-into-claude-code))
+and every permission prompt becomes a YubiKey touch. There is also a software
+responder with the key on disk
 (`approver/responder.py`) — it is **not** the intended way to run this, it exists
 so the protocol can be tested and developed without hardware; it and the
 `yubikey-exec` CLI are covered in [`README.md`](README.md).

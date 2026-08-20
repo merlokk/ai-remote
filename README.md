@@ -17,6 +17,32 @@ hardware.
 > the problem, the solution, the one command that runs the whole loop, and the
 > screenshots of a real run in [`screens/`](screens/). This file is the long one.
 
+### What this file covers, and what it does not
+
+**This README is the guide to the protocol and its two Python responders** — the
+hook, the registration handler, `responder.py`, `responder_yubikey.py`, and the
+YubiKey library under it. That is the core, and it is the part you need to have
+running before anything else in the repository means much.
+
+**It is deliberately not a tour of the whole repository.** Three more components
+speak this same protocol or watch the same bus, each documented where it lives
+rather than summarised here — a summary of a folder that documents itself is a
+second copy to keep in step, and root [`CLAUDE.md`](CLAUDE.md) §2 is the map that
+already does this job:
+
+| Also in here | What it is | Its docs |
+|---|---|---|
+| [`approver-web/`](approver-web/) | a third responder: the same allow/deny as a web page (Next.js), signing with a non-extractable key in the browser | [`approver-web/README.md`](approver-web/README.md) to run it, [`approver-web/CLAUDE.md`](approver-web/CLAUDE.md) for the design |
+| [`approver-esp32/`](approver-esp32/) | a fourth responder: firmware for an ESP32-C6 with a touchscreen — a clock on the desk that lights up and takes one press | [`approver-esp32/CLAUDE.md`](approver-esp32/CLAUDE.md) §10, and the subject files its table maps |
+| [`statusline/`](statusline/) | the Claude Code status line, in Rust: the model and the rate limits, on screen and published to NATS — plus what the session is *doing*, from three hooks | [`statusline/CLAUDE.md`](statusline/CLAUDE.md) §9 |
+
+All three are additive, and that is the point: **none of them required a change
+to `hook.py`, `protocol.py` or `registration_handler.py`.** A responder is a
+front end over the wire format below — swap the console prompt for a browser tab
+or a button on a desk and the verifying side never learns which one answered.
+Nothing below needs any of them, and the checks in "Verify it works" pass with
+none of them built.
+
 ## Why
 
 The built-in permission prompt assumes the person driving Claude Code is sitting
@@ -238,8 +264,10 @@ fall back to the normal prompt (never a silent allow).
 ## Wire it into Claude Code
 
 The hook is delivered via a `PermissionRequest` hook in your Claude Code
-settings. Add this to your **project** `.claude/settings.json` (or your user
-settings), adjusting the path:
+settings. It belongs in the **per-machine** `.claude/settings.local.json`, which
+is git-ignored — the working entry names an absolute interpreter path, so it is
+nothing another checkout can use. (`.claude/settings.json` is the committed half
+and wires the status line and its three hooks, §9.5.)
 
 ```json
 {
@@ -248,13 +276,30 @@ settings), adjusting the path:
       {
         "matcher": "*",
         "hooks": [
-          { "type": "command", "command": "py E:\\.....\\hook.py" }
+          {
+            "type": "command",
+            "command": "\"E:\\projects\\ai-remote\\.venv\\Scripts\\python.exe\" \"E:\\projects\\ai-remote\\approver\\hook.py\""
+          }
         ]
       }
     ]
   }
 }
 ```
+
+**Name the venv interpreter by path, and keep the inner quotes.** Both halves are
+load-bearing:
+
+- `py` selects `.venv` only when `VIRTUAL_ENV` is set in the calling shell
+  (`CLAUDE.md` §5), and Claude Code sets no such thing — so `py …\hook.py` dies
+  with `ModuleNotFoundError: No module named 'nats.aio'` before it reaches the
+  bus, and every permission prompt falls back to the terminal with no visible
+  reason.
+- Claude Code runs the command through a shell, where a backslash escapes the
+  next character. An unquoted Windows path arrives as
+  `E:projectsai-remote.venvScriptspython.exe`; quoting it *inside* the JSON
+  string keeps the backslashes literal. Same trick as the status line's entry in
+  the committed `.claude/settings.json`.
 
 The NATS server(s) and the approval timeout are read from `handler-config.json`
 itself (optional top-level keys; the registration handler preserves them):

@@ -61,8 +61,19 @@ line publishes a current value with no stream behind it (§9.7).
 |---------|-----------|-------|
 | `approvals.<session_id>` | request-reply, queue group `approvers` | [`approver/`](../approver/CLAUDE.md) §7 |
 | `registrations` | request-reply | [`approver/`](../approver/CLAUDE.md) §6 |
-| `status` | publish only, no stream | [`statusline/`](../statusline/CLAUDE.md) §9.7 |
+| `status` | publish only, no stream — what the session is **spending** | [`statusline/`](../statusline/CLAUDE.md) §9.7 |
+| `activity` | publish only, no stream — what it is **doing**: one message per `PreToolUse` / `PostToolUse` / `Stop` | [`statusline/`](../statusline/CLAUDE.md) §9.10 |
 | `status.test.statusline` | the Rust integration test, so it cannot disturb a live subscriber | [`statusline/`](../statusline/CLAUDE.md) §9.6 |
+| `status.test.statusline.activity` | the same, for the other document | [`statusline/`](../statusline/CLAUDE.md) §9.6 |
+
+The two read-only subjects are published by the same binary and are **not**
+request-reply: a current value with nothing behind it, so a subscriber that was
+not listening missed it by design (§4). Both are read by
+[`approver-web/`](../approver-web/CLAUDE.md) and by the ESP32's limits screen
+([`approver-esp32/screens.md`](../approver-esp32/screens.md) §10.8.3), neither of
+which ever answers — and both are subscribed **without a queue group**, unlike
+`approvals.*`, because a broadcast is meant to reach every watcher rather than
+exactly one.
 
 **The bus is unauthenticated and every subject on it is open.** `approvals.*`
 carries the full `tool_input` (for Bash, the whole command; for Write, the file
