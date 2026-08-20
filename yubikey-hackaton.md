@@ -5,7 +5,7 @@ question onto a message bus and answers it with a **YubiKey touch**, then
 cryptographically verifies the answer before the tool runs.
 
 > This is the hackathon short form. The full protocol, contracts and design
-> rationale are in [`full-readme.md`](full-readme.md) and the per-folder
+> rationale are in [`README.md`](README.md) and the per-folder
 > `CLAUDE.md` files ([`CLAUDE.md`](CLAUDE.md) §2 maps them).
 
 ## The problem & the solution
@@ -131,7 +131,7 @@ Then wire it into Claude Code's `settings.json` as a `PermissionRequest` hook
 becomes a YubiKey touch. There is also a software responder with the key on disk
 (`approver/responder.py`) — it is **not** the intended way to run this, it exists
 so the protocol can be tested and developed without hardware; it and the
-`yubikey-exec` CLI are covered in [`full-readme.md`](full-readme.md).
+`yubikey-exec` CLI are covered in [`README.md`](README.md).
 
 ## Screenshots
 

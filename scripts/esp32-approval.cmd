@@ -39,7 +39,7 @@ REM lib\bus.py, whose dependencies (cryptography, nats-py) are installed by
 REM `uv sync` into .venv and are not in the launcher's interpreter.
 if not exist "%PYTHON%" (
     echo Could not find %PYTHON%
-    echo Run `uv sync` first - full-readme.md has the setup.
+    echo Run `uv sync` first - README.md has the setup.
     exit /b 1
 )
 

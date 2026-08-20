@@ -12,6 +12,10 @@ hardware.
 > [`approver/CLAUDE.md`](approver/CLAUDE.md) §6–§7 (the folder docs; the map is in
 > [`CLAUDE.md`](CLAUDE.md) §2). This README is the practical "what it is / how
 > to run it / how to check it works" guide.
+>
+> **In a hurry?** [`yubikey-hackaton.md`](yubikey-hackaton.md) is the short form —
+> the problem, the solution, the one command that runs the whole loop, and the
+> screenshots of a real run in [`screens/`](screens/). This file is the long one.
 
 ## Why
 

@@ -37,7 +37,7 @@ wherever it lives.
 | `statusline/` | the Claude Code status line in Rust — the model plus how much of the 5h / 7d rate limits is spent, on screen and published to NATS. The same binary, wired as three hooks, also publishes what the session is *doing* — the tool about to run, the tool that just ran, the turn that ended | [`statusline/CLAUDE.md`](statusline/CLAUDE.md) — **§9** the line, **§9.7** the `status` subject, **§9.8** the connection dot, **§9.10** the `activity` subject |
 | `nats/` | docker-compose: the NATS server, dashboard and `nats-box` (CLI) | [`nats/CLAUDE.md`](nats/CLAUDE.md) — **§3** the compose file, **§4** NATS concepts the rest of the repo relies on |
 | `tests/` | the pytest suite (`test_*.py`) and the `conftest.py` markers that keep it green with no Docker and no hardware | [`tests/CLAUDE.md`](tests/CLAUDE.md) |
-| `screens/` | the screenshots `README.md` walks through — no docs of their own | — |
+| `screens/` | the screenshots `yubikey-hackaton.md` walks through — no docs of their own | — |
 
 `lib/`, `approver/` and `tools/` have an `__init__.py` so `import lib.bus` /
 `from approver import protocol` resolve; the scripts additionally prepend the
@@ -45,7 +45,7 @@ repo root to `sys.path` so they also work when run directly by path.
 
 Project-level files:
 
-- `README.md` — the short form: the problem, the solution, and the one command that runs the whole loop. `full-readme.md` — the long form: setup, the smoke tests, the command reference. Both are for a reader arriving at the repository; the `CLAUDE.md` files are for working inside it, and are the ones to keep authoritative.
+- `README.md` — the long form, and the one a reader arriving at the repository lands on: what it is, how to run it, the smoke tests, and the command reference. `yubikey-hackaton.md` — the hackathon short form: the problem, the solution, and the one command that runs the whole loop. Both are for that arriving reader; the `CLAUDE.md` files are for working inside the repository, and are the ones to keep authoritative.
 - `pyproject.toml` — project metadata and dependencies (runtime + dev group); the source of truth for dependencies. In `[tool.pytest.ini_options]`: `pythonpath=["."]` (importing `lib.*` in a non-package project), `testpaths=["tests"]`, `--basetemp=.pytest_tmp` (the default temp root is unavailable in this sandbox).
 - `uv.lock` — locked versions (uv), committed to the repository.
 - `statusline-config.example.json` — the defaults for the status line's runtime config (§9.9). The live copy lives next to the built binary, not here; this is the committed record of the format, and a test asserts it matches the defaults.
