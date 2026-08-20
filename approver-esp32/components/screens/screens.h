@@ -28,6 +28,7 @@
 
 #include <cstdint>
 
+#include "activity_view.h"
 #include "axp2101.h"
 #include "buttons.h"
 #include "clock_face.h"
@@ -276,6 +277,39 @@ struct LimitsStatus {
 };
 
 LimitsStatus Limits();
+
+// An `activity` document arrived (§9.10) — what the session is *doing*, as one
+// line under the numbers.
+//
+// **This raises nothing**, which is the difference from `ShowLimits` above and the
+// whole of `ui/activity_view.h`'s argument: there is one screen with one arrival
+// rule, one quiet timer and one dismissal, and a second publisher racing to bring
+// it up and take it down would make both untestable. The line is drawn on whatever
+// is already there.
+//
+// It does refresh the idle timer, for the same reason `ShowLimits` does: a tool
+// call is somebody working, and the panel should not dim in the middle of it.
+//
+// Safe from any task, and it does no LVGL work of its own.
+void ShowActivity(const ui::Activity &activity);
+
+// What the activity line is showing, for `limits` on the console — the same kind
+// of snapshot as the three above.
+struct ActivityStatus {
+    bool ready = false;
+    bool has_document = false;
+    bool stale = false;
+
+    uint32_t received = 0;
+    uint32_t age_ms = 0;
+    ui::Activity document = {};
+
+    // The line as the panel draws it, so the console and the glass cannot
+    // disagree about what it says.
+    char headline[ui::kActivityHeadlineSize] = {};
+};
+
+ActivityStatus Activity();
 
 // --- Where a verdict goes (§7, §10.8.4) ----------------------------------
 

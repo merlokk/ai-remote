@@ -16,5 +16,6 @@
 # — two places for a field to be forgotten. It costs nothing, because
 # `components/ui` includes `<cstdint>` and nothing else.
 idf_component_register(SRCS "signing.cpp" "registration.cpp" "approval.cpp" "status.cpp"
+                            "activity.cpp"
                     INCLUDE_DIRS "."
                     REQUIRES ui espressif__cjson)

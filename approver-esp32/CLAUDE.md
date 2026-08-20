@@ -39,7 +39,7 @@ whose long form is [`status.md`](status.md).
 | [`hardware.md`](hardware.md) | **§10.1** the board and what the firmware may assume of it — including the two facts that shape boot order and the one the datasheet gets wrong; **§10.13** which parts have a job and which deliberately do not, with the IMU orientation table read off this board; **§10.14.3** the leased I²C bus and the three driver bugs it found |
 | [`protocol.md`](protocol.md) | **§10.5** the NATS client and the subset of it this device uses; **§10.6** key custody, as designed and as shipped; **§10.7** registration, and the console it is driven from. The path a verdict travels, and the one place where being wrong is silent |
 | [`firmware.md`](firmware.md) | **§10.9** Wi-Fi, the radio and the manager above it; **§10.14** the language, no heap, and the layer that comes first; **§10.15** where the configuration lives and the button that puts it back. What the device does for itself, none of which can approve anything |
-| [`screens.md`](screens.md) | **§10.8** all seven screens and the boot splash: the navigation model, the clock, the limits, the request card, the settings list with its status pages and touch test, and the Wi-Fi screen |
+| [`screens.md`](screens.md) | **§10.8** all seven screens and the boot splash: the navigation model, the clock, the limits — with §9.10's activity line under them — the request card, the settings list with its status pages and touch test, and the Wi-Fi screen |
 | [`web.md`](web.md) | **§10.16** the configuration site served off the device's own filesystem — the pages, the whitelist, the write path, and what it costs |
 | [`tests.md`](tests.md) | **§10.11** the three tiers — host, parity vectors, device — what each pins, and every mutation pass over them |
 | [`build.md`](build.md) | **§10.4** the dependency set and the argument that got each entry signed off; **§10.12** the build, the ESP-IDF version question, the partition table, the LVGL preview, the panel screenshots, and the size numbers |
@@ -65,7 +65,8 @@ list), the bus, an Ed25519 identity (§10.6) and a registration (§10.7).
 
 Above it, all seven of §10.8's screens, every one of them photographed on the
 panel, and an eighth that is one level inside the seventh: the clock, the limits that come up on their own while a session is
-spending, the request card over both, the settings list — reached by a swipe up or
+spending — with one line under them saying what it is *doing*, off §9.10's `activity`
+subject — the request card over both, the settings list — reached by a swipe up or
 by holding `KEY` — and, behind it, the three status pages, the touch test with its
 calibration, the Wi-Fi screen, and the list of what is on the air that it opens.
 Nothing on that list says `soon` any more. It has seven rows now and five of them

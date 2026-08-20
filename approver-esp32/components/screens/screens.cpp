@@ -54,6 +54,9 @@ ui::RequestCard g_card;
 // `ui/limits_view.h` says why and at whose request.
 LimitsScreen g_limits_screen;
 ui::LimitsView g_limits;
+// What the session is *doing* (§9.10), which rides on the screen above rather
+// than owning one — `ui/activity_view.h` says why.
+ui::ActivityView g_activity;
 
 // Settings and the status pages (§10.8.5). Same split as everything else here:
 // `ui::SettingsMenu` and `ui::StatusPager` decide and are host-tested, the two
@@ -192,7 +195,12 @@ bool g_display_dirty = true;
 
 // Something happened. Safe from any task — `ui::IdlePolicy::Activity` is one
 // store, and it is deliberately not the thing that recomputes anything.
-void Activity() { g_idle.Activity(static_cast<uint32_t>(esp_timer_get_time() / 1000)); }
+//
+// Named `Touched` rather than `Activity` since §9.10 arrived: the public
+// `screens::Activity()` next to it answers "what is Claude doing", and two
+// functions with one name in one file is a compiler error waiting for whichever
+// of them is written second.
+void Touched() { g_idle.Activity(static_cast<uint32_t>(esp_timer_get_time() / 1000)); }
 
 // **Where a decided request is handed back, and it is not the stack.** A
 // `ui::Request` is 2.3 KB of §7 fields; two of them as locals in the button poll
@@ -1498,7 +1506,8 @@ void Task(void *) {
                 // The epoch, or 0 when it is not believable — which is what decides
                 // whether a countdown is computed here or taken from what the
                 // publisher resolved (§10.8.3).
-                g_limits_screen.Apply(g_limits, view.time_valid ? in.epoch_utc : 0, now_ms);
+                g_limits_screen.Apply(g_limits, g_activity, view.time_valid ? in.epoch_utc : 0,
+                                      now_ms);
 
                 // The card last, so it is the last thing invalidated — and it sits on
                 // top of a clock that has no idea it is there (§10.8.1).
@@ -1858,7 +1867,7 @@ bool Navigate(ui::Nav nav) {
     // Somebody asked for a screen, so it had better be visible — the one place
     // the console counts as activity, because unlike `config set` it is a
     // request to look at something rather than a setting typed at it.
-    Activity();
+    Touched();
 
     // **And waited for, because there is one slot and callers chain.** Reaching
     // the status pages is "up, then open" — two moves — and a second call that
@@ -1893,7 +1902,7 @@ void SetNotice(const char *text) {
         return;
     }
     // A line worth putting under the clock is a line worth being able to read.
-    Activity();
+    Touched();
     if (text == nullptr || text[0] == '\0') {
         g_notice_set = false;
         g_notice[0] = '\0';
@@ -1931,6 +1940,45 @@ void ShowLimits(const ui::Limits &limits) {
         g_nav.LimitsArrived();
     }
     xSemaphoreGive(g_lock);
+}
+
+void ShowActivity(const ui::Activity &activity) {
+    if (g_handle == nullptr) {
+        return;
+    }
+    const uint32_t now_ms = static_cast<uint32_t>(esp_timer_get_time() / 1000);
+
+    // A tool call is somebody working, exactly as a render is — so the panel does
+    // not dim in the middle of one (§10.8.1).
+    g_idle.Activity(now_ms);
+
+    if (xSemaphoreTake(g_lock, pdMS_TO_TICKS(100)) != pdTRUE) {
+        return;
+    }
+    // **No navigator call here.** The line appears on the limits screen the next
+    // time the task paints it, and nothing about it decides which screen is up.
+    g_activity.Arrived(activity, now_ms);
+    xSemaphoreGive(g_lock);
+}
+
+ActivityStatus Activity() {
+    ActivityStatus out;
+    if (g_handle == nullptr) {
+        return out;
+    }
+    const uint32_t now_ms = static_cast<uint32_t>(esp_timer_get_time() / 1000);
+    if (xSemaphoreTake(g_lock, pdMS_TO_TICKS(100)) != pdTRUE) {
+        return out;
+    }
+    out.ready = true;
+    out.has_document = g_activity.HasDocument();
+    out.stale = g_activity.Stale(now_ms);
+    out.received = g_activity.Received();
+    out.age_ms = g_activity.AgeMs(now_ms);
+    out.document = g_activity.Document();
+    g_activity.Headline(out.headline, sizeof out.headline);
+    xSemaphoreGive(g_lock);
+    return out;
 }
 
 LimitsStatus Limits() {

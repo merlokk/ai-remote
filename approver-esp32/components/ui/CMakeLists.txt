@@ -4,5 +4,6 @@
 # appearing on this line is a sign that something with a dependency was put in
 # the wrong component.
 idf_component_register(SRCS "navigator.cpp" "clock_face.cpp" "request_card.cpp" "limits_view.cpp"
+                            "activity_view.cpp"
                             "settings_menu.cpp" "touch_cal.cpp" "idle_policy.cpp" "wifi_view.cpp"
                     INCLUDE_DIRS ".")

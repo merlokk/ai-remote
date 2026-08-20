@@ -314,6 +314,19 @@ at (§10.8.6 has both numbers). `libui.a` is **8,560 bytes**, still all flash, a
 `libscreens.a` **66,435** (31,191 of DIRAM). The app is **1,861,552 bytes**
 against the 2.5 MB slot.
 
+**And the activity line of §9.10 is the smallest thing here yet measured**, which
+is what a decision-holding layer is supposed to cost. Taken with `idf.py
+size-components` after it: `libui.a` **9,132** (all flash — the view, the headline
+and the two word tables), `libprotocol.a` **9,986** (3,084 of DIRAM, and the parser
+next to §6's and §7's), `libscreens.a` **68,974** (31,708 of DIRAM — the label, its
+buffer, and the layout that moved to make room), `libwatcher.a` **1,603** for two
+subscriptions where it held one, and `libcli.a` **37,467**. The app is **1,925,072
+bytes**, 27 % of the slot still free. The lines above are the previous measurement
+of the same three archives rather than a like-for-like baseline — three unrelated
+commits sit between them — so the number to read here is the shape, not a
+subtraction: one line of glass, one parser, one enum pair, and the whole of it is
+kilobytes.
+
 Read next to the paragraph below, it is the same shape a third time: the layer
 with every decision in it costs a kilobyte of flash and no RAM at all, and what
 costs is *holding* things — a task stack, sixteen SSIDs, and the label buffers

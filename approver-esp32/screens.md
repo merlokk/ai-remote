@@ -36,7 +36,7 @@ one arrives with the numbers:
 | # | Screen | Reached by | Exists to |
 |---|--------|-----------|-----------|
 | 10.8.2 | **Clock** — home | the screen it returns to from everywhere | be the thing on the desk for 99 % of its life, and admit in one glyph whether it could answer a request right now |
-| 10.8.3 | **Limits** | swipe left/right from the clock | the §9.7 `status` document: which model is answering and how much of the 5h / 7d windows is spent — present only while a Claude Code session is actually publishing |
+| 10.8.3 | **Limits** | swipe left/right from the clock | the §9.7 `status` document: which model is answering and how much of the 5h / 7d windows is spent — present only while a Claude Code session is actually publishing. Plus one line of §9.10's `activity`: what that session is *doing* right now |
 | 10.8.4 | **Request** | **a message on `approvals.*`** | the one screen the device exists for |
 | 10.8.5 | **Settings** | a swipe up, or `KEY` held two seconds — from the clock **and from the limits**, which arrive on their own | a short list of places to go — Wi-Fi, the status pages, the touch test — and three things to do: save the settings, reload them, and restart. Seven rows, five of them on the glass at a time |
 | 10.8.5 | **Status** | from Settings | three pages of what the board is doing — power, system, motion — for the questions a console answers and a desk object cannot |
@@ -428,7 +428,8 @@ registration to name and nothing to open.
 
 A port of `approver-web`'s "model and limits plaque" onto the panel: the model
 name, `effort.level`, the `5h` and `7d` gauges with countdowns, `ctx`, and the
-`cwd` the session is in.
+`cwd` the session is in — and under all of it, one line of what that session is
+*doing* (§9.10, at the end of this section).
 
 **It arrives rather than being navigated to**, which is the one rule below that
 did not survive contact with the repository owner, and the change is the whole
@@ -458,10 +459,11 @@ therefore means "not for this burst", which is the only reading in which the
 button does anything at all. `ui/limits_view.h` carries that argument next to the
 code.
 
-- **It is a second subscription on the connection that is already open, it is
-  never answered, and the request path must not read it.** Same test
-  `approver-web` states: deleting this screen must leave a working responder. No
-  queue group (§10.5) — a broadcast current value is meant to reach everyone.
+- **It is a pair of subscriptions on the connection that is already open, neither
+  is ever answered, and the request path must not read either.** `status` for the
+  numbers, `activity` for the line under them (§9.10) — same test `approver-web`
+  states: deleting this screen must leave a working responder. No queue group on
+  either (§10.5) — a broadcast current value is meant to reach everyone.
 - **"Connected" means a document arrived recently, and nothing more.** §9.7
   publishes a current value with no stream: an idle session simply stops
   publishing and there is nothing to catch up on. So the screen shows the
@@ -580,6 +582,105 @@ app came back to within 32 bytes of where it started.
 The general fact, which is not obvious and will catch somebody else: **a font
 being enabled in `sdkconfig` costs nothing until something references it.** Three
 are enabled here and two were being linked.
+
+##### The activity line — what the session is *doing* (§9.10)
+
+One line under the bars, at the size the numbers are: `Bash - py -m pytest -q`,
+`Explore > Grep - TODO`, or `idle`. It is the `activity` document — published by
+the same status-line binary from Claude Code's `PreToolUse` / `PostToolUse` /
+`Stop` hooks — and on this device it is the fastest-changing thing on the glass,
+which is why it is 28 point and not a footnote at 14.
+
+| Claude Code event | `event` | `state` | On the line |
+|---|---|---|---|
+| `PreToolUse` | `pre_tool` | `running` | bright: the tool about to run, and its one-line summary |
+| `PostToolUse` | `post_tool` | `thinking` | bright: the tool that just ran — the turn is not over |
+| `Stop` | `stop` | `idle` | faint: `idle`, the session is waiting for a human |
+
+**It is a passenger on this screen, not a screen of its own**, and that is the
+decision worth arguing rather than the pixels. §9.7's documents and §9.10's come
+from the same binary and the same session — one on every render, one on every tool
+call — and this screen already arrives when the numbers do and leaves a minute
+after they stop. That window is exactly the window in which "what is it doing" is
+worth reading. So `ui::ActivityView` holds a document and answers questions about
+it, and owns **no arrival rule, no quiet timer and no dismissal**: there is one
+screen with one of each, and a second publisher racing to raise and drop it would
+make both of them untestable.
+
+The cost is stated rather than hidden: with `activity: false` in
+`statusline-config.json` (§9.9), or `subject` renamed so no numbers arrive, there
+would be no screen and therefore no line however many activity documents landed.
+The alternative — this raising a screen of its own — is a bigger change to the
+navigation of §10.8 than the line is worth today.
+
+Six things that are decisions rather than plumbing:
+
+- **The state is a colour, not a word.** The web page has room for `running`
+  beside the headline; 28 point on a 480-pixel panel has room for about
+  twenty-eight characters, and spending nine of them on what the colour already
+  says is the trade this screen refuses everywhere else — the percentage went to 48
+  point and came back for the same kind of reason. Bright while there is work,
+  faint for a turn that has ended, and **nothing red**: a busy session is not a
+  problem, and red on this screen belongs to a gauge.
+- **The line scrolls when it does not fit, and that replaced a clip.** The first
+  version used `LV_LABEL_LONG_MODE_CLIP` and the panel read
+  `PowerShell - cd E:\projects\ai-` — a command that looks like it ended there. A
+  readout that cannot be told from a shorter true one is the one thing this screen
+  must not be. `LV_LABEL_LONG_MODE_DOTS` is not the fix either, and the reason is
+  LVGL's own: it writes its ellipsis *into the text buffer*, so
+  `lv_label_set_dots` returns immediately for a static string (`lv_label.c`:
+  `if(label->static_txt != 0) return;`) — the mode would be set, do nothing, and
+  leave a line drawing past its own width. Every string on this screen is static
+  (§10.14.1). So it scrolls, only when it has to, and on an AMOLED that is the
+  cheap direction to be wrong in — §10.8.2 moves the clock's digits around the
+  panel on purpose.
+- **Ten minutes of staleness, where the numbers get one.** §9.7 publishes on every
+  render, so silence there means something stopped; §9.10 publishes on tool calls,
+  so a session thinking hard — or parked on a request this device is showing on a
+  card — legitimately says nothing for minutes. Ten is where "running Bash" stops
+  being believable. And an `idle` document **never** goes stale: it stays true
+  until something else happens, and fading it would suggest the session vanished
+  when it is simply done.
+- **`v` is what makes a document ours.** §9.7's document is recognisable because it
+  always carries `ts` *and* `line`; this one has no such pair — every field but
+  three may be absent — so `v == 1` is both the version check and the "this is
+  ours" test on a subject as open as every other. A `v: 2` from a newer publisher
+  is refused rather than half-understood, and so is an `event` or a `state` this
+  firmware has no word for: everything downstream then takes an enum, and no
+  screen has to decide what to draw for a word it has never seen.
+- **The truncation backs off to a UTF-8 boundary**, which `ParseStatus` next door
+  does not need to. §9.10 cuts the summary to 80 *characters* and a character is up
+  to four bytes, so a path with Cyrillic in it arrives longer than the 128-byte
+  field — and a byte-counted cut through the middle of a sequence draws as a
+  placeholder box next to a perfectly good line of text. Cheaper to end one
+  character early. (The panel's font is Montserrat's ASCII subset, so such a path
+  is boxes either way; this is about not adding one of our own.)
+- **48 bytes for the tool name is not generosity.** `Bash` is four characters and
+  an MCP tool is called `mcp__claude_ai_Atlassian__searchConfluenceUsingCql`; a
+  readout that shows half of that says less than one that shows all of it.
+
+`session_id`, `cwd` and `tool_use_id` are deliberately **not** kept: this screen
+already carries the session's directory from §9.7's document, and the id exists to
+pair a `post_tool` with its `pre_tool`, which is a subscriber's job and not a
+readout's.
+
+**What it cost in layout, since the panel was already full.** The gauge stride went
+from 104 pixels to 98 — three rows now end at 396 instead of 408, and nothing
+inside a row moved — and the two 14-point lines at the bottom became one
+(`E:\projects\ai-remote  -  3 s ago`). Both facts they carried are kept, which was
+the condition: the directory because without it the screen reads as belonging to
+whatever request is on the card, and the age because §9.7 is a current value with
+no stream behind it. That freed the 44-pixel band the line sits in.
+
+**Read back off the board**, with this repository's own session publishing: the
+console's `limits` grew a `doing` block and a second counter pair, the subscription
+list shows `activity` as `sid 2` next to `status` as `sid 1`, and the panel showed
+`PowerShell - & 'C:\Espressif\tools\python\...'` — the very command that was asking
+it — scrolling, with the session line and the age underneath. The `idle` half is
+the one thing not photographed: every capture is itself a tool call, so a `stop`
+document is always overwritten by the `pre_tool` of the command taking the picture.
+Its decision is host-tested and its state is on the console.
+
 
 #### 10.8.4 Request — the screen the device exists for
 

@@ -2492,20 +2492,46 @@ int CmdTouch(int argc, char **argv) {
 // job: nothing here can be acted on and nothing here reaches a responder.
 int CmdLimits(int argc, char **) {
     if (argc != 1) {
-        printf("usage: limits        the last status document, and whether it is on screen\n");
+        printf("usage: limits        the last status and activity documents, and the screen\n");
         return 1;
     }
 
     const watcher::Status wire = watcher::Get();
     const screens::LimitsStatus view = screens::Limits();
+    const screens::ActivityStatus doing = screens::Activity();
 
     if (!wire.ready) {
         printf("watching   the status watcher did not start\n");
         return 1;
     }
-    printf("watching   %s\n",
-           wire.subscribed ? "yes - status" : watcher::BlockerText(wire.blocked_by));
+    // Two subjects on one connection (§9.7, §9.10), and each says whether it is
+    // being watched: "the numbers are here and the activity is not" is a state, not
+    // a rounding error.
+    printf("watching   %s%s\n",
+           wire.subscribed ? "status" : watcher::BlockerText(wire.blocked_by),
+           wire.activity_subscribed ? " + activity" : "");
     printf("documents  %" PRIu32 " arrived, %" PRIu32 " unreadable\n", wire.received, wire.refused);
+    printf("activity   %" PRIu32 " arrived, %" PRIu32 " unreadable\n", wire.activity_received,
+           wire.activity_refused);
+
+    // What the session is doing (§9.10), printed **before** the two early returns
+    // below: this document can arrive with no `status` document behind it, and a
+    // readout that hides it in that case would be hiding the only thing there is.
+    if (doing.ready && doing.has_document) {
+        const ui::Activity &now = doing.document;
+        printf("doing      %s\n", doing.headline[0] != 0 ? doing.headline : "-");
+        printf("           %s, %s, %" PRIu32 " s ago%s\n", ui::ActivityEventText(now.event),
+               ui::ActivityStateText(now.state), doing.age_ms / 1000,
+               doing.stale ? " - too old to believe" : "");
+        if (now.summary[0] != 0) {
+            // The whole of it, where the panel shows what fits: the line on the
+            // glass is clipped at the edge of the screen (§10.8.3) and this is the
+            // place a long command can actually be read.
+            printf("summary    %s\n", now.summary);
+        }
+    } else if (doing.ready) {
+        printf("doing      nothing has arrived on the activity subject yet\n");
+    }
 
     if (!view.ready) {
         printf("screen     not running - the panel or LVGL did not come up\n");
@@ -3671,7 +3697,7 @@ const esp_console_cmd_t kCommands[] = {
     },
     {
         .command = "limits",
-        .help = "the last status document from a Claude Code session, and the screen for it",
+        .help = "what a Claude Code session is spending and doing, and the screen for it",
         .hint = nullptr,
         .func = &CmdLimits,
         .argtable = nullptr,

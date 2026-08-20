@@ -16,6 +16,7 @@
 
 #include <cstdint>
 
+#include "activity_view.h"
 #include "esp_err.h"
 #include "limits_view.h"
 #include "lvgl.h"
@@ -50,7 +51,14 @@ inline constexpr int32_t kLimitsModelTop = 30;
 inline constexpr int32_t kLimitsEffortTop = 74;
 
 inline constexpr int32_t kLimitsFirstGaugeTop = 116;
-inline constexpr int32_t kLimitsGaugeStride = 104;
+
+// **98 rather than 104, and the six pixels went to the activity line** (§9.10).
+// Three rows of 98 end at 396 instead of 408, which with the two 14-point lines at
+// the bottom merged into one is the 44-pixel band the line needed. Nothing in a
+// row moved: the text is still at +16 and the bar still spans +58..+84, so the gap
+// between a bar and the next row's text went from 32 pixels to 26 — which at this
+// size is still a gap and not a collision.
+inline constexpr int32_t kLimitsGaugeStride = 98;
 
 // Within a row: the label, the percentage and the countdown share one line, and
 // the bar goes underneath all three.
@@ -66,8 +74,20 @@ inline constexpr int32_t kLimitsBarHeight = 26;
 // from the edge for every shorter one.
 inline constexpr int32_t kLimitsCountdownWidth = 220;
 
-inline constexpr int32_t kLimitsCwdTop = 426;
-inline constexpr int32_t kLimitsAgeTop = 450;
+// **What the session is doing** (§9.10), under the bars and above the session
+// line, at the size the numbers are: this is the fastest-changing thing on the
+// screen and the one a glance from across the room is actually for. 28 point fits
+// about twenty-eight characters of a 480-pixel panel, so the label is set to
+// truncate with an ellipsis rather than to wrap — a second line would push the
+// session line off the glass, and the whole summary is a `limits` away on the
+// console.
+inline constexpr int32_t kLimitsActivityTop = 404;
+
+// The session and the age, **on one line now** rather than two. Both facts are
+// kept — which session these numbers came from, and how old they are (§10.8.3
+// argues for each) — and putting them on one 14-point row is what freed the band
+// above for the line that changes every few seconds.
+inline constexpr int32_t kLimitsCwdTop = 450;
 
 // One gauge's widgets, kept together because there are three of them and the only
 // difference between them is the label and which scale colours the bar.
@@ -108,16 +128,22 @@ class LimitsScreen {
     // What to show. Idempotent, and under the caller's lock. `epoch_now` is the
     // device's idea of the time or 0 — it decides whether a countdown is computed
     // or taken from what the publisher resolved (§10.8.3).
-    void Apply(const ui::LimitsView &view, int64_t epoch_now, uint32_t now_ms);
+    //
+    // **Two views, one screen** (§9.10): the numbers and the line under them come
+    // from different publishers and either can be empty while the other is not, so
+    // they arrive as two arguments rather than one merged document.
+    void Apply(const ui::LimitsView &view, const ui::ActivityView &activity, int64_t epoch_now,
+               uint32_t now_ms);
 
    private:
     void ApplyGauge(GaugeRow *row, const ui::Gauge &gauge, ui::Level level, const char *countdown);
+    void ApplyActivity(const ui::ActivityView &activity, uint32_t now_ms);
 
     lv_obj_t *root_ = nullptr;
     lv_obj_t *model_ = nullptr;
     lv_obj_t *effort_ = nullptr;
+    lv_obj_t *activity_ = nullptr;
     lv_obj_t *cwd_ = nullptr;
-    lv_obj_t *age_ = nullptr;
     lv_obj_t *empty_ = nullptr;
 
     GaugeRow five_hour_;
@@ -126,11 +152,17 @@ class LimitsScreen {
 
     char model_text_[ui::kModelNameSize] = {};
     char effort_text_[ui::kEffortSize + 8] = {};
-    char cwd_text_[ui::kSessionCwdSize] = {};
-    char age_text_[32] = {};
+    char activity_text_[ui::kActivityHeadlineSize] = {};
+    // The session and its age share a line now, so one buffer holds both.
+    char cwd_text_[ui::kSessionCwdSize + 32] = {};
 
     uint32_t shown_seconds_ = 0xFFFFFFFFu;
     uint32_t shown_received_ = 0xFFFFFFFFu;
+    // What the activity line has on it, so a screen repainted ten times a second
+    // repaints nothing while nothing changed — the same bookkeeping every other
+    // row here does.
+    uint32_t shown_activity_ = 0xFFFFFFFFu;
+    bool shown_activity_faint_ = false;
     bool visible_ = false;
 };
 

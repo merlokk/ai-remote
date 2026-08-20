@@ -46,6 +46,7 @@ void RegisterSigningTests(void);
 void RegisterRegistrationTests(void);
 void RegisterApprovalTests(void);
 void RegisterLimitsTests(void);
+void RegisterActivityTests(void);
 void RegisterVectorTests(void);
 
 void setUp(void) { fake::Reset(); }
@@ -102,6 +103,7 @@ int main(int argc, char **argv) {
     if (Wanted("registration") || Wanted("protocol")) RegisterRegistrationTests();
     if (Wanted("approval") || Wanted("protocol")) RegisterApprovalTests();
     if (Wanted("limits") || Wanted("status")) RegisterLimitsTests();
+    if (Wanted("activity") || Wanted("limits") || Wanted("doing")) RegisterActivityTests();
     if (Wanted("idle") || Wanted("dim")) RegisterIdleTests();
     if (Wanted("vectors") || Wanted("parity") || Wanted("protocol")) RegisterVectorTests();
 

@@ -138,8 +138,36 @@ esp_err_t LimitsScreen::Create(lv_obj_t *parent) {
             Block(root_, Green(), kLimitsPad, row.top + kLimitsBarTop, 1, kLimitsBarHeight);
     }
 
+    // **What the session is doing** (§9.10), at the size the numbers are and
+    // truncated rather than wrapped: a second line here would push the session off
+    // the panel, and the whole summary is a `limits` away on the console.
+    activity_ = Text(root_, &lv_font_montserrat_28, Bright(), kLimitsPad, kLimitsActivityTop,
+                     activity_text_);
+    if (activity_ != nullptr) {
+        lv_obj_set_width(activity_, kBarWidth);
+        // **SCROLL, and the two modes it was chosen over are both wrong for a
+        // reason worth writing down.**
+        //
+        // `LV_LABEL_LONG_MODE_DOTS` writes its ellipsis *into the text buffer*, so
+        // `lv_label_set_dots` returns immediately for a static string
+        // (`lv_label.c`: `if(label->static_txt != 0) return;`) — the mode would be
+        // set, do nothing, and leave a line drawing past its own width. Every
+        // string on this screen is static, for the reason §10.14.1 gives.
+        //
+        // `CLIP` was what this had first, and it ends a cut line at the panel edge
+        // with nothing to say it was cut: `PowerShell - cd E:\projects\ai-` reads
+        // as a command that ended there. A readout that cannot be told from a
+        // shorter true one is the one thing this screen must not be (§10.8.3).
+        //
+        // So it scrolls, back and forth, and only when it does not fit — a line
+        // that fits is drawn still. On an AMOLED that is the *cheap* direction to
+        // be wrong in: §10.8.2 moves the clock's digits around the panel on
+        // purpose, and this row moving for a few seconds after each tool call is
+        // the same medicine.
+        lv_label_set_long_mode(activity_, LV_LABEL_LONG_MODE_SCROLL);
+    }
+
     cwd_ = Text(root_, &lv_font_montserrat_14, Faint(), kLimitsPad, kLimitsCwdTop, cwd_text_);
-    age_ = Text(root_, &lv_font_montserrat_14, Rule(), kLimitsPad, kLimitsAgeTop, age_text_);
 
     return ESP_OK;
 }
@@ -202,19 +230,67 @@ void LimitsScreen::ApplyGauge(GaugeRow *row, const ui::Gauge &gauge, ui::Level l
     }
 }
 
-void LimitsScreen::Apply(const ui::LimitsView &view, int64_t epoch_now, uint32_t now_ms) {
-    if (root_ == nullptr || !visible_ || !view.HasDocument()) {
+void LimitsScreen::ApplyActivity(const ui::ActivityView &activity, uint32_t now_ms) {
+    if (activity_ == nullptr) {
+        return;
+    }
+    if (!activity.HasDocument()) {
+        // Nothing has arrived on §9.10's subject since boot: an empty row rather
+        // than a placeholder, because the screen above it is already saying the
+        // session is there and a line reading "nothing" would argue with it.
+        if (shown_activity_ != 0xFFFFFFFFu) {
+            shown_activity_ = 0xFFFFFFFFu;
+            activity_text_[0] = '\0';
+            lv_label_set_text_static(activity_, activity_text_);
+        }
+        return;
+    }
+
+    // **Faint is the state**, and it is the whole of what this line says beyond
+    // its text: bright while there is work, faint for a turn that has ended or a
+    // document too old to believe (`ui/activity_view.h` argues both). No red — a
+    // busy session is not a problem, and red on this screen belongs to a gauge.
+    const ui::Activity &document = activity.Document();
+    const bool faint =
+        document.state == ui::ActivityState::kIdle || activity.Stale(now_ms);
+
+    if (activity.Received() != shown_activity_) {
+        shown_activity_ = activity.Received();
+        activity.Headline(activity_text_, sizeof activity_text_);
+        lv_label_set_text_static(activity_, activity_text_);
+    }
+    if (faint != shown_activity_faint_) {
+        shown_activity_faint_ = faint;
+        lv_obj_set_style_text_color(activity_, faint ? Faint() : Bright(), LV_PART_MAIN);
+    }
+}
+
+void LimitsScreen::Apply(const ui::LimitsView &view, const ui::ActivityView &activity,
+                         int64_t epoch_now, uint32_t now_ms) {
+    if (root_ == nullptr || !visible_) {
+        return;
+    }
+    // The line is applied first and unconditionally: §9.10's documents and §9.7's
+    // come from different publishers, and a session whose activity has arrived
+    // while its numbers have not is an ordinary state rather than a reason to draw
+    // neither.
+    ApplyActivity(activity, now_ms);
+
+    if (!view.HasDocument()) {
         return;
     }
 
     const ui::Limits &limits = view.Document();
     const uint32_t seconds = view.AgeMs(now_ms) / 1000;
 
+    // Read once, because two blocks below ask it and the second would always
+    // answer "no" if the first had already stamped the counter.
+    const bool fresh = view.Received() != shown_received_;
+    shown_received_ = view.Received();
+
     // The header only changes when a new document lands, which on a working
     // session is every few seconds and never per frame.
-    if (view.Received() != shown_received_) {
-        shown_received_ = view.Received();
-
+    if (fresh) {
         std::snprintf(model_text_, sizeof model_text_, "%s",
                       limits.model[0] != '\0' ? limits.model : "unknown model");
         lv_label_set_text_static(model_, model_text_);
@@ -225,12 +301,6 @@ void LimitsScreen::Apply(const ui::LimitsView &view, int64_t epoch_now, uint32_t
             effort_text_[0] = '\0';
         }
         lv_label_set_text_static(effort_, effort_text_);
-
-        // §10.8.3: without this line the screen reads as belonging to whatever
-        // request is on the card, and every session on the machine publishes here.
-        std::snprintf(cwd_text_, sizeof cwd_text_, "%s",
-                      limits.cwd[0] != '\0' ? limits.cwd : "session directory unknown");
-        lv_label_set_text_static(cwd_, cwd_text_);
     }
 
     char countdown[ui::kResetsTextSize];
@@ -248,13 +318,20 @@ void LimitsScreen::Apply(const ui::LimitsView &view, int64_t epoch_now, uint32_t
     view.CountdownFor(limits.context, epoch_now, now_ms, countdown, sizeof countdown);
     ApplyGauge(&context_, limits.context, ui::ContextLevel(limits.context.used_percent), countdown);
 
-    // **The age, and it is the honest half of this screen.** These numbers are a
-    // current value with no stream behind it (§9.7): they are as true as they are
-    // recent, and nothing else here would say so.
-    if (seconds != shown_seconds_) {
+    // **The session and the age, on one line** — the directory because without it
+    // the screen reads as belonging to whatever request is on the card and every
+    // session on the machine publishes here (§10.8.3), and the age because these
+    // numbers are a current value with no stream behind it (§9.7): they are as true
+    // as they are recent, and nothing else here would say so.
+    //
+    // One buffer, so either half changing rewrites it — which for the age is once a
+    // second and for the directory is once a document.
+    if (seconds != shown_seconds_ || fresh) {
         shown_seconds_ = seconds;
-        std::snprintf(age_text_, sizeof age_text_, "%u s ago", static_cast<unsigned>(seconds));
-        lv_label_set_text_static(age_, age_text_);
+        std::snprintf(cwd_text_, sizeof cwd_text_, "%s  -  %u s ago",
+                      limits.cwd[0] != '\0' ? limits.cwd : "session directory unknown",
+                      static_cast<unsigned>(seconds));
+        lv_label_set_text_static(cwd_, cwd_text_);
     }
 }
 

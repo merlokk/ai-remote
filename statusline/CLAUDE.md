@@ -577,7 +577,16 @@ travels unencrypted to whoever is subscribed, exactly like a §7 request does
 `statusline-config.json` (§9.9): `activity: false` keeps the line publishing and
 stops this, and `publish: false` stops both.
 
-**The first subscriber is `approver-web`**, which draws it as one line under the
-limits plaque — see [`../approver-web/CLAUDE.md`](../approver-web/CLAUDE.md),
-"The activity row". Read-only, never answered, and nothing in the approval flow
-depends on it.
+**Two subscribers so far, and neither answers anything.** `approver-web` draws it
+as one line under the limits plaque — see
+[`../approver-web/CLAUDE.md`](../approver-web/CLAUDE.md), "The activity row" — and
+the ESP32 draws it under the gauges on its limits screen, scrolling when a command
+is longer than 480 pixels of panel
+([`../approver-esp32/screens.md`](../approver-esp32/screens.md) §10.8.3). Both are
+read-only, and nothing in the approval flow depends on either.
+
+The device is also where the shape of this document was tested hardest, and one
+thing it found is worth repeating here: **the summary is cut to 80 characters, and
+a character is up to four bytes.** A subscriber with a fixed byte buffer therefore
+has to back off to a UTF-8 boundary rather than cut at its own limit — half a
+character is a placeholder box on a panel and a replacement glyph in a terminal.

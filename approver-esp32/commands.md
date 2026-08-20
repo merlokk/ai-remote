@@ -921,12 +921,16 @@ identity.
 Nothing to forget is not an error, it just says so.
 
 ### `limits`
-The last `status` document a Claude Code session published, and whether the
-screen for it is up:
+The last `status` and `activity` documents a Claude Code session published — what
+it is spending and what it is doing — and whether the screen for them is up:
 
 ```
-watching   yes - status
+watching   status + activity
 documents  14 arrived, 0 unreadable
+activity   9 arrived, 0 unreadable
+doing      Bash - py -m pytest -q
+           pre_tool, running, 3 s ago
+summary    py -m pytest -q
 screen     up
 last       3 s ago
 model      Opus 5 (1M context), effort high
@@ -952,6 +956,23 @@ screen     on the clock (dismissed until the stream goes quiet)
 
 Once the minute passes, that note disappears and `last … s ago` gains `- the
 stream has stopped`. The next document after that raises the screen again.
+
+**The `doing` block is §9.10's document** — the tool about to run, the tool that
+just ran, or `stop` at the end of a turn — and it is printed *before* the screen's
+own state on purpose: it can arrive with no `status` document behind it, and a
+readout that hid it in that case would be hiding the only thing there is. The
+second line is the wire's own words (`pre_tool` / `post_tool` / `stop`, and
+`running` / `thinking` / `idle`) plus an age, and it gains `- too old to believe`
+after ten minutes — longer than the numbers get, because hooks fire on tool calls
+rather than on every render (§10.8.3 argues the asymmetry). `summary` is the whole
+of what the panel shows scrolling: this is the place a long command can actually be
+read.
+
+With nothing on that subject yet:
+
+```
+doing      nothing has arrived on the activity subject yet
+```
 
 Two things the readout is honest about that the screen alone could not be:
 
