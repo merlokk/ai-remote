@@ -142,11 +142,29 @@ still untouched — none of this reaches the Python side.
 
 ### 9.5 Build and wiring
 
+**After changing anything in this crate, run these three, in this order:**
+
 ```
 cd statusline
-cargo test           # unit tests, plus the NATS round trip if a server is up
-cargo build --release
+cargo fmt                 # rustfmt, plain defaults — there is no rustfmt.toml
+cargo test                # unit tests, plus the NATS round trip if a server is up
+cargo build --release     # what Claude Code actually runs
 ```
+
+`cargo fmt` is the crate's formatter and the whole tree is kept clean under it, so
+a change is committed formatted rather than in whatever shape it was typed — and
+`cargo fmt --check` printing nothing is the cheapest way to know. Deliberately
+with **no `rustfmt.toml`**: default rustfmt is what every Rust reader already has
+in their editor, and a house style would be one more thing to explain in a repo
+whose Rust half is one crate. It reflows some lines the author would have written
+differently; that is the trade, and it is a better trade than a diff nobody can
+review because half of it is whitespace.
+
+The third line is not optional either, and it is the one that is easy to forget:
+`.claude/settings.json` points both the status line and the three hooks (§9.10) at
+`target/release/statusline.exe`, so **a change is not live until it is rebuilt** —
+`cargo test` going green proves the library, not the binary on disk. A debug build
+is fine for `cargo test`; it is not what runs.
 
 The binary lands at `statusline/target/release/statusline.exe` (git-ignored),
 and `.claude/settings.json` points the status line at it:

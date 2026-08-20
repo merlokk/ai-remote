@@ -60,11 +60,19 @@ pub struct Cache {
 impl Cache {
     /// A cache that knows nothing: red dot, retry now.
     pub fn unknown(url: &str) -> Cache {
-        Cache { connected: false, checked_at: 0, url: url.to_string() }
+        Cache {
+            connected: false,
+            checked_at: 0,
+            url: url.to_string(),
+        }
     }
 
     pub fn recorded(connected: bool, now: u64, url: &str) -> Cache {
-        Cache { connected, checked_at: now, url: url.to_string() }
+        Cache {
+            connected,
+            checked_at: now,
+            url: url.to_string(),
+        }
     }
 
     /// Read the cache for `url`. Missing, unreadable, corrupt or about a
@@ -122,8 +130,15 @@ mod tests {
     #[test]
     fn a_missing_cache_reads_as_down_and_due() {
         let cache = Cache::load(&temp_file("missing"), URL);
-        assert_eq!(cache.link(), Link::Down, "nothing known yet is not a green light");
-        assert!(cache.due(1_000_000, DEFAULT_RETRY_AFTER), "and it is tried immediately");
+        assert_eq!(
+            cache.link(),
+            Link::Down,
+            "nothing known yet is not a green light"
+        );
+        assert!(
+            cache.due(1_000_000, DEFAULT_RETRY_AFTER),
+            "and it is tried immediately"
+        );
     }
 
     #[test]
@@ -141,10 +156,16 @@ mod tests {
     #[test]
     fn a_cache_about_another_server_is_ignored() {
         let path = temp_file("other-url");
-        Cache::recorded(true, 1_000, "nats://elsewhere:4222").save(&path).unwrap();
+        Cache::recorded(true, 1_000, "nats://elsewhere:4222")
+            .save(&path)
+            .unwrap();
 
         let loaded = Cache::load(&path, URL);
-        assert_eq!(loaded, Cache::unknown(URL), "another server's verdict is not ours");
+        assert_eq!(
+            loaded,
+            Cache::unknown(URL),
+            "another server's verdict is not ours"
+        );
         std::fs::remove_file(&path).unwrap();
     }
 
@@ -169,7 +190,10 @@ mod tests {
     #[test]
     fn a_working_connection_is_used_on_every_render() {
         let up = Cache::recorded(true, 1_000, URL);
-        assert!(up.due(1_000, DEFAULT_RETRY_AFTER), "no backoff while it works");
+        assert!(
+            up.due(1_000, DEFAULT_RETRY_AFTER),
+            "no backoff while it works"
+        );
         assert!(up.due(1_001, DEFAULT_RETRY_AFTER));
     }
 
@@ -177,6 +201,9 @@ mod tests {
     fn a_timestamp_from_the_future_is_stale_not_trusted() {
         // The clock moved back, or the temp file came from another machine.
         let failed = Cache::recorded(false, 9_999, URL);
-        assert!(failed.due(1_000, DEFAULT_RETRY_AFTER), "a future check cannot suppress a retry");
+        assert!(
+            failed.due(1_000, DEFAULT_RETRY_AFTER),
+            "a future check cannot suppress a retry"
+        );
     }
 }

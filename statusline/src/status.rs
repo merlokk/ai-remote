@@ -113,11 +113,15 @@ impl Status {
             session_id: data.str_at("session_id").map(str::to_string),
             cwd: data.str_at("cwd").map(str::to_string),
             model: (model != Model::default()).then_some(model),
-            effort: data.str_at("effort.level").map(|level| Effort { level: level.to_string() }),
+            effort: data.str_at("effort.level").map(|level| Effort {
+                level: level.to_string(),
+            }),
             rate_limits: (limits != RateLimits::default()).then_some(limits),
-            context_window: data
-                .num_at("context_window.used_percentage")
-                .map(|used| ContextWindow { used_percentage: used.clamp(0.0, 100.0) }),
+            context_window: data.num_at("context_window.used_percentage").map(|used| {
+                ContextWindow {
+                    used_percentage: used.clamp(0.0, 100.0),
+                }
+            }),
         }
     }
 }
@@ -141,13 +145,19 @@ impl Window {
 
 impl Default for Model {
     fn default() -> Self {
-        Model { id: None, display_name: None }
+        Model {
+            id: None,
+            display_name: None,
+        }
     }
 }
 
 impl Default for RateLimits {
     fn default() -> Self {
-        RateLimits { five_hour: None, seven_day: None }
+        RateLimits {
+            five_hour: None,
+            seven_day: None,
+        }
     }
 }
 
@@ -215,9 +225,18 @@ mod tests {
 
         let raw: Json = parse(&text).unwrap();
         assert_eq!(raw.str_at("effort.level"), Some("high"));
-        assert_eq!(raw.num_at("rate_limits.seven_day.used_percentage"), Some(24.0));
-        assert_eq!(raw.str_at("rate_limits.seven_day.resets_in_text"), Some("4d8h"));
-        assert_eq!(raw.str_at("model.display_name"), Some("Opus 5 (1M context)"));
+        assert_eq!(
+            raw.num_at("rate_limits.seven_day.used_percentage"),
+            Some(24.0)
+        );
+        assert_eq!(
+            raw.str_at("rate_limits.seven_day.resets_in_text"),
+            Some("4d8h")
+        );
+        assert_eq!(
+            raw.str_at("model.display_name"),
+            Some("Opus 5 (1M context)")
+        );
         assert_eq!(raw.num_at("context_window.used_percentage"), Some(6.0));
         assert_eq!(raw.num_at("ts"), Some(NOW as f64));
     }
@@ -234,7 +253,10 @@ mod tests {
         let text = serde_json::to_string(&status).unwrap();
         assert!(!text.contains("rate_limits"), "{text}");
         assert!(!text.contains("effort"), "{text}");
-        assert!(!text.contains("null"), "an absent field is omitted, never null: {text}");
+        assert!(
+            !text.contains("null"),
+            "an absent field is omitted, never null: {text}"
+        );
         assert!(!text.contains("session_id"));
     }
 
@@ -257,7 +279,10 @@ mod tests {
         assert_eq!(status.ts, 42);
         assert_eq!(status.line, "? │ limits n/a");
         assert_eq!(status.model, None);
-        assert_eq!(serde_json::to_string(&status).unwrap(), r#"{"ts":42,"line":"? │ limits n/a"}"#);
+        assert_eq!(
+            serde_json::to_string(&status).unwrap(),
+            r#"{"ts":42,"line":"? │ limits n/a"}"#
+        );
     }
 
     #[test]
@@ -267,7 +292,11 @@ mod tests {
         let status = status(odd, 99_999);
         let five = status.rate_limits.unwrap().five_hour.unwrap();
         assert_eq!(five.used_percentage, 100.0);
-        assert_eq!(five.resets_in, Some(0), "a reset in the past is 0s away, not underflow");
+        assert_eq!(
+            five.resets_in,
+            Some(0),
+            "a reset in the past is 0s away, not underflow"
+        );
         assert_eq!(five.resets_in_text.as_deref(), Some("now"));
         assert_eq!(status.context_window.unwrap().used_percentage, 0.0);
     }

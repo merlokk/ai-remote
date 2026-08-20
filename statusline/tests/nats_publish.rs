@@ -63,9 +63,15 @@ async fn bus_or_skip(what: &str) -> Option<Bus> {
 
 #[tokio::test]
 async fn a_subscriber_on_status_receives_the_rendered_values() {
-    let Some(bus) = bus_or_skip("nats round trip").await else { return };
+    let Some(bus) = bus_or_skip("nats round trip").await else {
+        return;
+    };
 
-    let mut messages = bus.client().subscribe(TEST_SUBJECT).await.expect("subscribe");
+    let mut messages = bus
+        .client()
+        .subscribe(TEST_SUBJECT)
+        .await
+        .expect("subscribe");
     // The subscription only exists on the server once it has been flushed —
     // publishing before that races, and Core NATS never redelivers (§4).
     bus.flush().await.expect("flush the subscription");
@@ -95,10 +101,19 @@ async fn a_subscriber_on_status_receives_the_rendered_values() {
     assert_eq!(received, sent);
 
     let raw = json::parse(&text).expect("valid JSON");
-    assert_eq!(raw.str_at("model.display_name"), Some("Opus 5 (1M context)"));
+    assert_eq!(
+        raw.str_at("model.display_name"),
+        Some("Opus 5 (1M context)")
+    );
     assert_eq!(raw.str_at("effort.level"), Some("high"));
-    assert_eq!(raw.num_at("rate_limits.five_hour.used_percentage"), Some(44.0));
-    assert_eq!(raw.str_at("rate_limits.five_hour.resets_in_text"), Some("2h14m"));
+    assert_eq!(
+        raw.num_at("rate_limits.five_hour.used_percentage"),
+        Some(44.0)
+    );
+    assert_eq!(
+        raw.str_at("rate_limits.five_hour.resets_in_text"),
+        Some("2h14m")
+    );
     assert_eq!(raw.num_at("context_window.used_percentage"), Some(6.0));
     assert_eq!(
         raw.str_at("line"),
@@ -110,13 +125,23 @@ async fn a_subscriber_on_status_receives_the_rendered_values() {
 
 #[tokio::test]
 async fn publishing_is_off_when_the_config_says_so() {
-    let Some(bus) = bus_or_skip("the disabled-publish check").await else { return };
+    let Some(bus) = bus_or_skip("the disabled-publish check").await else {
+        return;
+    };
 
     let subject = format!("{TEST_SUBJECT}.disabled");
-    let mut messages = bus.client().subscribe(subject.clone()).await.expect("subscribe");
+    let mut messages = bus
+        .client()
+        .subscribe(subject.clone())
+        .await
+        .expect("subscribe");
     bus.flush().await.expect("flush the subscription");
 
-    let off = Settings { subject, enabled: false, ..settings() };
+    let off = Settings {
+        subject,
+        enabled: false,
+        ..settings()
+    };
     tokio::task::spawn_blocking(move || publish_blocking(&off, &serde_json::json!({"a": 1})))
         .await
         .expect("the publisher thread survives")
@@ -124,16 +149,25 @@ async fn publishing_is_off_when_the_config_says_so() {
 
     // Give a message that should not exist every chance to show up.
     let nothing = tokio::time::timeout(Duration::from_millis(300), messages.next()).await;
-    assert!(nothing.is_err(), "nothing should reach the subject: {nothing:?}");
+    assert!(
+        nothing.is_err(),
+        "nothing should reach the subject: {nothing:?}"
+    );
 }
 
 #[tokio::test]
 async fn a_subscriber_on_activity_receives_what_claude_is_doing() {
     // §9.10 on the wire: the hook half of the binary, published the same way and
     // read back the same way, on a subject of its own.
-    let Some(bus) = bus_or_skip("the activity round trip").await else { return };
+    let Some(bus) = bus_or_skip("the activity round trip").await else {
+        return;
+    };
 
-    let mut messages = bus.client().subscribe(TEST_ACTIVITY_SUBJECT).await.expect("subscribe");
+    let mut messages = bus
+        .client()
+        .subscribe(TEST_ACTIVITY_SUBJECT)
+        .await
+        .expect("subscribe");
     bus.flush().await.expect("flush the subscription");
 
     let payload = json::parse(
@@ -145,7 +179,10 @@ async fn a_subscriber_on_activity_receives_what_claude_is_doing() {
     .unwrap();
     let sent = Activity::from_payload(&payload, NOW).expect("a PreToolUse payload");
 
-    let activity_settings = Settings { subject: TEST_ACTIVITY_SUBJECT.to_string(), ..settings() };
+    let activity_settings = Settings {
+        subject: TEST_ACTIVITY_SUBJECT.to_string(),
+        ..settings()
+    };
     tokio::task::spawn_blocking({
         let sent = sent.clone();
         move || publish_blocking(&activity_settings, &sent)
@@ -169,7 +206,10 @@ async fn a_subscriber_on_activity_receives_what_claude_is_doing() {
     assert_eq!(raw.str_at("event"), Some("pre_tool"));
     assert_eq!(raw.str_at("state"), Some("running"));
     assert_eq!(raw.str_at("tool_name"), Some("Bash"));
-    assert_eq!(raw.str_at("summary"), Some("docker exec -it nats-box nats sub activity"));
+    assert_eq!(
+        raw.str_at("summary"),
+        Some("docker exec -it nats-box nats sub activity")
+    );
     assert_eq!(raw.str_at("session_id"), Some("integration-test"));
     assert_eq!(raw.str_at("tool_use_id"), Some("toolu_01ABC"));
 }

@@ -62,7 +62,11 @@ fn status_line(config: &Config, data: &Json, now: u64) {
     // A file read, not a connection: the dot shows what the last render found,
     // because finding out now would mean printing after the network (§9.8).
     let cache = Cache::load(&cache_path, &settings.url);
-    let link = if settings.enabled { cache.link() } else { Link::Off };
+    let link = if settings.enabled {
+        cache.link()
+    } else {
+        Link::Off
+    };
 
     // Print first, and flush by hand: stdout is a pipe here, so it is block
     // buffered, and the publish below is allowed to take its whole budget.
@@ -81,7 +85,9 @@ fn status_line(config: &Config, data: &Json, now: u64) {
 /// leaves here having done nothing at all — which is exactly right for a hook:
 /// the tool call proceeds as it would with none wired.
 fn hook(config: &Config, data: &Json, now: u64) {
-    let Some(activity) = Activity::from_payload(data, now) else { return };
+    let Some(activity) = Activity::from_payload(data, now) else {
+        return;
+    };
 
     let settings = config.activity_settings();
     let cache_path = statusline::link::default_path();
@@ -113,6 +119,9 @@ fn publish<T: Serialize>(
     if let Err(e) = result
         && config.debug
     {
-        eprintln!("statusline: {} ({} → {})", e, settings.url, settings.subject);
+        eprintln!(
+            "statusline: {} ({} → {})",
+            e, settings.url, settings.subject
+        );
     }
 }

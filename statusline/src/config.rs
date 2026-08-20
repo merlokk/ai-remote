@@ -80,8 +80,12 @@ impl Default for Config {
 impl Config {
     /// Read the config, or return the defaults. Never fails: see the module docs.
     pub fn load(path: Option<&std::path::Path>) -> Config {
-        let Some(path) = path else { return Config::default() };
-        let Ok(text) = std::fs::read_to_string(path) else { return Config::default() };
+        let Some(path) = path else {
+            return Config::default();
+        };
+        let Ok(text) = std::fs::read_to_string(path) else {
+            return Config::default();
+        };
 
         match serde_json::from_str::<Config>(&text) {
             // A file from a newer (or older) build may mean something different
@@ -145,9 +149,15 @@ mod tests {
         let config = Config::load(None);
         assert_eq!(config, Config::default());
         assert!(config.publish, "publishing is on out of the box");
-        assert_eq!(config.url, "nats://127.0.0.1:4222", "the same server as lib/bus.py");
+        assert_eq!(
+            config.url, "nats://127.0.0.1:4222",
+            "the same server as lib/bus.py"
+        );
         assert_eq!(config.subject, "status");
-        assert!(config.activity, "the hooks publish out of the box too (§9.10)");
+        assert!(
+            config.activity,
+            "the hooks publish out of the box too (§9.10)"
+        );
         assert_eq!(config.activity_subject, "activity");
         assert_eq!(config.timeout_ms, 500);
         assert_eq!(config.retry_after_s, 30);
@@ -162,7 +172,11 @@ mod tests {
     fn a_file_may_set_only_what_it_changes() {
         let config = load("partial", r#"{"v": 1, "subject": "claude.status"}"#);
         assert_eq!(config.subject, "claude.status");
-        assert_eq!(config.url, Config::default().url, "the rest keeps its default");
+        assert_eq!(
+            config.url,
+            Config::default().url,
+            "the rest keeps its default"
+        );
         assert!(config.publish);
     }
 
@@ -198,24 +212,37 @@ mod tests {
 
         let nothing = load("publish-off", r#"{"v": 1, "publish": false}"#);
         assert!(!nothing.settings().enabled);
-        assert!(!nothing.activity_settings().enabled, "`publish: false` still means neither");
+        assert!(
+            !nothing.activity_settings().enabled,
+            "`publish: false` still means neither"
+        );
     }
 
     #[test]
     fn the_example_file_is_valid_and_matches_the_defaults() {
         // The one committed copy of this format, so a typo in it is a test
         // failure rather than something a user discovers.
-        let example = concat!(env!("CARGO_MANIFEST_DIR"), "/../statusline-config.example.json");
+        let example = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../statusline-config.example.json"
+        );
         let text = std::fs::read_to_string(example).expect("the example file exists");
         let config: Config = serde_json::from_str(&text).expect("the example parses");
-        assert_eq!(config, Config::default(), "the example documents the defaults");
+        assert_eq!(
+            config,
+            Config::default(),
+            "the example documents the defaults"
+        );
     }
 
     #[test]
     fn a_broken_file_falls_back_instead_of_breaking_the_line() {
         assert_eq!(load("garbage", "not json at all"), Config::default());
         assert_eq!(load("empty", ""), Config::default());
-        assert_eq!(load("wrong-type", r#"{"v": 1, "timeout_ms": "soon"}"#), Config::default());
+        assert_eq!(
+            load("wrong-type", r#"{"v": 1, "timeout_ms": "soon"}"#),
+            Config::default()
+        );
         assert_eq!(
             load("unknown-field", r#"{"v": 1, "subjekt": "typo"}"#),
             Config::default(),
@@ -225,8 +252,14 @@ mod tests {
 
     #[test]
     fn a_schema_version_this_build_does_not_know_is_not_guessed_at() {
-        assert_eq!(load("v-future", r#"{"v": 99, "subject": "elsewhere"}"#), Config::default());
-        assert_eq!(load("v-missing", r#"{"subject": "elsewhere"}"#).subject, "elsewhere",
-                   "an absent `v` defaults to the current version, so it is honoured");
+        assert_eq!(
+            load("v-future", r#"{"v": 99, "subject": "elsewhere"}"#),
+            Config::default()
+        );
+        assert_eq!(
+            load("v-missing", r#"{"subject": "elsewhere"}"#).subject,
+            "elsewhere",
+            "an absent `v` defaults to the current version, so it is honoured"
+        );
     }
 }

@@ -87,7 +87,10 @@ impl Bus {
     /// Without this a short-lived process exits before its publish leaves the
     /// buffer — the same reason `registration_handler.py --once` flushes (§6).
     pub async fn flush(&self) -> Result<(), Error> {
-        self.client.flush().await.map_err(|e| Error::Publish(e.to_string()))
+        self.client
+            .flush()
+            .await
+            .map_err(|e| Error::Publish(e.to_string()))
     }
 
     /// The `async-nats` client, for anything this wrapper does not cover.
@@ -155,7 +158,10 @@ mod tests {
     #[test]
     fn defaults_to_the_local_server_and_the_status_subject() {
         let s = Settings::default();
-        assert_eq!(s.url, "nats://127.0.0.1:4222", "the same server as lib/bus.py");
+        assert_eq!(
+            s.url, "nats://127.0.0.1:4222",
+            "the same server as lib/bus.py"
+        );
         assert_eq!(s.subject, "status");
         assert_eq!(s.timeout, DEFAULT_TIMEOUT);
         assert!(s.enabled);
@@ -164,7 +170,10 @@ mod tests {
     #[test]
     fn disabled_publishing_is_a_no_op_and_never_touches_the_network() {
         // No server needed, and no runtime built: it returns before either.
-        let off = Settings { enabled: false, ..Settings::default() };
+        let off = Settings {
+            enabled: false,
+            ..Settings::default()
+        };
         assert!(publish_blocking(&off, &serde_json::json!({"a": 1})).is_ok());
     }
 
@@ -178,6 +187,9 @@ mod tests {
             ..Settings::default()
         };
         let result = publish_blocking(&nowhere, &serde_json::json!({"a": 1}));
-        assert!(matches!(result, Err(Error::Connect(_) | Error::Timeout(_))), "{result:?}");
+        assert!(
+            matches!(result, Err(Error::Connect(_) | Error::Timeout(_))),
+            "{result:?}"
+        );
     }
 }

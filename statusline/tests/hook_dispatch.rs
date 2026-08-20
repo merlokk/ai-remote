@@ -51,7 +51,10 @@ fn run(payload: &str) -> (String, bool) {
     drop(stdin); // the binary reads stdin to EOF, so the pipe has to close
 
     let out = child.wait_with_output().expect("the binary exits");
-    (String::from_utf8_lossy(&out.stdout).to_string(), out.status.success())
+    (
+        String::from_utf8_lossy(&out.stdout).to_string(),
+        out.status.success(),
+    )
 }
 
 /// One test, not six: the cases share a config file written next to the binary,

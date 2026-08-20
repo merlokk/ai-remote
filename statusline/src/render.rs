@@ -38,12 +38,18 @@ impl Thresholds {
 
 /// A rate-limit window. Half of a five-hour window is a normal working state,
 /// so the warning comes late.
-const WINDOW: Thresholds = Thresholds { green: 50.0, yellow: 80.0 };
+const WINDOW: Thresholds = Thresholds {
+    green: 50.0,
+    yellow: 80.0,
+};
 
 /// The context window, on a deliberately tighter scale: it is not a budget you
 /// are allowed to spend down to nothing but a runway ending in a compact, and
 /// the useful moment to notice is well before it is full.
-const CONTEXT: Thresholds = Thresholds { green: 20.0, yellow: 45.0 };
+const CONTEXT: Thresholds = Thresholds {
+    green: 20.0,
+    yellow: 45.0,
+};
 
 /// The whole line. `now` is Unix epoch seconds — passed in so the countdowns
 /// are testable. `link` is what the previous render found on the bus (§9.8);
@@ -60,14 +66,17 @@ pub fn render(data: &Json, now: u64, link: Link) -> String {
     }
     let mut segments = vec![head];
 
-    let windows: Vec<String> = [("5h", "rate_limits.five_hour"), ("7d", "rate_limits.seven_day")]
-        .into_iter()
-        .filter_map(|(label, path)| {
-            let window = data.path(path)?;
-            let used = window.num_at("used_percentage")?;
-            Some(window_segment(label, used, window.num_at("resets_at"), now))
-        })
-        .collect();
+    let windows: Vec<String> = [
+        ("5h", "rate_limits.five_hour"),
+        ("7d", "rate_limits.seven_day"),
+    ]
+    .into_iter()
+    .filter_map(|(label, path)| {
+        let window = data.path(path)?;
+        let used = window.num_at("used_percentage")?;
+        Some(window_segment(label, used, window.num_at("resets_at"), now))
+    })
+    .collect();
 
     if windows.is_empty() {
         // No `rate_limits` yet: an API key instead of a subscription, or the
@@ -103,14 +112,20 @@ fn gauge(label: &str, used_percentage: f64, thresholds: &Thresholds) -> String {
     let bar: String = "█".repeat(filled) + &"░".repeat(BAR_WIDTH - filled);
     let color = thresholds.color(used);
 
-    format!("{MUTED}{label}{RESET} {color}{bar} {}%{RESET}", used.round())
+    format!(
+        "{MUTED}{label}{RESET} {color}{bar} {}%{RESET}",
+        used.round()
+    )
 }
 
 /// A rate-limit window: a [`gauge`] plus how long until it rolls over.
 fn window_segment(label: &str, used_percentage: f64, resets_at: Option<f64>, now: u64) -> String {
     let mut segment = gauge(label, used_percentage, &WINDOW);
     if let Some(resets_at) = resets_at {
-        segment.push_str(&format!(" {MUTED}·{RESET} {TEXT}{}{RESET}", countdown(resets_at, now)));
+        segment.push_str(&format!(
+            " {MUTED}·{RESET} {TEXT}{}{RESET}",
+            countdown(resets_at, now)
+        ));
     }
     segment
 }
@@ -193,7 +208,10 @@ mod tests {
         assert_eq!(plain(without, NOW), "Opus 5 │ limits n/a");
 
         // No model name but an effort: the placeholder still carries it.
-        assert_eq!(plain(r#"{"effort": {"level": "low"}}"#, NOW), "? · low │ limits n/a");
+        assert_eq!(
+            plain(r#"{"effort": {"level": "low"}}"#, NOW),
+            "? · low │ limits n/a"
+        );
 
         // A level that is not a string is not a level.
         assert_eq!(plain(r#"{"effort": {"level": 3}}"#, NOW), "? │ limits n/a");
@@ -211,7 +229,10 @@ mod tests {
         // Same shape as a rate-limit window, minus the countdown: a context
         // window does not reset on a clock, it resets when the session does.
         let ctx = |used: i32| {
-            plain(&format!(r#"{{"context_window": {{"used_percentage": {used}}}}}"#), NOW)
+            plain(
+                &format!(r#"{{"context_window": {{"used_percentage": {used}}}}}"#),
+                NOW,
+            )
         };
         assert_eq!(ctx(50), "? │ limits n/a │ ctx ████░░░░ 50%");
         assert_eq!(ctx(100), "? │ limits n/a │ ctx ████████ 100%");
@@ -242,14 +263,26 @@ mod tests {
     #[test]
     fn the_dot_at_the_head_reports_the_bus() {
         let dotted = |link| strip_ansi(&render(&parse(PAYLOAD).unwrap(), NOW, link));
-        assert!(dotted(Link::Up).starts_with("● Opus 5"), "connected: a dot, then the line");
+        assert!(
+            dotted(Link::Up).starts_with("● Opus 5"),
+            "connected: a dot, then the line"
+        );
         assert!(dotted(Link::Down).starts_with("● Opus 5"));
-        assert!(dotted(Link::Off).starts_with("Opus 5"), "publishing off: no dot at all");
+        assert!(
+            dotted(Link::Off).starts_with("Opus 5"),
+            "publishing off: no dot at all"
+        );
 
         // Colour is the whole message, so it is asserted on the raw line.
         let raw = |link| render(&parse(PAYLOAD).unwrap(), NOW, link);
-        assert!(raw(Link::Up).starts_with(&format!("{GREEN}●{RESET} ")), "up is green");
-        assert!(raw(Link::Down).starts_with(&format!("{RED}●{RESET} ")), "down is red");
+        assert!(
+            raw(Link::Up).starts_with(&format!("{GREEN}●{RESET} ")),
+            "up is green"
+        );
+        assert!(
+            raw(Link::Down).starts_with(&format!("{RED}●{RESET} ")),
+            "down is red"
+        );
 
         // The limit bars are green in this payload; a red dot must still be the
         // only red on the line, or the traffic light stops meaning anything.
@@ -260,17 +293,32 @@ mod tests {
     fn colors_by_how_much_is_spent() {
         let line = render(&parse(PAYLOAD).unwrap(), NOW, Link::Off);
         assert!(line.contains(BOLD), "the model name is bold");
-        assert!(line.contains(TEXT), "text is bright grey, never the terminal default");
-        assert!(line.contains(MUTED), "labels and separators are a step darker");
-        assert!(!line.contains("\x1b[2m"), "no dimming — it turns to mud on black");
+        assert!(
+            line.contains(TEXT),
+            "text is bright grey, never the terminal default"
+        );
+        assert!(
+            line.contains(MUTED),
+            "labels and separators are a step darker"
+        );
+        assert!(
+            !line.contains("\x1b[2m"),
+            "no dimming — it turns to mud on black"
+        );
         assert!(line.contains(GREEN), "44% and 24% spent are both green");
         assert!(!line.contains(RED));
 
         let high = r#"{"rate_limits": {"five_hour": {"used_percentage": 95, "resets_at": 100}}}"#;
-        assert!(render(&parse(high).unwrap(), 0, Link::Off).contains(RED), "95% spent is red");
+        assert!(
+            render(&parse(high).unwrap(), 0, Link::Off).contains(RED),
+            "95% spent is red"
+        );
 
         let mid = r#"{"rate_limits": {"five_hour": {"used_percentage": 70, "resets_at": 100}}}"#;
-        assert!(render(&parse(mid).unwrap(), 0, Link::Off).contains(YELLOW), "70% spent is yellow");
+        assert!(
+            render(&parse(mid).unwrap(), 0, Link::Off).contains(YELLOW),
+            "70% spent is yellow"
+        );
     }
 
     #[test]
@@ -290,7 +338,10 @@ mod tests {
     #[test]
     fn survives_an_empty_or_broken_payload() {
         assert_eq!(plain("{}", NOW), "? │ limits n/a");
-        assert_eq!(strip_ansi(&render(&Json::Null, NOW, Link::Off)), "? │ limits n/a");
+        assert_eq!(
+            strip_ansi(&render(&Json::Null, NOW, Link::Off)),
+            "? │ limits n/a"
+        );
     }
 
     #[test]

@@ -73,13 +73,13 @@ const SUMMARY_KEYS: [&str; 10] = [
     "notebook_path", // NotebookEdit
     // Before `path`: for Grep and Glob the pattern is the question and the path
     // is only where it was asked.
-    "pattern",       // Grep / Glob
-    "path",          // an MCP tool, or a search root with no pattern
-    "url",           // WebFetch
-    "query",         // WebSearch
-    "skill",         // Skill
-    "description",   // Agent — the 3-5 word label, not the whole prompt
-    "prompt",        // last resort: something is better than a bare tool name
+    "pattern",     // Grep / Glob
+    "path",        // an MCP tool, or a search root with no pattern
+    "url",         // WebFetch
+    "query",       // WebSearch
+    "skill",       // Skill
+    "description", // Agent — the 3-5 word label, not the whole prompt
+    "prompt",      // last resort: something is better than a bare tool name
 ];
 
 /// One message on the `activity` subject.
