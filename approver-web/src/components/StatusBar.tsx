@@ -56,6 +56,10 @@ export function StatusBar({
             <Row label="servers" value={status.servers} />
             <Row label="subject" value={`${status.subject} (queue: ${status.queue})`} />
             <Row label="status" value={`${status.status_subject} (the status line, read-only)`} />
+            <Row
+              label="activity"
+              value={`${status.activity_subject} (what Claude is doing, read-only)`}
+            />
             <Row label="key" value={`${status.key_id} / ${status.key_type}`} />
             <Row
               label="config"

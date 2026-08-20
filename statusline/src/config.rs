@@ -22,6 +22,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+use crate::activity;
 use crate::link;
 use crate::nats;
 
@@ -44,6 +45,13 @@ pub struct Config {
     /// The NATS server, same default as `lib/bus.py`.
     pub url: String,
     pub subject: String,
+    /// Publish the activity documents (§9.10) — what Claude is *doing*, as
+    /// opposed to what it is spending. A switch of its own, because it is the
+    /// half that puts command text and file paths on the bus: someone may want
+    /// the numbers and not that. `publish: false` still switches off both.
+    pub activity: bool,
+    /// The subject those go to — deliberately not `subject` (§9.10).
+    pub activity_subject: String,
     /// Budget for the whole publish — connect, write, flush (§9.7).
     pub timeout_ms: u64,
     /// How long a failed connection is believed before it is retried (§9.8).
@@ -60,6 +68,8 @@ impl Default for Config {
             publish: true,
             url: nats::DEFAULT_URL.to_string(),
             subject: nats::DEFAULT_SUBJECT.to_string(),
+            activity: true,
+            activity_subject: activity::DEFAULT_SUBJECT.to_string(),
             timeout_ms: nats::DEFAULT_TIMEOUT.as_millis() as u64,
             retry_after_s: link::DEFAULT_RETRY_AFTER.as_secs(),
             debug: false,
@@ -98,6 +108,16 @@ impl Config {
         }
     }
 
+    /// Where the activity documents go (§9.10). The same server and the same
+    /// budget as the line's — only the subject differs, and the extra switch.
+    pub fn activity_settings(&self) -> nats::Settings {
+        nats::Settings {
+            subject: self.activity_subject.clone(),
+            enabled: self.publish && self.activity,
+            ..self.settings()
+        }
+    }
+
     pub fn retry_after(&self) -> Duration {
         Duration::from_secs(self.retry_after_s)
     }
@@ -127,6 +147,8 @@ mod tests {
         assert!(config.publish, "publishing is on out of the box");
         assert_eq!(config.url, "nats://127.0.0.1:4222", "the same server as lib/bus.py");
         assert_eq!(config.subject, "status");
+        assert!(config.activity, "the hooks publish out of the box too (§9.10)");
+        assert_eq!(config.activity_subject, "activity");
         assert_eq!(config.timeout_ms, 500);
         assert_eq!(config.retry_after_s, 30);
         assert!(!config.debug);
@@ -149,7 +171,8 @@ mod tests {
         let config = load(
             "full",
             r#"{"v": 1, "publish": false, "url": "nats://box:4222",
-                "subject": "s", "timeout_ms": 120, "retry_after_s": 5, "debug": true}"#,
+                "subject": "s", "activity": false, "activity_subject": "a",
+                "timeout_ms": 120, "retry_after_s": 5, "debug": true}"#,
         );
         let settings = config.settings();
         assert_eq!(settings.url, "nats://box:4222");
@@ -158,6 +181,24 @@ mod tests {
         assert!(!settings.enabled, "`publish` is what switches it off");
         assert_eq!(config.retry_after(), Duration::from_secs(5));
         assert!(config.debug);
+
+        let hooks = config.activity_settings();
+        assert_eq!(hooks.subject, "a");
+        assert_eq!(hooks.url, settings.url, "one server for both documents");
+        assert_eq!(hooks.timeout, settings.timeout, "and one budget");
+    }
+
+    #[test]
+    fn the_activity_half_can_be_switched_off_on_its_own() {
+        // The line's numbers are one thing; the command text §9.10 puts on the
+        // bus is another, and either may be wanted without the other.
+        let quiet = load("activity-off", r#"{"v": 1, "activity": false}"#);
+        assert!(quiet.settings().enabled, "the line still publishes");
+        assert!(!quiet.activity_settings().enabled, "the hooks do not");
+
+        let nothing = load("publish-off", r#"{"v": 1, "publish": false}"#);
+        assert!(!nothing.settings().enabled);
+        assert!(!nothing.activity_settings().enabled, "`publish: false` still means neither");
     }
 
     #[test]

@@ -4,6 +4,7 @@
  * Kept apart from `responder.ts` so client components can import them without
  * pulling the NATS client into the browser bundle.
  */
+import type { ActivityDoc } from "./activity";
 import type { KeyType, PermissionRequest } from "./schemas";
 import type { StatusDoc } from "./statusline";
 
@@ -31,6 +32,8 @@ export interface ResponderStatus {
   queue: string;
   /** The status line's subject (§9.7) — watched, never answered. */
   status_subject: string;
+  /** The activity subject (§9.10) — watched the same way, and just as read-only. */
+  activity_subject: string;
   key_id: string;
   key_type: KeyType;
   signing_mode: SigningMode;
@@ -64,6 +67,16 @@ export interface Snapshot {
    * it belongs to the request above it.
    */
   statusline: StatusDoc | null;
+  /**
+   * The last document seen on the activity subject (§9.10), or null while
+   * nothing has been published since this process started.
+   *
+   * A current value like `statusline`, and kept for the same reason: the newest
+   * message wins, nothing is queued behind it, and a session that has gone
+   * quiet leaves its last state on screen with its age beside it rather than
+   * blanking.
+   */
+  activity: ActivityDoc | null;
 }
 
 export interface RegisterResult {

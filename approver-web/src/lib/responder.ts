@@ -23,6 +23,7 @@ import {
 
 import { randomBytes } from "node:crypto";
 
+import { type ActivityDoc, activityDocSchema } from "./activity";
 import { loadConfig, saveConfig } from "./config";
 import { verifyEd25519, verifyP256 } from "./keys";
 import { PROTOCOL_VERSION, registrationReplySigningBytes } from "./protocol";
@@ -116,6 +117,9 @@ class Responder {
   /** The status line's subject (§9.7) — watched for the plaque, never answered. */
   private statusSub: Subscription | null = null;
   private statusDoc: StatusDoc | null = null;
+  /** The activity subject (§9.10) — the same arrangement, one row lower. */
+  private activitySub: Subscription | null = null;
+  private activityDoc: ActivityDoc | null = null;
   private starting: Promise<void> | null = null;
   private sweeper: ReturnType<typeof setInterval> | null = null;
   private error: string | null = null;
@@ -142,7 +146,7 @@ class Responder {
   }
 
   private async connectAndSubscribe(): Promise<void> {
-    const { servers, subject, queue, status_subject } = this.config;
+    const { servers, subject, queue, status_subject, activity_subject } = this.config;
     const nc = await connect({ servers, name: "approver-web" });
     this.nc = nc;
     this.error = null;
@@ -156,10 +160,15 @@ class Responder {
     this.statusSub = nc.subscribe(status_subject);
     void this.consumeStatus(this.statusSub);
 
+    // Same again for §9.10, and with no queue group for the same reason.
+    this.activitySub = nc.subscribe(activity_subject);
+    void this.consumeActivity(this.activitySub);
+
     void nc.closed().then((err) => {
       this.nc = null;
       this.sub = null;
       this.statusSub = null;
+      this.activitySub = null;
       this.starting = null;
       if (err) this.error = err.message;
       // The last document is deliberately kept: it is stamped with its own clock
@@ -210,6 +219,39 @@ class Responder {
       }
 
       this.statusDoc = parsed.data;
+      this.notify();
+    }
+  }
+
+  /**
+   * What Claude is doing (`statusline/CLAUDE.md` §9.10) — the tool about to
+   * run, the tool that just ran, the turn that ended.
+   *
+   * The same posture as `consumeStatus` above, for the same reasons: read-only,
+   * never answered, and a malformed message dropped rather than allowed to blank
+   * a row that was correct a second ago. The schema requires `v`, which on an
+   * open subject is what tells one of these documents from anything else.
+   */
+  private async consumeActivity(sub: Subscription): Promise<void> {
+    for await (const msg of sub) {
+      let payload: unknown;
+      try {
+        payload = JSON.parse(decoder.decode(msg.data));
+      } catch {
+        console.warn("[approver-web] ignoring a non-JSON message on", msg.subject);
+        continue;
+      }
+
+      const parsed = activityDocSchema.safeParse(payload);
+      if (!parsed.success) {
+        console.warn(
+          "[approver-web] ignoring a malformed activity document:",
+          parsed.error.message,
+        );
+        continue;
+      }
+
+      this.activityDoc = parsed.data;
       this.notify();
     }
   }
@@ -373,6 +415,7 @@ class Responder {
       subject: this.config.subject,
       queue: this.config.queue,
       status_subject: this.config.status_subject,
+      activity_subject: this.config.activity_subject,
       key_id: this.loaded.config.key_id,
       key_type: this.loaded.config.key_type,
       signing_mode: this.signingMode,
@@ -392,6 +435,7 @@ class Responder {
         .map((e) => e.pending)
         .sort((a, b) => a.received_at - b.received_at),
       statusline: this.statusDoc,
+      activity: this.activityDoc,
     };
   }
 

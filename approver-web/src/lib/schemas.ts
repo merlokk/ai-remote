@@ -58,6 +58,13 @@ export const configSchema = z.object({
    * plaque. Must match `subject` in `statusline-config.json` (§9.9).
    */
   status_subject: z.string().min(1).default("status"),
+  /**
+   * Where the same binary publishes what Claude is *doing* — the `PreToolUse` /
+   * `PostToolUse` / `Stop` hooks of §9.10. Read-only for this app too, and just
+   * as unrelated to the approval flow: it only feeds the activity row under the
+   * plaque. Must match `activity_subject` in `statusline-config.json` (§9.9).
+   */
+  activity_subject: z.string().min(1).default("activity"),
 });
 
 export type Config = z.infer<typeof configSchema>;

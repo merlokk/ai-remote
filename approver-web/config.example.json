@@ -6,5 +6,6 @@
   "key_id": "approver-web",
   "key_type": "p256",
   "request_ttl": 120,
-  "status_subject": "status"
+  "status_subject": "status",
+  "activity_subject": "activity"
 }

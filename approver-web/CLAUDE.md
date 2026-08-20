@@ -117,6 +117,8 @@ src/lib/
   use-request-alert.ts   diffs snapshots for NEW nonces; sound + tab-title count
   statusline.ts          the status line's document off `status` (§9.7): schema, gauge scales, countdown
   statusline.test.ts     that wire format and the §9.2 scales, pinned
+  activity.ts            what Claude is doing, off `activity` (§9.10): schema, headline, staleness
+  activity.test.ts       that wire format pinned, including the `v` that makes a document ours
 src/app/
   layout.tsx providers.tsx page.tsx      the single page
   theme.ts               the whole visual system (see "Look and feel")
@@ -126,6 +128,7 @@ src/app/
 src/components/
   RegisterPanel.tsx StatusBar.tsx RequestCard.tsx DecisionForm.tsx SoundToggle.tsx
   StatuslinePlaque.tsx   the model and the limits, read-only (see "The model and limits plaque")
+  ActivityLine.tsx       what Claude is doing, read-only (see "The activity row")
 ```
 
 Mirrored from the Python side on purpose: `protocol.ts` ↔ `protocol.py`,
@@ -145,7 +148,7 @@ both sides compute them with one implementation — which is also why
 
 | Route | Shape |
 |-------|-------|
-| `GET /api/stream` | `text/event-stream`. Every frame is a **whole** `{status, requests, statusline}` snapshot, so a reconnect needs no resync. `: ping` every 15 s. Opening the stream is what triggers the NATS connect — there is no connect button, because having the page open *is* being a responder. |
+| `GET /api/stream` | `text/event-stream`. Every frame is a **whole** `{status, requests, statusline, activity}` snapshot, so a reconnect needs no resync. `: ping` every 15 s. Opening the stream is what triggers the NATS connect — there is no connect button, because having the page open *is* being a responder. |
 | `POST /api/decision` | `{nonce, behavior, reason, updated_input?, sig}` → `{ok}`. The signature is made in the browser; the server re-derives the signing bytes **from the pending request it holds** and verifies before answering, so a caller cannot post one decision with a signature over another. `409` = gone (expired/answered), no key registered, or the signature does not match. |
 | `POST /api/register` | `{token, public_key, public_key_raw}` → `{ok, key_id}` \| `{ok:false, error}`. Only public material crosses; the private half never leaves the browser. `409` = the handler or the bus said no (bad/spent token, nothing listening), or the answer was not the registration handler's (unsigned, replayed, or signed by a key other than the pinned one) — and **nothing was persisted**. |
 
@@ -156,7 +159,7 @@ both sides compute them with one implementation — which is also why
 ```json
 { "v": 1, "servers": "nats://127.0.0.1:4222", "subject": "approvals.*",
   "queue": "approvers", "key_id": "approver-web", "key_type": "p256",
-  "request_ttl": 120, "status_subject": "status",
+  "request_ttl": 120, "status_subject": "status", "activity_subject": "activity",
   "public_key": "<b64 33-byte compressed>", "public_key_raw": "<b64 65-byte>",
   "server_key": "<b64 32-byte ed25519 — the registration handler>" }
 ```
@@ -184,11 +187,12 @@ visible.
 `request_ttl` should be ≥ the hook's own `timeout` in `handler-config.json`,
 otherwise a card disappears while Claude Code is still waiting.
 
-`status_subject` is the one field here that has nothing to do with approving
-anything — it is the status line's subject (`statusline/CLAUDE.md` §9.7) and must
-match `subject` in that binary's own `statusline-config.json` (§9.9). It exists as
-config for the same reason the subject above does: both are names on a shared bus,
-and neither is worth a rebuild to change.
+`status_subject` and `activity_subject` are the two fields here that have
+nothing to do with approving anything — they are the status line's subjects
+(`statusline/CLAUDE.md` §9.7 and §9.10) and must match `subject` /
+`activity_subject` in that binary's own `statusline-config.json` (§9.9). They
+exist as config for the same reason the subject above does: all of them are names
+on a shared bus, and none is worth a rebuild to change.
 
 ## Rules this app inherits (do not soften them)
 
@@ -602,6 +606,66 @@ document, a synthetic stale one at 95%/70%/60% (red, orange, red — and `stale`
 with a `10m` age), junk on the subject (warned, previous document kept), a
 `{ts, line}`-only document (`limits n/a`), and nothing published at all.
 
+## The activity row
+
+Under the plaque, one line, off the **`activity`** subject — the document in
+`statusline/CLAUDE.md` §9.10, published by the same binary from Claude Code's
+`PreToolUse` / `PostToolUse` / `Stop` hooks:
+
+```
+● running   Bash · py -m pytest -q                                        2s
+○ idle                                                                   4m
+```
+
+The plaque above says what the session is *spending*; this says what it is
+*doing*. Same posture as the plaque in every way that matters — a second
+subscription on the connection that was already open, never answered, no queue
+group, and the request path does not read it. Deleting `ActivityLine` from
+`page.tsx` leaves a working responder.
+
+- **A card of its own, not a fourth row in the plaque.** The two publishers are
+  independent: hooks fire on tool calls, the status line on renders, and either
+  document can arrive with the other absent. Folding them into one card would mean
+  one placeholder having to explain two silences.
+- **Quieter than the plaque, which is already quiet.** A dot, the state, the
+  headline in mono, the age. No badge, no bar, no control — and **nothing red**:
+  a busy session is not a problem, and red on this page belongs to a denial.
+  The dot is filled while there is work and hollow when the turn is over, the same
+  lamp shape as the connection dot in the header and the one at the head of the
+  terminal line (§9.2).
+- **The headline is `tool · summary`,** prefixed with the subagent when there is
+  one (`Explore › Grep · TODO`). The tool name comes first because it is the part
+  that is always there; the summary is what makes the row worth reading. A tool
+  with nothing worth quoting (`TodoWrite`) shows its name alone, and a document
+  with no tool at all — every `stop` — shows its state.
+- **Truncated with a `title`.** The publisher already cut the summary to 80
+  characters (§9.10) and a narrow window may not have room even for that, so the
+  line truncates and the full text stays recoverable on hover.
+- **`idle` never goes stale; busy does, after ten minutes.** Longer than the
+  plaque's two minutes and for a different reason: the status line republishes on
+  every render, so silence there means something stopped, while hooks only fire
+  when a tool runs — a session thinking hard, or parked on a permission request,
+  legitimately says nothing for a while. Ten minutes is where "running Bash"
+  stops being believable, and past it the row greys out rather than disappearing.
+  A `stop` document is exempt: "idle" stays true until something else happens, and
+  greying it would suggest the session vanished when it is simply done.
+- **`v` is what makes a document ours.** `activity` is as open as every other
+  subject, and unlike the status document there is no always-present pair of
+  fields to recognise (§9.10). So `activityDocSchema` requires `v: 1` and rejects
+  an event or state outside the two enums — a page older than the publisher says
+  nothing rather than rendering a word it cannot colour — and a rejected message
+  leaves the previous row exactly as it was.
+- **One subject, every session**, with the same caveat as the plaque: this is
+  whichever session ran a tool last, not necessarily the one that sent the cards
+  above. The document carries `session_id`, so the join exists if it is ever worth
+  the state.
+
+Verified against the real publisher — this repo's own session, its hooks
+publishing to `activity` while the work was being done, `nats sub activity`
+showing `pre_tool` / `post_tool` pairs with matching `tool_use_id` and the `Stop`
+document carrying none of the assistant's prose.
+
+
 ## Run — `run.cmd`
 
 The front door. It resolves its own directory first, so it works from anywhere:
@@ -649,7 +713,8 @@ documents at length.
 
 ```powershell
 npm test        # protocol parity vs. the Python vectors, plus the §9.7 status
-                # document and the §9.2 gauge scales — no NATS, no browser
+                # document, the §9.2 gauge scales and the §9.10 activity
+                # document — no NATS, no browser
 npm run build   # type-checks everything, including the tests
 ```
 

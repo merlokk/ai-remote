@@ -1,4 +1,4 @@
-//! End-to-end against a real NATS server — `CLAUDE.md §9.7`.
+//! End-to-end against a real NATS server — `CLAUDE.md §9.7`, `§9.10`.
 //!
 //! The counterpart of pytest's `requires_nats` marker (`tests/conftest.py`):
 //! the suite must stay green on a machine where `docker compose` is not up. Rust
@@ -10,11 +10,13 @@
 //!
 //! ```text
 //! docker exec -it nats-box nats sub status
+//! docker exec -it nats-box nats sub activity
 //! ```
 
 use std::time::Duration;
 
 use futures::StreamExt;
+use statusline::activity::Activity;
 use statusline::json::{self, Lookup};
 use statusline::link::Link;
 use statusline::nats::{Bus, Settings, publish_blocking};
@@ -37,6 +39,8 @@ const NOW: u64 = 1786141200 - (2 * 3600 + 14 * 60);
 /// A subject of our own, so a live approval flow on `status` is not disturbed
 /// and a stray publisher cannot make this test pass by accident.
 const TEST_SUBJECT: &str = "status.test.statusline";
+/// The same, for the activity documents of §9.10.
+const TEST_ACTIVITY_SUBJECT: &str = "status.test.statusline.activity";
 
 fn settings() -> Settings {
     Settings {
@@ -121,4 +125,51 @@ async fn publishing_is_off_when_the_config_says_so() {
     // Give a message that should not exist every chance to show up.
     let nothing = tokio::time::timeout(Duration::from_millis(300), messages.next()).await;
     assert!(nothing.is_err(), "nothing should reach the subject: {nothing:?}");
+}
+
+#[tokio::test]
+async fn a_subscriber_on_activity_receives_what_claude_is_doing() {
+    // §9.10 on the wire: the hook half of the binary, published the same way and
+    // read back the same way, on a subject of its own.
+    let Some(bus) = bus_or_skip("the activity round trip").await else { return };
+
+    let mut messages = bus.client().subscribe(TEST_ACTIVITY_SUBJECT).await.expect("subscribe");
+    bus.flush().await.expect("flush the subscription");
+
+    let payload = json::parse(
+        r#"{"hook_event_name": "PreToolUse", "session_id": "integration-test",
+             "cwd": "E:\\projects\\ai-remote", "tool_name": "Bash",
+             "tool_input": {"command": "docker exec -it nats-box nats sub activity"},
+             "tool_use_id": "toolu_01ABC"}"#,
+    )
+    .unwrap();
+    let sent = Activity::from_payload(&payload, NOW).expect("a PreToolUse payload");
+
+    let activity_settings = Settings { subject: TEST_ACTIVITY_SUBJECT.to_string(), ..settings() };
+    tokio::task::spawn_blocking({
+        let sent = sent.clone();
+        move || publish_blocking(&activity_settings, &sent)
+    })
+    .await
+    .expect("the publisher thread survives")
+    .expect("publish");
+
+    let message = tokio::time::timeout(Duration::from_secs(2), messages.next())
+        .await
+        .expect("a message arrives within 2s")
+        .expect("the subscription is still open");
+    let text = String::from_utf8(message.payload.to_vec()).expect("utf-8 on the wire");
+
+    let received: Activity = serde_json::from_str(&text).expect("the wire format parses");
+    assert_eq!(received, sent);
+
+    // And as the untyped JSON the web page and the ESP32 actually parse.
+    let raw = json::parse(&text).expect("valid JSON");
+    assert_eq!(raw.num_at("v"), Some(1.0));
+    assert_eq!(raw.str_at("event"), Some("pre_tool"));
+    assert_eq!(raw.str_at("state"), Some("running"));
+    assert_eq!(raw.str_at("tool_name"), Some("Bash"));
+    assert_eq!(raw.str_at("summary"), Some("docker exec -it nats-box nats sub activity"));
+    assert_eq!(raw.str_at("session_id"), Some("integration-test"));
+    assert_eq!(raw.str_at("tool_use_id"), Some("toolu_01ABC"));
 }

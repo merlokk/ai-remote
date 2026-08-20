@@ -2,6 +2,7 @@
 
 import { Box, Card, Container, HStack, Heading, Stack, Text } from "@chakra-ui/react";
 
+import { ActivityLine } from "@/components/ActivityLine";
 import { RegisterPanel } from "@/components/RegisterPanel";
 import { RequestCard } from "@/components/RequestCard";
 import { SoundToggle } from "@/components/SoundToggle";
@@ -71,6 +72,10 @@ export default function Page() {
             of registration because these numbers keep changing while registering
             is a once-per-browser errand. */}
         <StatuslinePlaque doc={snapshot?.statusline ?? null} now={now} />
+
+        {/* Directly under it: the same session's other half — what it is doing,
+            off the hooks of §9.10, rather than what it is spending. */}
+        <ActivityLine doc={snapshot?.activity ?? null} now={now} />
 
         <RegisterPanel status={snapshot?.status ?? null} />
 

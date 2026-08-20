@@ -10,6 +10,12 @@ It replaced a Python one-liner that printed a banner. Rust, because the status
 line is re-rendered on every turn: a compiled binary starts in single-digit
 milliseconds where `py script.py` pays interpreter startup each time.
 
+**The same binary has a second job** (§9.10): wired as Claude Code's
+`PreToolUse` / `PostToolUse` / `Stop` hook, it publishes what the session is
+*doing* — the tool about to run, the tool that just ran, the turn that ended — to
+a subject beside the one the numbers go to. Same reason for Rust, only more so: a
+hook fires twice per tool call, not once per turn.
+
 ### 9.1 The contract
 
 Claude Code pipes one JSON object in on stdin and prints whatever comes back on
@@ -99,7 +105,9 @@ A library plus a binary. `src/main.rs` is the Claude Code side and does nothing
 `src/lib.rs` does not expose, so anything else in the repo that wants these
 numbers links the library instead of parsing a terminal line back out of a pipe.
 
-- `src/main.rs` — the binary: config → stdin → parse → `render` → stdout → publish (§9.7).
+- `src/main.rs` — the binary, and the fork between its two jobs (§9.10): config
+  → stdin → parse → either `render` → stdout → publish (§9.7), or publish an
+  activity document and print nothing.
 - `src/lib.rs` — the library root; the six modules below.
 - `src/json.rs` — the payload, read with `serde_json`. `Value` plus a `Lookup`
   trait adding `path("a.b.c")` / `str_at` / `num_at`: dotted paths because that
@@ -111,6 +119,8 @@ numbers links the library instead of parsing a terminal line back out of a pipe.
   testable without a clock or a server. `strip_ansi` is the colourless version,
   for the bus and for the tests.
 - `src/status.rs` — the published document as `serde` structs (§9.7).
+- `src/activity.rs` — the *other* published document, and the dispatch that
+  recognises a hook payload (§9.10).
 - `src/nats.rs` — the NATS client wrapper (§9.7).
 - `src/link.rs` — the cached reachability verdict behind the dot (§9.8).
 - `src/config.rs` — `statusline-config.json` (§9.9).
@@ -159,6 +169,26 @@ shows). Quoting the path inside the JSON string keeps the backslashes literal;
 the same trick is why the `PermissionRequest` hook in `settings.local.json` is
 written the way it is.
 
+The same file wires the same binary as three hooks (§9.10) — the quoting is
+load-bearing there for the same reason:
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [{ "matcher": "*", "hooks": [{ "type": "command",
+      "command": "\"E:\\projects\\ai-remote\\statusline\\target\\release\\statusline.exe\"",
+      "timeout": 5 }] }],
+    "PostToolUse": [{ "matcher": "*", "hooks": [{ "…": "the same" }] }],
+    "Stop":        [{ "hooks": [{ "…": "the same, and no matcher — Stop has nothing to match" }] }]
+  }
+}
+```
+
+`timeout` is seconds and is belt-and-braces: the binary's own budget is 500 ms
+(§9.7) and §9.8 means it usually opens no socket at all. A hook added while a
+session is running is picked up by that session's settings watcher; if the row
+never appears, open `/hooks` once or restart.
+
 Project settings win over the user-level `~/.claude/settings.json`, so this
 binary is the status line inside this repo only; other projects keep whatever is
 configured globally.
@@ -204,7 +234,18 @@ two failure paths that must not hang — publishing disabled, and a server that 
 not there; `src/link.rs` covers the backoff arithmetic and
 every way the cache can be untrustworthy; `src/config.rs` covers a partial file,
 each way a file can be broken, and checks the committed example against the
-defaults.
+defaults. `src/activity.rs` covers the §9.10 document — each event's state, the
+summary lifted from every shape of `tool_input`, the cut that must not split a
+character, and the two directions of the dispatch (a hook payload is never
+rendered, a status payload never publishes an activity document).
+
+`tests/hook_dispatch.rs` runs the **actual executable** for every kind of
+payload it can be handed and asserts what reaches stdout: a line for a status
+payload or for garbage (§9.3), and nothing at all for any hook event. That last
+one is why the test exists — on `Stop`, plain stdout is fed back to Claude as
+context, so a status bar printed there would become something the model reads.
+It writes a `publish: false` config next to the binary first, so it needs no
+server and touches no subject.
 
 `tests/nats_publish.rs` is the real round trip: publish through the same
 blocking path `main` uses, receive it on a subscription, and read it back both
@@ -212,9 +253,9 @@ as the typed `Status` and as the untyped JSON a non-Rust subscriber sees. It
 needs a live server, and mirrors pytest's `requires_nats` marker — Rust has no
 "skip", so an unreachable server prints a note and returns green instead of
 failing a suite on a machine where docker is down. `cargo test -- --nocapture`
-shows whether it actually ran. It publishes to `status.test.statusline`, not
-`status`, so it neither disturbs a live subscriber nor can be fooled into
-passing by one.
+shows whether it actually ran. It publishes to `status.test.statusline` and
+`status.test.statusline.activity`, not `status` / `activity`, so it neither
+disturbs a live subscriber nor can be fooled into passing by one.
 
 ### 9.7 The `status` subject — the same values, on the bus
 
@@ -360,6 +401,8 @@ copy of the format, and it spells out the defaults:
   "publish": true,
   "url": "nats://127.0.0.1:4222",
   "subject": "status",
+  "activity": true,
+  "activity_subject": "activity",
   "timeout_ms": 500,
   "retry_after_s": 30,
   "debug": false
@@ -372,6 +415,8 @@ copy of the format, and it spells out the defaults:
 | `publish` | `true` | publish at all. `false` also removes the dot (§9.8) — nothing is published, so there is no link to report |
 | `url` | `nats://127.0.0.1:4222` | the server (§3) |
 | `subject` | `status` | the subject (§9.7) |
+| `activity` | `true` | publish the activity documents (§9.10). A switch of its own because that is the half putting command text and file paths on the bus; `publish: false` still switches off both |
+| `activity_subject` | `activity` | where those go (§9.10) |
 | `timeout_ms` | `500` | budget for the whole publish — connect, write, flush |
 | `retry_after_s` | `30` | how long a failed connection is believed before a retry (§9.8) |
 | `debug` | `false` | print publish failures to stderr |
@@ -390,3 +435,131 @@ has to print either way. The cost of that leniency is that a typo is silent, so
 
 A test asserts the committed example parses and equals the defaults, so the
 documentation above cannot drift away from the code without failing the suite.
+
+### 9.10 The `activity` subject — what Claude is *doing*
+
+§9.7 puts the numbers on the bus: what this session is **spending**. This puts
+the other half there — what it is **doing** — and it arrives on the events the
+numbers cannot see. A status line is re-rendered on a timer and a turn boundary;
+a tool call is neither.
+
+Three events, published from the same binary wired as three hooks (§9.5):
+
+| Claude Code event | `event` | `state` | Means |
+|---|---|---|---|
+| `PreToolUse` | `pre_tool` | `running` | a tool is about to run, and the document says which |
+| `PostToolUse` | `post_tool` | `thinking` | that tool is done; the turn is not |
+| `Stop` | `stop` | `idle` | the turn ended — the session is waiting for a human |
+
+`post_tool` is deliberately **not** `idle`: between two tool calls Claude is
+working, and the only event that means "your turn" is `Stop`. `state` is
+derivable from `event` and sent anyway, because it is what a readout actually
+draws and a subscriber should not have to hard-code the mapping to colour a dot.
+
+One message per event, on **`activity`** (`activity_subject`, §9.9). Core NATS,
+no stream, same as §9.7: a current value, superseded by the next one, and a
+subscriber that was not listening missed it by design. Watch it with:
+
+```
+docker exec -it nats-box nats sub activity
+```
+
+```json
+{
+  "v": 1,
+  "ts": 1786136782,
+  "event": "pre_tool",
+  "state": "running",
+  "session_id": "7b463c0f-…",
+  "cwd": "E:\\projects\\ai-remote",
+  "tool_name": "Bash",
+  "summary": "py -m pytest -q",
+  "tool_use_id": "toolu_01ABC123",
+  "agent_type": "Explore"
+}
+```
+
+- **`v` is required, and §9.7's document has no such field.** Not an
+  inconsistency: `status` always carries `ts` **and** `line`, which is enough for
+  a subscriber on an open subject to recognise it. Here everything but `ts`,
+  `event` and `state` may be absent, so there is no such pair — `v` is both the
+  version and the "this is ours" marker, and a `v: 2` is refused rather than
+  half-understood.
+- **`ts` is the only clock.** A hook fires when it fires; there is nothing to
+  count down and no `resets_in` to resolve.
+- **Absent is absent**, exactly as in §9.7 — omitted, never `null`. A `stop`
+  document is four fields: `{"v":1,"ts":…,"event":"stop","state":"idle"}` plus
+  the session it came from.
+- `tool_use_id` is Claude Code's own id for the call, so a `post_tool` is matched
+  to the `pre_tool` it closes instead of guessed at by tool name.
+- `agent_type` appears only inside a subagent, so a readout can say *whose* work
+  this is (`Explore › Grep · TODO`) rather than showing the main loop doing
+  everything.
+
+**A summary, not the arguments.** A tool's input is command text, file paths,
+sometimes a secret; a row on a phone or a 2.16" panel wants one short line. So
+exactly one value is lifted out of `tool_input`, whitespace — newlines included,
+since a `Bash` heredoc is one value with many lines — collapsed to single spaces,
+and the result cut to **80 characters** on a character boundary, with `…` where
+it was cut. The key is chosen by a preference order over names rather than a
+table of tools:
+
+```
+command · file_path · notebook_path · pattern · path · url · query · skill · description · prompt
+```
+
+Names, not tools, for two reasons: a per-tool table would have to grow with every
+tool Claude Code adds, and it would say nothing at all about an MCP tool — while
+an unknown tool that happens to take a `command` or a `path` is summarised
+correctly by nobody's effort. `pattern` sits ahead of `path` because for `Grep`
+and `Glob` the pattern is the question and the path is only where it was asked.
+Nothing matched (`TodoWrite`) means no `summary` at all, not an empty one.
+
+**What never travels.** `last_assistant_message` — the model's own prose, which
+`Stop` carries in full — is not published. Neither is `tool_result`, nor
+`transcript_path`, nor the rest of `tool_input` beyond that one line. This is a
+projection of the payload in the same sense §9.7 is: the fields a readout needs,
+and nothing else.
+
+**One binary, two jobs, and the dispatch is the risky part.** Claude Code hands
+the same executable a status payload or a hook payload, and every hook payload
+carries `hook_event_name` while the status one does not. So `main` reads stdin,
+asks `activity::is_hook_payload`, and only then decides whether anything may be
+printed. Two rules fall out of that, and `tests/hook_dispatch.rs` pins both:
+
+- **An event we do not publish produces nothing at all** — not a status line.
+  `SessionStart`, `SubagentStop`, `PermissionRequest` (that one is
+  `approver/hook.py`'s job, §7) all leave the process having done nothing, which
+  is exactly what a hook with no opinion should do. Printing a line there would be
+  worse than noise: on `Stop`, plain stdout is handed back to Claude as context,
+  so the status bar would become something the model reads.
+- **A status payload is never mistaken for a hook.** If some later Claude Code
+  starts stamping the status payload with a name of its own, `Status` and
+  `StatusLine` are excluded by name, so the line keeps printing instead of being
+  silently replaced by a publish.
+
+**What it costs.** A hook runs on every tool call — twice — so this is only
+affordable because it reuses §9.8: while the server is known to be down, no
+socket is opened at all. Measured here against a live localhost server, release
+build:
+
+| Run | Cost |
+|-----|------|
+| first (cold file cache) | ~240 ms |
+| every later hook | ~31–38 ms — process start, connect, publish, flush |
+| any hook while the bus is known down | the §9.8 file read, no network |
+
+The §9.8 cache is shared with the line, which is a feature in both directions:
+hooks keep the connection verdict fresh between renders, and a hook that fails to
+connect turns the next render's dot red — it is the same server.
+
+**It is command text on a LAN bus, and that is a decision.** Everything above
+travels unencrypted to whoever is subscribed, exactly like a §7 request does
+(root `CLAUDE.md` §7: the bus must not be exposed). Two switches, in
+`statusline-config.json` (§9.9): `activity: false` keeps the line publishing and
+stops this, and `publish: false` stops both.
+
+**The first subscriber is `approver-web`**, which draws it as one line under the
+limits plaque — see [`../approver-web/CLAUDE.md`](../approver-web/CLAUDE.md),
+"The activity row". Read-only, never answered, and nothing in the approval flow
+depends on it.
