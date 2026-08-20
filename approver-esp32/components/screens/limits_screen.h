@@ -50,14 +50,20 @@ inline constexpr int32_t kLimitsPad = 28;
 inline constexpr int32_t kLimitsModelTop = 30;
 inline constexpr int32_t kLimitsEffortTop = 74;
 
-inline constexpr int32_t kLimitsFirstGaugeTop = 116;
+// **106, and the ten pixels went downwards** — see the band at the bottom of this
+// file. The gauge block is the only thing here with slack above it: the effort
+// line ends at 90 and the first row's text starts at 122, which is twice the gap
+// anything below the bars gets.
+inline constexpr int32_t kLimitsFirstGaugeTop = 106;
 
 // **98 rather than 104, and the six pixels went to the activity line** (§9.10).
-// Three rows of 98 end at 396 instead of 408, which with the two 14-point lines at
-// the bottom merged into one is the 44-pixel band the line needed. Nothing in a
-// row moved: the text is still at +16 and the bar still spans +58..+84, so the gap
-// between a bar and the next row's text went from 32 pixels to 26 — which at this
-// size is still a gap and not a collision.
+// Three rows of 98 from 106 end at 386 rather than the 408 the old stride reached
+// from the old top, which with the two 14-point lines at the bottom merged into one
+// is the band the line needed. Nothing in a row moved: the text is still at +16 and
+// the bar still spans +58..+84, so the gap between a bar and the next row's text
+// went from 32 pixels to 26 — which at this size is still a gap and not a
+// collision, and is deliberately wider than the 16 below the block: rows of one
+// kind read as a group, and the group is what the band separates from the text.
 inline constexpr int32_t kLimitsGaugeStride = 98;
 
 // Within a row: the label, the percentage and the countdown share one line, and
@@ -77,17 +83,35 @@ inline constexpr int32_t kLimitsCountdownWidth = 220;
 // **What the session is doing** (§9.10), under the bars and above the session
 // line, at the size the numbers are: this is the fastest-changing thing on the
 // screen and the one a glance from across the room is actually for. 28 point fits
-// about twenty-eight characters of a 480-pixel panel, so the label is set to
-// truncate with an ellipsis rather than to wrap — a second line would push the
-// session line off the glass, and the whole summary is a `limits` away on the
-// console.
-inline constexpr int32_t kLimitsActivityTop = 404;
+// about twenty-eight characters of a 480-pixel panel, so the label scrolls rather
+// than wraps — a second line would push the session line off the glass, and the
+// whole summary is a `limits` away on the console. `limits_screen.cpp` argues the
+// scroll against the two modes it was chosen over.
+inline constexpr int32_t kLimitsActivityTop = 402;
 
 // The session and the age, **on one line now** rather than two. Both facts are
 // kept — which session these numbers came from, and how old they are (§10.8.3
 // argues for each) — and putting them on one 14-point row is what freed the band
 // above for the line that changes every few seconds.
-inline constexpr int32_t kLimitsCwdTop = 450;
+inline constexpr int32_t kLimitsCwdTop = 448;
+
+// **The band below the bars is three equal gaps, and this is the constant that
+// says so.** It used to be 8, 16 and 14 — the activity line pressed against the
+// `ctx` bar while the two lines under it had air, and on a panel where every
+// other margin is deliberate that reads as a mistake rather than as a hierarchy.
+// The fix was to move the gauge block up ten pixels rather than to push the text
+// down, because down is where the panel ends.
+//
+// It is 16 rather than a computed division for the same reason `kLimitsPad` is 28:
+// a number somebody chose, and the `static_assert`s in `limits_screen.cpp` are
+// what keep the three of them equal when one is edited.
+inline constexpr int32_t kLimitsBottomGap = 16;
+
+// LVGL's own `.line_height` for the two fonts this layout does arithmetic with
+// (`lv_font_montserrat_28.c`, `_14.c`). Named because the asserts need them, and
+// because 30 for a 28-point font is not a number anybody guesses right.
+inline constexpr int32_t kLimits28LineHeight = 30;
+inline constexpr int32_t kLimits14LineHeight = 16;
 
 // One gauge's widgets, kept together because there are three of them and the only
 // difference between them is the label and which scale colours the bar.

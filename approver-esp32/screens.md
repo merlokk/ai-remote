@@ -677,6 +677,26 @@ the condition: the directory because without it the screen reads as belonging to
 whatever request is on the card, and the age because §9.7 is a current value with
 no stream behind it. That freed the 44-pixel band the line sits in.
 
+**And then the band was measured rather than eyeballed, which is how the first
+version of it turned out to be wrong.** The three gaps under the `ctx` bar were 8,
+16 and 14 pixels: the activity line pressed against the bar above it while the two
+rows below had air, and on a screen where `kLimitsPad` is 28 everywhere else that
+reads as a slip rather than as a hierarchy. The fix is **up, not down** — the gauge
+block starts at 106 instead of 116, because below the session line the panel ends —
+and the band is now 16 / 16 / 16 by arithmetic, asserted at compile time in
+`limits_screen.cpp` so that moving one constant fails the build rather than the
+photograph. The block above it keeps 26 pixels between a bar and the next row's
+text, deliberately wider than the 16 below: three rows of one kind read as a group,
+and the band is what separates the group from the text under it.
+
+One number in the capture does not match the arithmetic, and it is worth knowing
+before somebody re-measures: the *ink* gaps are 20 / 16 / 16, not 16 / 16 / 16.
+LVGL positions the 30-pixel line box, and `thinking` has no glyph reaching the top
+of it — four pixels of that box are leading. Compensating for it would mean moving
+the label two pixels up and making the invariant depend on which letters are in the
+string, which is the wrong thing to hold constant. The boxes are equal; the string
+is whatever the session is doing.
+
 **Read back off the board**, with this repository's own session publishing: the
 console's `limits` grew a `doing` block and a second counter pair, the subscription
 list shows `activity` as `sid 2` next to `status` as `sid 1`, and the panel showed

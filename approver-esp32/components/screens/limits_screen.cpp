@@ -78,6 +78,24 @@ lv_obj_t *Block(lv_obj_t *parent, lv_color_t colour, int32_t x, int32_t y, int32
 constexpr int32_t kWidth = 480;
 constexpr int32_t kBarWidth = kWidth - 2 * kLimitsPad;
 
+// **The band below the bars, asserted rather than eyeballed.** The three gaps
+// between the `ctx` bar, the activity line, the session line and the bottom edge
+// are equal by arithmetic, and this is where a layout edit that breaks that stops
+// being a build. It is the shape `settings_screen.h` uses for its rows: a layout
+// that has to add up is checked where it is written, not on a photograph taken
+// after a flash.
+//
+// The panel is square and the root is `kWidth` by `kWidth` a few lines below, so
+// `kWidth` is the height in the last of the three.
+constexpr int32_t kLastBarBottom =
+    kLimitsFirstGaugeTop + 2 * kLimitsGaugeStride + kLimitsBarTop + kLimitsBarHeight;
+static_assert(kLimitsActivityTop - kLastBarBottom == kLimitsBottomGap,
+              "the activity line must sit one gap under the last bar");
+static_assert(kLimitsCwdTop - (kLimitsActivityTop + kLimits28LineHeight) == kLimitsBottomGap,
+              "the session line must sit one gap under the activity line");
+static_assert(kWidth - (kLimitsCwdTop + kLimits14LineHeight) == kLimitsBottomGap,
+              "the session line must end one gap above the bottom of the panel");
+
 }  // namespace
 
 esp_err_t LimitsScreen::Create(lv_obj_t *parent) {
