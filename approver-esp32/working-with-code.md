@@ -125,6 +125,32 @@ idf.py -p COM4 flash monitor       # + bootloader, partition table, storage.bin
 The full one is needed after a change to `partitions.csv` or to anything under
 `spiffs_image/`.
 
+**And the full one erases the two files the device wrote for itself**, which is
+the sentence this section was missing until it cost a registration: `storage.bin`
+is built from `spiffs_image/`, so flashing it puts the *committed* `config.json`
+back over the one the device has been editing and takes `registration.json` with
+it. What that costs, in order of annoyance:
+
+- **the registration is gone** and needs a **new one-time token** minted on the
+  host (§10.7) — the old one is spent and cannot be reused;
+- **every Wi-Fi network, passphrase and static address is gone**, replaced by the
+  `YOUR_SSID` / `CHANGEME` placeholders the repository ships;
+- the identity is **not** gone: the Ed25519 seed lives in NVS (§10.6), which a
+  `flash` does not touch, so the device comes back with the same `key_id` and the
+  same public key — unregistered rather than unknown.
+
+So before a full flash, read them off and keep them:
+
+```powershell
+# via the pyserial snippet below
+cat config.json
+cat registration.json
+```
+
+`app-flash` has none of these consequences, which is the other reason to prefer
+it: a change confined to `main/` or `components/` never needs the storage
+partition rewritten.
+
 Creating the tree, once — it is **generated**, not copied from another board
 (§10.12, §10.14.4):
 

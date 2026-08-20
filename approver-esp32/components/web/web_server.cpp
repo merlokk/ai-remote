@@ -17,6 +17,7 @@
 #include "nats_link.h"
 #include "registrar.h"
 #include "storage.h"
+#include "web_auth.h"
 #include "web_paths.h"
 #include "web_settings.h"
 #include "wifi_manager.h"
@@ -30,6 +31,15 @@ constexpr const char *TAG = "web";
 // includes nothing and `storage.h` has never heard of a URL.
 static_assert(kMaxNameLength == storage::kMaxNameLength,
               "a URL could name a file SPIFFS cannot store");
+
+// And the same tie for the credential: `web_auth.h` includes `<cstddef>` and
+// `<cstdint>` and has never heard of `config.json`, so this is the one place that
+// can say the buffer it sizes its base64 from is the pair of fields the operator
+// actually fills in. A field grown without this number is a device nobody can log
+// into, refused inside `BasicCredential` with no way to see why.
+static_assert(config::kWebUserSize - 1 + 1 + config::kWebPasswordSize - 1 + 1 ==
+                  kMaxCredentialSize,
+              "the credential fields and the buffer that encodes them have drifted");
 
 httpd_handle_t g_server = nullptr;
 
@@ -108,6 +118,18 @@ constexpr size_t kWifiJsonSize = kMaxSettingsBody + 1;
 constexpr size_t kMaxScan = 10;
 wifi::ScanResult g_scan[kMaxScan];
 
+// **The `Authorization` header on its way in.** In `.bss` like every other
+// buffer here, and bounded before a byte is read: `httpd_req_get_hdr_value_len`
+// is asked first, and a value longer than this is refused as a wrong credential
+// rather than read into anything. A header is the one field whose length whoever
+// sent it chooses.
+//
+// `Basic ` plus the longest credential this device can hold, plus room for the
+// extra whitespace a hand-written client leaves around it - which
+// `web_auth.cpp` tolerates and therefore has to be able to see.
+constexpr size_t kMaxAuthHeader = kMaxEncodedSize + 24;
+char g_auth[kMaxAuthHeader];
+
 DiagnosticsPrinter g_diagnostics = nullptr;
 
 // Where the approval counters come from, and why it is a hook rather than a call:
@@ -179,9 +201,127 @@ void Sample() {
         static_cast<uint32_t>(heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
 }
 
+// **A page rather than a sentence, when there is one on the filesystem.** A
+// phone that arrived at the wrong URL - or at a locked one - has no back button
+// that helps and no console to type in, so the page carries a link home. It is
+// streamed through the same chunk buffer as any other file, and the name is a
+// constant from `web_paths.h` rather than spelled here: the whitelist has an
+// opinion about these two files as well, which is the hole this shape keeps shut.
+//
+// False when there is no such file, so the caller can fall back to its sentence -
+// which is what a device flashed before the page existed answers. `*err` carries
+// what went wrong on the wire and means anything only when this returned true.
+bool SendStatusPage(httpd_req_t *request, const char *name, esp_err_t *err) {
+    char path[storage::kMaxPathLength] = {};
+    if (!storage::ResolvePath(name, path, sizeof path)) {
+        return false;
+    }
+    FILE *page = std::fopen(path, "rb");
+    if (page == nullptr) {
+        return false;
+    }
+    httpd_resp_set_type(request, ContentType(name));
+    for (;;) {
+        const size_t read = std::fread(g_chunk, 1, sizeof g_chunk, page);
+        if (read == 0) {
+            break;
+        }
+        if (httpd_resp_send_chunk(request, g_chunk, read) != ESP_OK) {
+            std::fclose(page);
+            *err = ESP_FAIL;
+            return true;
+        }
+    }
+    std::fclose(page);
+    *err = httpd_resp_send_chunk(request, nullptr, 0);
+    return true;
+}
+
+// A refusal and a missing file are **the same answer to whoever asked**, which is
+// §10.16's rule: "that extension is not served" tells somebody probing for
+// `config.json` that it is there. The difference is counted and logged on this
+// side and nowhere else.
+
+esp_err_t NotFound(httpd_req_t *request) {
+    httpd_resp_set_status(request, "404 Not Found");
+
+    esp_err_t err = ESP_OK;
+    if (SendStatusPage(request, kNotFoundName, &err)) {
+        return err;
+    }
+
+    // **And the sentence when there is not**, which is what a device flashed
+    // before that file existed answers: a 404 that failed to be a 404 would be
+    // the confusing outcome.
+    httpd_resp_set_type(request, "text/plain");
+    return httpd_resp_sendstr(request, "not found\n");
+}
+
+// --- The gate (CLAUDE.md §10.16) ------------------------------------------
+//
+// **Every route goes through this, the reads included.** `web.write` already
+// refuses the forms; what it cannot do is keep `/api/devstatus` - a few hundred
+// lines about this device, its bus and its registration - off a network. So with
+// a credential configured, nothing is served without one, and with none
+// configured nothing changes at all. `web_auth.h` has that rule and the three
+// others; what is here is the socket.
+esp_err_t Unauthorised(httpd_req_t *request) {
+    Count(&g_status.unauthorised);
+    httpd_resp_set_status(request, "401 Unauthorized");
+    // **This header is what makes a browser ask.** Without it a phone shows the
+    // body and no dialog, and there is then no way to type a password into this
+    // device at all - which is the one mistake that turns authentication into a
+    // lockout.
+    std::snprintf(g_json, sizeof g_json, "Basic realm=\"%s\", charset=\"UTF-8\"", kAuthRealm);
+    httpd_resp_set_hdr(request, "WWW-Authenticate", g_json);
+    // And nothing about a refused request is cached by anything, ever - unlike the
+    // pages, which are cached for a day (`File` below says why).
+    httpd_resp_set_hdr(request, "Cache-Control", "no-store");
+
+    esp_err_t err = ESP_OK;
+    if (SendStatusPage(request, kUnauthorisedName, &err)) {
+        return err;
+    }
+    httpd_resp_set_type(request, "text/plain");
+    return httpd_resp_sendstr(request, "unauthorized\n");
+}
+
+// True when this request may proceed. **It fails closed on every path it cannot
+// answer** - a header longer than this device can hold, a read that comes back
+// short - because the other kind of mistake is a network rather than a retype
+// (`web_auth.h`, rule 3).
+//
+// The credential is read out of the live config on each request rather than
+// cached at start, so `config set` and `config reload` take effect without the
+// server having to be cycled - the same call every other reader here makes.
+bool Allowed(httpd_req_t *request) {
+    const config::Web &web = config::Get().web;
+    if (!AuthRequired(web.user, web.password)) {
+        return true;
+    }
+
+    const size_t length = httpd_req_get_hdr_value_len(request, "Authorization");
+    if (length == 0 || length + 1 > sizeof g_auth) {
+        return false;
+    }
+    if (httpd_req_get_hdr_value_str(request, "Authorization", g_auth, sizeof g_auth) != ESP_OK) {
+        return false;
+    }
+    return Authorised(web.user, web.password, g_auth);
+}
+
 // --- The handlers --------------------------------------------------------
 
 esp_err_t StatusApi(httpd_req_t *request) {
+    // **The gate, and it is the first statement in every handler** (§10.16): a
+    // request with no credential must not reach a counter, a buffer or the I2C
+    // bus. With nothing configured this is a comparison against two empty strings
+    // and lets everybody through, which is what it did before authentication
+    // existed.
+    if (!Allowed(request)) {
+        return Unauthorised(request);
+    }
+
     Count(&g_status.api);
     Sample();
 
@@ -253,6 +393,15 @@ esp_err_t StatusApi(httpd_req_t *request) {
 
 // `devstatus`, the console's own dump, over HTTP (§10.16).
 esp_err_t DevStatusApi(httpd_req_t *request) {
+    // **The gate, and it is the first statement in every handler** (§10.16): a
+    // request with no credential must not reach a counter, a buffer or the I2C
+    // bus. With nothing configured this is a comparison against two empty strings
+    // and lets everybody through, which is what it did before authentication
+    // existed.
+    if (!Allowed(request)) {
+        return Unauthorised(request);
+    }
+
     Count(&g_status.api);
     if (g_diagnostics == nullptr) {
         httpd_resp_set_status(request, "503 Service Unavailable");
@@ -323,6 +472,15 @@ esp_err_t Refuse(httpd_req_t *request, const char *status, const char *why) {
 // `secured` and that is the whole of what a page is told about a key. Which is why
 // the POST has its "absent means keep it" rule — the two halves are one design.
 esp_err_t SettingsGet(httpd_req_t *request) {
+    // **The gate, and it is the first statement in every handler** (§10.16): a
+    // request with no credential must not reach a counter, a buffer or the I2C
+    // bus. With nothing configured this is a comparison against two empty strings
+    // and lets everybody through, which is what it did before authentication
+    // existed.
+    if (!Allowed(request)) {
+        return Unauthorised(request);
+    }
+
     Count(&g_status.api);
     const config::Wifi &wifi = config::Get().wifi;
     const wifimgr::Snapshot now = wifimgr::Get();
@@ -374,6 +532,15 @@ esp_err_t SettingsGet(httpd_req_t *request) {
 // (§10.8.6 gave the scan its own task for exactly that reason): somebody asked
 // for it, and a request is a thing that takes as long as it takes.
 esp_err_t WifiScanApi(httpd_req_t *request) {
+    // **The gate, and it is the first statement in every handler** (§10.16): a
+    // request with no credential must not reach a counter, a buffer or the I2C
+    // bus. With nothing configured this is a comparison against two empty strings
+    // and lets everybody through, which is what it did before authentication
+    // existed.
+    if (!Allowed(request)) {
+        return Unauthorised(request);
+    }
+
     Count(&g_status.api);
     size_t found = 0;
     const esp_err_t err = wifimgr::Scan(g_scan, kMaxScan, &found);
@@ -450,6 +617,15 @@ bool ReadBody(httpd_req_t *request, size_t *length) {
 // here is the socket and the two things only this side knows: whether writing is
 // allowed at all, and who to tell afterwards.
 esp_err_t SettingsApi(httpd_req_t *request) {
+    // **The gate, and it is the first statement in every handler** (§10.16): a
+    // request with no credential must not reach a counter, a buffer or the I2C
+    // bus. With nothing configured this is a comparison against two empty strings
+    // and lets everybody through, which is what it did before authentication
+    // existed.
+    if (!Allowed(request)) {
+        return Unauthorised(request);
+    }
+
     Count(&g_status.api);
     if (!WritingAllowed()) {
         ESP_LOGW(TAG, "a settings write was refused: config.json has web.write false");
@@ -489,6 +665,15 @@ esp_err_t SettingsApi(httpd_req_t *request) {
 // `POST /api/action?do=save|reload|retry|reconnect` — the four verbs that are not
 // a field. One route rather than four, and the parsing is `web_settings.cpp`'s.
 esp_err_t ActionApi(httpd_req_t *request) {
+    // **The gate, and it is the first statement in every handler** (§10.16): a
+    // request with no credential must not reach a counter, a buffer or the I2C
+    // bus. With nothing configured this is a comparison against two empty strings
+    // and lets everybody through, which is what it did before authentication
+    // existed.
+    if (!Allowed(request)) {
+        return Unauthorised(request);
+    }
+
     Count(&g_status.api);
     if (!WritingAllowed()) {
         return Refuse(request, "403 Forbidden", "this device is serving read-only");
@@ -529,46 +714,6 @@ esp_err_t ActionApi(httpd_req_t *request) {
     return httpd_resp_sendstr(request, g_json);
 }
 
-// A refusal and a missing file are **the same answer to whoever asked**, which is
-// §10.16's rule: "that extension is not served" tells somebody probing for
-// `config.json` that it is there. The difference is counted and logged on this
-// side and nowhere else.
-esp_err_t NotFound(httpd_req_t *request) {
-    httpd_resp_set_status(request, "404 Not Found");
-
-    // **A page rather than a sentence, when there is one on the filesystem.** A
-    // phone that arrived at the wrong URL has no back button that helps and no
-    // console to type in, so `404.html` carries a link home. It is streamed
-    // through the same chunk buffer as any other file, and it is `kNotFoundName`
-    // rather than a name spelled here - the whitelist has an opinion about that
-    // file too (`web_paths.h`).
-    char path[storage::kMaxPathLength] = {};
-    if (storage::ResolvePath(kNotFoundName, path, sizeof path)) {
-        FILE *page = std::fopen(path, "rb");
-        if (page != nullptr) {
-            httpd_resp_set_type(request, ContentType(kNotFoundName));
-            for (;;) {
-                const size_t read = std::fread(g_chunk, 1, sizeof g_chunk, page);
-                if (read == 0) {
-                    break;
-                }
-                if (httpd_resp_send_chunk(request, g_chunk, read) != ESP_OK) {
-                    std::fclose(page);
-                    return ESP_FAIL;
-                }
-            }
-            std::fclose(page);
-            return httpd_resp_send_chunk(request, nullptr, 0);
-        }
-    }
-
-    // **And the sentence when there is not**, which is what a device flashed
-    // before that file existed answers: a 404 that failed to be a 404 would be
-    // the confusing outcome.
-    httpd_resp_set_type(request, "text/plain");
-    return httpd_resp_sendstr(request, "not found\n");
-}
-
 // --- The one thing this server can do (§10.16) ----------------------------
 //
 // `POST /api/reboot?confirm=reboot`. Every other route reads; this one is the
@@ -590,6 +735,15 @@ esp_err_t NotFound(httpd_req_t *request) {
 //     save` reaches the filesystem (§10.15), so a reboot is where unsaved edits
 //     go. The page says so to the operator; this says it to the log.
 esp_err_t RebootApi(httpd_req_t *request) {
+    // **The gate, and it is the first statement in every handler** (§10.16): a
+    // request with no credential must not reach a counter, a buffer or the I2C
+    // bus. With nothing configured this is a comparison against two empty strings
+    // and lets everybody through, which is what it did before authentication
+    // existed.
+    if (!Allowed(request)) {
+        return Unauthorised(request);
+    }
+
     Count(&g_status.api);
     if (!ConfirmsReboot(request->uri)) {
         httpd_resp_set_status(request, "400 Bad Request");
@@ -618,6 +772,15 @@ esp_err_t RebootApi(httpd_req_t *request) {
 }
 
 esp_err_t File(httpd_req_t *request) {
+    // **The gate, and it is the first statement in every handler** (§10.16): a
+    // request with no credential must not reach a counter, a buffer or the I2C
+    // bus. With nothing configured this is a comparison against two empty strings
+    // and lets everybody through, which is what it did before authentication
+    // existed.
+    if (!Allowed(request)) {
+        return Unauthorised(request);
+    }
+
     char name[kMaxNameLength + 1] = {};
     if (!UriToName(request->uri, name, sizeof name)) {
         Count(&g_status.refused);
@@ -946,6 +1109,10 @@ Status Get() {
     Status out = g_status;
     out.desired = g_desired;
     out.running = g_server != nullptr;
+    // Read out of the live config rather than remembered, the same way the gate
+    // reads it: a credential set and not saved is a credential in force, and the
+    // readout has to agree with the door.
+    out.auth = AuthRequired(config::Get().web.user, config::Get().web.password);
     out.free_now = static_cast<uint32_t>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
     out.low_water = static_cast<uint32_t>(heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
     return out;

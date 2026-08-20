@@ -245,6 +245,17 @@ void test_web_the_switch_that_turns_writing_off_cannot_be_written(void) {
     AssertRefused("{\"web\":{\"write\":true}}", WriteResult::kUnknownField);
 }
 
+void test_web_the_credential_that_locks_the_site_cannot_be_written_from_it(void) {
+    // The other field named on its own, and for the sharper version of the same
+    // reason (§10.16): a form that could clear `web.user` is a lock that unlocks
+    // itself, and one that could *set* it is a way to lock the owner out of their
+    // own device from the LAN. Both are refused by the rule above rather than by a
+    // special case — the console and `config.json` are the two ways in.
+    AssertRefused("{\"web\":{\"user\":\"attacker\",\"password\":\"x\"}}",
+                  WriteResult::kUnknownField);
+    AssertRefused("{\"web\":{\"user\":\"\"}}", WriteResult::kUnknownField);
+}
+
 void test_web_junk_is_refused_as_junk(void) {
     AssertRefused("", WriteResult::kNotJson);
     AssertRefused("{\"wifi\":", WriteResult::kNotJson);
@@ -472,6 +483,7 @@ void RegisterWebSettingsTests(void) {
 
     RUN_TEST(test_web_a_field_that_is_not_on_the_list_is_refused);
     RUN_TEST(test_web_the_switch_that_turns_writing_off_cannot_be_written);
+    RUN_TEST(test_web_the_credential_that_locks_the_site_cannot_be_written_from_it);
     RUN_TEST(test_web_junk_is_refused_as_junk);
     RUN_TEST(test_web_a_value_of_the_wrong_kind_is_refused);
     RUN_TEST(test_web_a_mode_this_device_does_not_have_is_refused_not_guessed);

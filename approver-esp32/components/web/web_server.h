@@ -96,6 +96,15 @@ struct Status {
     uint32_t not_found = 0;  // an allowed name that is not on the filesystem
     uint32_t bytes = 0;      // sent out of files
 
+    // **Whether a credential is being asked for, and how often one was missing or
+    // wrong** (§10.16, `web_auth.h`). Both belong in the readout for the same
+    // reason: a site whose config has half a credential in it is *open*, and an
+    // operator has to be able to see that rather than assume the opposite. A
+    // climbing count with `auth` true is somebody guessing; with `auth` false it
+    // cannot happen at all.
+    bool auth = false;
+    uint32_t unauthorised = 0;
+
     // **The measurement.** Free heap just before `httpd_start`, free heap now,
     // and the low-water mark — which is the number §10.14.1 says decides whether
     // a device is safe. `after_stop` is what answers "does it give it all back":

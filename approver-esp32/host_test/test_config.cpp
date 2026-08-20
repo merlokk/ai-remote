@@ -113,9 +113,18 @@ void test_config_the_two_shipped_files_have_the_same_shape(void) {
     // key that was present hold the same number, so a struct comparison passes
     // for the very drift this exists to catch. Worse, it fails for something
     // that is *not* drift: the shipped `config.json` legitimately carries an
-    // operator's settings, so an AP channel of 1 against a default of 6 is a
-    // configured device, not a mistake. Both of those were learned here — the
+    // operator's settings, so its two placeholder networks against the factory
+    // file's empty list is a configured device, not a mistake — a restore is
+    // *supposed* to forget every network. Both of those were learned here — the
     // struct version started failing the day somebody edited the file.
+    //
+    // **But "values are ignored" has one exception, and it is the next test
+    // down.** Ignoring values is what let the two files disagree about whether
+    // the access point was *encrypted* for as long as they did (§10.9): one
+    // raised WPA2, the other left it open, and a restore silently changed what
+    // was on the air. Whether a network has a key is not a setting in the sense
+    // this test means — it is a property of the device somebody is standing next
+    // to.
     //
     // So: every key one file has, the other has too. Values are ignored.
     FreshWithDefaults();
@@ -165,6 +174,56 @@ void test_config_the_committed_file_carries_a_placeholder_password(void) {
 }
 
 // --- Parsing -------------------------------------------------------------
+
+void test_config_both_shipped_files_agree_on_whether_the_ap_is_protected(void) {
+    // §10.9, and the one value difference the shape test above may not ignore.
+    // `config.json` raised a WPA2 access point and `config.init.json` left it
+    // open, so **a restore turned the encryption off** — which nobody could
+    // predict from reading either file alone, and which now matters more than it
+    // did, because §10.16 serves a *writable* configuration site on that AP and a
+    // restored device has no other way in.
+    //
+    // **Not an equality assertion**: the two files may legitimately carry
+    // different keys some day. What they may never do is differ about whether
+    // there is one — the driver's rule is that empty means open and eight or more
+    // means WPA2 (§10.9), so that is the property compared.
+    FreshWithDefaults();
+    TEST_ASSERT_TRUE(fake::PutRepoFile("config.json"));
+
+    static char live_json[config::kMaxFileSize];
+    static char defaults_json[config::kMaxFileSize];
+    TEST_ASSERT_TRUE(fake::GetFile("config.json", live_json, sizeof(live_json)));
+    TEST_ASSERT_TRUE(fake::GetFile("config.init.json", defaults_json, sizeof(defaults_json)));
+
+    cJSON *live = cJSON_Parse(live_json);
+    cJSON *defaults = cJSON_Parse(defaults_json);
+    TEST_ASSERT_NOT_NULL(live);
+    TEST_ASSERT_NOT_NULL(defaults);
+
+    const char *keys[2] = {"", ""};
+    cJSON *files[2] = {live, defaults};
+    for (int i = 0; i < 2; ++i) {
+        const cJSON *wifi = cJSON_GetObjectItemCaseSensitive(files[i], "wifi");
+        const cJSON *ap = cJSON_GetObjectItemCaseSensitive(wifi, "ap");
+        const cJSON *password = cJSON_GetObjectItemCaseSensitive(ap, "password");
+        TEST_ASSERT_TRUE_MESSAGE(cJSON_IsString(password), "wifi.ap.password is not a string");
+        keys[i] = password->valuestring;
+    }
+
+    // The driver's own three cases (§10.9): open, WPA2, or refused outright.
+    for (int i = 0; i < 2; ++i) {
+        const size_t length = std::strlen(keys[i]);
+        TEST_ASSERT_TRUE_MESSAGE(length == 0 || length >= 8,
+                                 "an AP key of 1..7 bytes raises no access point at all");
+    }
+    TEST_ASSERT_EQUAL_MESSAGE(
+        std::strlen(keys[0]) == 0, std::strlen(keys[1]) == 0,
+        "one shipped file raises an open access point and the other a WPA2 one, "
+        "so a restore changes what is on the air");
+
+    cJSON_Delete(live);
+    cJSON_Delete(defaults);
+}
 
 void test_config_reads_every_field(void) {
     FreshWithDefaults();
@@ -298,6 +357,60 @@ void test_config_the_web_mode_round_trips(void) {
     TEST_ASSERT_EQUAL_INT(ESP_OK, config::Reload());
     TEST_ASSERT_EQUAL_INT(static_cast<int>(config::WebMode::kOn),
                           static_cast<int>(config::Get().web.mode));
+}
+
+void test_config_reads_the_web_credential(void) {
+    // The pair that locks the configuration site (§10.16). **Absent is the
+    // ordinary state** and it means an open site, which is why the shipped
+    // `config.json` says nothing about it and a device flashed with it behaves as
+    // it did before.
+    FreshWithDefaults();
+    fake::PutFile("config.json", kGoodJson);
+    TEST_ASSERT_EQUAL_INT(ESP_OK, config::Init());
+    TEST_ASSERT_EQUAL_STRING("", config::Get().web.user);
+    TEST_ASSERT_EQUAL_STRING("", config::Get().web.password);
+
+    fake::PutFile("config.json", R"({"web":{"user":"admin","password":"hunter2"}})");
+    TEST_ASSERT_EQUAL_INT(ESP_OK, config::Reload());
+    TEST_ASSERT_EQUAL_STRING("admin", config::Get().web.user);
+    TEST_ASSERT_EQUAL_STRING("hunter2", config::Get().web.password);
+}
+
+void test_config_a_web_credential_too_long_is_refused_not_cut(void) {
+    // `CopyString`'s rule, and here the consequence is the sharpest one it has: a
+    // password shortened by a byte is a device nobody can log into, and no log
+    // line anywhere says which byte.
+    FreshWithDefaults();
+    fake::PutFile("config.json", kGoodJson);
+    TEST_ASSERT_EQUAL_INT(ESP_OK, config::Init());
+    config::Get().web.user[0] = '\0';
+
+    char json[256] = {};
+    char password[config::kWebPasswordSize + 8] = {};
+    std::memset(password, 'p', sizeof password - 1);
+    std::snprintf(json, sizeof json, R"({"web":{"user":"a","password":"%s"}})", password);
+    fake::PutFile("config.json", json);
+    TEST_ASSERT_EQUAL_INT(ESP_OK, config::Reload());
+
+    TEST_ASSERT_EQUAL_STRING("a", config::Get().web.user);
+    TEST_ASSERT_EQUAL_STRING("", config::Get().web.password);
+}
+
+void test_config_the_web_credential_round_trips(void) {
+    // It has to survive `config save`, or the lock is one reboot deep. Written
+    // back like the Wi-Fi passphrase is: §10.15 keeps a password out of a log line
+    // and a console dump, and the file is where it keeps it.
+    FreshWithDefaults();
+    fake::PutFile("config.json", kGoodJson);
+    TEST_ASSERT_EQUAL_INT(ESP_OK, config::Init());
+
+    std::snprintf(config::Get().web.user, config::kWebUserSize, "%s", "operator");
+    std::snprintf(config::Get().web.password, config::kWebPasswordSize, "%s", "p:ss w0rd");
+    TEST_ASSERT_EQUAL_INT(ESP_OK, config::Save());
+    TEST_ASSERT_EQUAL_INT(ESP_OK, config::Reload());
+
+    TEST_ASSERT_EQUAL_STRING("operator", config::Get().web.user);
+    TEST_ASSERT_EQUAL_STRING("p:ss w0rd", config::Get().web.password);
 }
 
 void test_config_reads_the_wifi_mode_and_the_fallback_settings(void) {
@@ -1060,6 +1173,7 @@ void RegisterConfigTests(void) {
     RUN_TEST(test_config_the_shipped_defaults_parse);
     RUN_TEST(test_config_the_two_shipped_files_have_the_same_shape);
     RUN_TEST(test_config_the_committed_file_carries_a_placeholder_password);
+    RUN_TEST(test_config_both_shipped_files_agree_on_whether_the_ap_is_protected);
 
     RUN_TEST(test_config_reads_every_field);
     RUN_TEST(test_config_every_field_missing_falls_back_field_by_field);
@@ -1071,6 +1185,9 @@ void RegisterConfigTests(void) {
     RUN_TEST(test_config_no_web_section_is_auto);
     RUN_TEST(test_config_an_unknown_web_mode_keeps_the_default);
     RUN_TEST(test_config_the_web_mode_round_trips);
+    RUN_TEST(test_config_reads_the_web_credential);
+    RUN_TEST(test_config_a_web_credential_too_long_is_refused_not_cut);
+    RUN_TEST(test_config_the_web_credential_round_trips);
     RUN_TEST(test_config_reads_the_wifi_mode_and_the_fallback_settings);
     RUN_TEST(test_config_an_unknown_wifi_mode_keeps_the_default);
     RUN_TEST(test_config_the_access_point_settings_round_trip);

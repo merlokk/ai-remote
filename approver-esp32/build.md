@@ -345,6 +345,25 @@ is a note now instead of code). `libui.a` **9,088** (46 fewer), `libscreens.a`
 its drawing and its log line, which is the same point from the other end: a
 decision layer this cheap is a layer nobody has to ration.
 
+**And the configuration site's password, measured the same way and worth it for one
+column of the table.** §10.16's gate — basic auth on every route, off until a
+credential is set — is `libweb.a` 13,155 → **14,845 bytes**: **1,525 of flash**
+and **165 of RAM**, of which **157 is the `Authorization` header's buffer** and the
+other eight a string. `libconfig.a` 11,120 → **11,298** — 98 bytes of that is the
+two `char` fields the credential lives in, which is the whole of what a setting
+costs when it is a fixed struct. `libcli.a` 37,543 → **38,223** for `web login`,
+two rows in the readout and one in `config`. The app is 1,924,992 →
+**1,928,752 bytes**, 26 % of the slot still free.
+
+The shape to read out of that: **the comparison is 1.5 KB and the buffers are the
+RAM**, for the fourth time in this file — and the one number that is *not* here is
+the interesting one. There is no mbedTLS on that line: the credential is base64
+**encoded** and compared rather than decoded, so a primitive that would have cost
+what §10.6's libsodium costs is replaced by twenty lines of table lookup, and the
+one comparison standing between a network and this device's settings stays
+host-testable (`web_auth.h` argues the safety of that direction; the size is the
+side effect).
+
 Read next to the paragraph below, it is the same shape a third time: the layer
 with every decision in it costs a kilobyte of flash and no RAM at all, and what
 costs is *holding* things — a task stack, sixteen SSIDs, and the label buffers

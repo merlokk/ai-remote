@@ -162,7 +162,8 @@ void test_the_pages_this_site_is_made_of_are_all_reachable(void) {
     // catches everything else, and the two files they share. If one of these ever
     // stops passing the whitelist, the symptom on a phone is a blank page.
     const char *site[] = {"/index.html", "/devstatus.html", "/reboot.html",
-                          "/404.html",   "/app.css",        "/app.js"};
+                          "/404.html",   "/401.html",       "/app.css",
+                          "/app.js"};
     for (const char *uri : site) {
         char name[64] = {};
         TEST_ASSERT_TRUE_MESSAGE(Name(uri, name), uri);
@@ -181,6 +182,18 @@ void test_the_not_found_page_is_a_page_like_any_other(void) {
     TEST_ASSERT_TRUE(Name(uri, name));
     TEST_ASSERT_EQUAL_STRING(web::kNotFoundName, name);
     TEST_ASSERT_EQUAL_STRING("text/html", web::ContentType(web::kNotFoundName));
+}
+
+void test_the_unauthorised_page_is_a_page_like_any_other(void) {
+    // Opened by name for the same reason and asserted the same way (§10.16). It is
+    // also the one page the server sends to a request it has just refused, so it
+    // must not be able to name anything the whitelist would not.
+    char name[64] = {};
+    char uri[64] = {};
+    std::snprintf(uri, sizeof uri, "/%s", web::kUnauthorisedName);
+    TEST_ASSERT_TRUE(Name(uri, name));
+    TEST_ASSERT_EQUAL_STRING(web::kUnauthorisedName, name);
+    TEST_ASSERT_EQUAL_STRING("text/html", web::ContentType(web::kUnauthorisedName));
 }
 
 // --- The one thing this server can do (§10.16) ---------------------------
@@ -360,6 +373,7 @@ void RegisterWebPathTests(void) {
 
     RUN_TEST(test_the_pages_this_site_is_made_of_are_all_reachable);
     RUN_TEST(test_the_not_found_page_is_a_page_like_any_other);
+    RUN_TEST(test_the_unauthorised_page_is_a_page_like_any_other);
 
     RUN_TEST(test_a_reboot_needs_the_word);
     RUN_TEST(test_the_word_is_found_wherever_in_the_query_it_sits);

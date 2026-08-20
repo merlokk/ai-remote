@@ -44,6 +44,14 @@ inline constexpr size_t kMaxNetworks = 4;
 
 inline constexpr size_t kSsidSize = 33;      // 32 bytes + terminator
 inline constexpr size_t kPasswordSize = 65;  // 64 bytes + terminator
+
+// The configuration site's own credential (§10.16). **Sized like the Wi-Fi pair
+// above rather than by a fresh argument**: 32 bytes is more name than anybody
+// types into a phone with one thumb, and 64 is the ceiling a WPA key already has
+// here — so the longest thing this device can be asked for is a known 97 bytes,
+// which is what `web::kMaxCredentialSize` is built from.
+inline constexpr size_t kWebUserSize = 33;
+inline constexpr size_t kWebPasswordSize = 65;
 inline constexpr size_t kUrlSize = 64;
 inline constexpr size_t kTimezoneSize = 48;  // POSIX TZ, e.g. CET-1CEST,M3.5.0,M10.5.0/3
 inline constexpr size_t kHostSize = 64;
@@ -239,6 +247,24 @@ struct Web {
     // anything is not what it was asked for; the honest cost is written down in
     // §10.16, and TLS with credentials stays the real fix.
     bool write;
+
+    // **The credential the site asks for, and the switch is the pair itself**
+    // (§10.16, `web_auth.h`): both set is a locked site, either half missing is an
+    // open one. There is no third boolean beside them for the reason
+    // `Wifi::active` has none — two fields that can disagree is one bug report
+    // nobody can read.
+    //
+    // **Empty by default**, so a device flashed with the shipped `config.json`
+    // behaves exactly as it did before this existed. Basic authentication is not
+    // TLS and `web_auth.h` says so where the comparison lives; what it buys is a
+    // site that is no longer open to whoever finds the address.
+    //
+    // Neither field is reachable from the site itself — the whitelist of
+    // `web_settings.h` accepts `wifi` and `nats` and refuses everything else by
+    // name, so a form cannot lock this device or unlock it. The console and
+    // `config.json` are the two ways in, and that is deliberate.
+    char user[kWebUserSize];
+    char password[kWebPasswordSize];
 };
 
 // The touch correction of §10.8.5, as four plain numbers.

@@ -27,7 +27,13 @@
 # uses rather than through a second copy of the mapping. `ui` has an empty
 # `REQUIRES` and is a leaf of pure arithmetic, which is the argument
 # `components/display` already makes for depending on it (§10.8.5).
-idf_component_register(SRCS "web_paths.cpp" "web_policy.cpp" "web_settings.cpp" "web_server.cpp"
+# `web_auth.cpp` is on it for the same reason and with the strongest case of the
+# three: it is the comparison standing between a network and a device that can be
+# pointed at another NATS server, it includes `<cstddef>` and `<cstdint>`, and it
+# needs **no** crypto component — the credential is base64-encoded and compared,
+# never decoded (`web_auth.h` argues why that is the safer direction), so mbedTLS
+# stays out of this line and out of the host build.
+idf_component_register(SRCS "web_auth.cpp" "web_paths.cpp" "web_policy.cpp" "web_settings.cpp" "web_server.cpp"
                     INCLUDE_DIRS "."
                     REQUIRES esp_http_server storage config wifimgr app_update
                              nats registration boards ui espressif__cjson)

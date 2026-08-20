@@ -52,6 +52,14 @@ inline constexpr const char *kIndexName = "index.html";
 // gets to open a file by a rule the rest of the server does not follow.
 inline constexpr const char *kNotFoundName = "404.html";
 
+// And what a request with no credential gets (§10.16, `web_auth.h`). The same
+// argument as the page above, with one addition that is the whole reason it is a
+// page at all: a browser shows this body only after somebody *cancels* the
+// credential dialog, so it is the one screen that has to say what the device
+// wants and where the two words are set. It is on the whitelist like any other,
+// for the reason `404.html` is.
+inline constexpr const char *kUnauthorisedName = "401.html";
+
 // **Does this URL confirm a restart** (§10.16). The one thing this server can do
 // that changes the device, and the whole of what makes it two steps rather than
 // one: `POST /api/reboot?confirm=reboot`.

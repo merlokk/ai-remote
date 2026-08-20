@@ -324,7 +324,7 @@ every edit that has not reached the file is gone, which is why that row carries
 for the two rows that end the session — and what each one did is said on the row
 for three seconds afterwards (`saved`, `reloaded`, or `failed`).
 
-### `web [on|off|auto|cycle]`
+### `web [on|off|auto|cycle|login]`
 The configuration web server of §10.16. The three words set a **desired state**,
 they do not start anything: the server comes up only when there is a network to
 come up in, and the Wi-Fi manager's tick is what reconciles the two within 200 ms.
@@ -335,6 +335,7 @@ come up in, and the Wi-Fi manager's tick is what reconciles the two within 200 m
     wanted     on  (config: web auto)
     server     running on port 80
     reach      http://192.168.11.134/
+    auth       none - anyone who can reach it is served ('web login <user> <pw>')
     served     0 file(s), 0 byte(s), 0 api
     refused    0 not a page, 0 no such file
     heap       23696 free, 21756 lowest ever
@@ -352,6 +353,8 @@ is the radio's own answer rather than something rebuilt.
 | `web off` | never |
 | `web on` | up whenever there is a network |
 | `web auto` | only while this device is an access point — its own, or §10.9's fallback one. The default, and the cheap one |
+| `web login <user> <pw>` | ask for these before anything is served (§10.16). **Both words or neither** — a user with no password is an open site, so the empty half is refused rather than stored, and the readout says `OPEN` if a hand-edited file manages it anyway. A colon in the user name is refused too: basic auth uses it as the separator. Memory only, like every other setter |
+| `web login off` | serve to anyone who can reach it, which is the shipped default. **The way to switch it off** — `web login admin ""` is refused as half a credential, and `web login admin ''` sets the password to two apostrophes, because `esp_console` strips double quotes and not single ones. Found by typing it |
 | `web help` | the forms, which is also what an unrecognised word prints |
 
 What is on it, once a phone has the address: a front page of buttons with the
@@ -371,9 +374,15 @@ and it left 2,000 of 4,096 bytes untouched.
 …plus `GET /api/settings`, which is the settings a form may change — and `GET
 /api/wifi/scan`, which runs one.
 
+**And with `web login` set, none of the eight answers without a credential** — the
+reads included, which is the point: `web.write` already refuses the forms, and what
+it cannot do is keep `/api/devstatus` off a network.
+
 **Three of them write**, which is new: `POST /api/settings` takes the same document
 the GET answers with (a whitelist of fields — `wifi.mode`, the access point, the four
-networks, `nats.url`, and nothing else in `config.json`), and `POST
+networks, `nats.url`, and nothing else in `config.json` — `web.user` and
+`web.password` included, so nothing arriving over HTTP can lock this device or
+unlock it), and `POST
 /api/action?do=save|reload|retry|reconnect` is the four verbs that are not a field.
 Everything is **memory only** until `do=save`, like every setter here, and a password
 that is not in the document is *kept* rather than cleared — the device never sends one
@@ -397,6 +406,25 @@ again.
 browser: a name the whitelist would not serve — somebody asking for something like
 `config.json` — and a name that is simply not on the filesystem. Both answer 404,
 because telling the two apart is telling somebody the file is there.
+
+`auth` is the line that says whether the door is locked, and it has a third state
+worth the words it takes: `basic, user 'admin'` when both halves are set,
+`none - anyone who can reach it is served` when neither is, and **`OPEN - the user
+is set and the password is not`** when a hand-edited `config.json` managed half of
+one. The gate is on when the *pair* is there, so half a credential is an open site,
+and this is the one place that difference is visible. The password is never printed,
+here or in `config` — §10.15's rule, and a console dump is exactly the audience it
+names.
+
+    web login admin hunter2
+    the site now asks for user 'admin' - in memory only, 'config save' writes it to config.json
+    basic auth is not TLS: the password crosses this network readable
+
+A fourth counter appears under `refused` once anything has been turned away —
+`unauth 2 request(s) with no credential or the wrong one`. **A count of one or two
+per visit is the handshake, not an attack**: a browser has no way to know a
+password is wanted until the 401 tells it. A count that climbs while nobody is
+using it is somebody guessing.
 
 **`web cycle [n]` is the reason this command exists.** It starts and stops the
 server n times (default 10, capped at 50) and prints the resting heap after each,
@@ -545,9 +573,14 @@ memory only.
 
 ### `config`
 Prints everything parsed out of `config.json`: Wi-Fi mode and networks, the
-fallback access point, the internet check, the NATS URL, the time zone and
-SNTP server, display timeouts and the volume. Passwords show as *set* or *not
-set*, never in full.
+fallback access point, the internet check, the NATS URL, the configuration site's
+mode and credential, the time zone and SNTP server, display timeouts and the
+volume. Passwords show as *set* or *not set*, never in full.
+
+The site's row is three words — `web auto, writable, no password`, or the user name
+in place of that last one when a credential is set (§10.16). The user name is
+printed because it is the half somebody has to type into a phone; the password is
+not, for the reason the network keys above it are not.
 
 One line appears only sometimes: **`boot config restored (KEY was held)`**, when
 this boot began with `KEY` held down and the settings were put back to the

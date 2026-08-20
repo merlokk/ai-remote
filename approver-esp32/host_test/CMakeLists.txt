@@ -106,6 +106,7 @@ add_executable(host_test
     test_settings_menu.cpp
     test_wifi_view.cpp
     test_web_paths.cpp
+    test_web_auth.cpp
     test_web_settings.cpp
     test_touch_cal.cpp
     test_idle.cpp
@@ -129,6 +130,11 @@ add_executable(host_test
     # else, for the reason every other decision-holding file here manages it.
     ../components/web/web_paths.cpp
     ../components/web/web_policy.cpp
+    # And who may reach any of it (§10.16's gate). `<cstddef>` and `<cstdint>`,
+    # with the base64 written out here rather than taken from mbedTLS — which is
+    # what lets the one comparison that stands between a network and this device's
+    # settings be exercised by a host compiler.
+    ../components/web/web_auth.cpp
     # And what a *form* may change (§10.16's write path). It needs cJSON, the
     # config layer and the URL parser next door — all three already compile here,
     # which is what makes the one path into this device from outside testable with

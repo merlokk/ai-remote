@@ -44,6 +44,7 @@
 #include "timezone.h"
 #include "wifi_manager.h"
 #include "wifi_radio.h"
+#include "web_auth.h"
 #include "web_server.h"
 
 namespace console {
@@ -1100,6 +1101,17 @@ int CmdConfig(int argc, char **argv) {
                c.wifi.networks[i].ip.enabled ? c.wifi.networks[i].ip.address : "dhcp");
     }
     printf("nats       %s\n", c.nats.url);
+    // **The site, and whether it is locked** (§10.16). The password is never
+    // printed for the reason the network keys above are not: §10.15 makes it a
+    // secret from the moment it is typed, and a console dump is the audience that
+    // rule names. The *user* is printed, because that is the half somebody has to
+    // type into a phone.
+    printf("web        %s, %s, %s\n",
+           c.web.mode == config::WebMode::kOff
+               ? "off"
+               : (c.web.mode == config::WebMode::kOn ? "on" : "auto"),
+           c.web.write ? "writable" : "read-only",
+           web::AuthRequired(c.web.user, c.web.password) ? c.web.user : "no password");
     const int offset = tz::OffsetSeconds();
     printf("time       %s (%s), UTC%+03d:%02d%s\n", c.time.zone, c.time.posix, offset / 3600,
            abs(offset % 3600) / 60, tz::IsDaylightSaving() ? ", DST now" : "");
@@ -3283,6 +3295,8 @@ void PrintWebUsage() {
     printf("       web off               never\n");
     printf("       web auto              only while this device is an access point\n");
     printf("       web cycle [n]         start and stop it n times, and print the drift\n");
+    printf("       web login <user> <pw> ask for these before anything is served\n");
+    printf("       web login off         serve to anyone who can reach it\n");
     printf("       web help              this\n");
     printf("the mode is a wish: it comes up only with a network, in memory only\n");
     printf("the pages can change the wi-fi and bus settings, and can restart this\n");
@@ -3332,6 +3346,21 @@ void PrintWebStatus() {
                static_cast<unsigned>((wifi.radio.ip >> 16) & 0xFF),
                static_cast<unsigned>((wifi.radio.ip >> 24) & 0xFF));
     }
+    // **Whether the site is locked, and the open case is said out loud** (§10.16).
+    // A config with half a credential in it serves to anyone, and "half" is a
+    // state an operator reaches in one typo — so this prints what the door does
+    // rather than what the file nearly says. The password is never printed:
+    // §10.15's rule, and a console dump is the audience it names.
+    const config::Web &web_cfg = config::Get().web;
+    if (now.auth) {
+        printf("auth       basic, user '%s'\n", web_cfg.user);
+    } else if (web_cfg.user[0] != '\0' || web_cfg.password[0] != '\0') {
+        printf("auth       OPEN - %s is set and %s is not ('web login <user> <pw>')\n",
+               web_cfg.user[0] != '\0' ? "the user" : "the password",
+               web_cfg.user[0] != '\0' ? "the password" : "the user");
+    } else {
+        printf("auth       none - anyone who can reach it is served ('web login <user> <pw>')\n");
+    }
     printf("served     %" PRIu32 " file(s), %" PRIu32 " byte(s), %" PRIu32 " api\n",
            now.requests, now.bytes, now.api);
     // **Two refusals, counted apart.** A name the whitelist would not serve is
@@ -3340,6 +3369,15 @@ void PrintWebStatus() {
     // (§10.16), and this is where the difference lives.
     printf("refused    %" PRIu32 " not a page, %" PRIu32 " no such file\n", now.refused,
            now.not_found);
+    if (now.unauthorised != 0) {
+        // Printed only when it is not zero, and it cannot be non-zero on a site
+        // with no credential. **The first one is always the browser** — it has no
+        // way to know a password is wanted until the 401 says so — so one or two
+        // per visit is the handshake, and a count that climbs on its own is
+        // somebody guessing.
+        printf("unauth     %" PRIu32 " request(s) with no credential or the wrong one\n",
+               now.unauthorised);
+    }
     printf("heap       %" PRIu32 " free, %" PRIu32 " lowest ever\n", now.free_now,
            now.low_water);
     if (now.task_stack_low != 0) {
@@ -3378,6 +3416,69 @@ int CmdWeb(int argc, char **argv) {
     }
     if (strcmp(argv[1], "help") == 0) {
         PrintWebUsage();
+        return 0;
+    }
+
+    // **The credential, and it is the one setter here that takes two words.**
+    // §10.16's gate is on when both halves are set, so setting them is one action
+    // rather than two — a device left with a user and no password is an open site
+    // that reads as a locked one, and the readout above has a line for that state
+    // precisely because a two-step setter would create it routinely.
+    //
+    // **It is typed here rather than sent to the site**, and that is the point:
+    // the whitelist of `web_settings.h` refuses `web` outright, so nothing that
+    // arrives over HTTP can lock this device or unlock it. The console and
+    // `config.json` are the two ways in.
+    //
+    // In memory only, like every other setter (§10.15) — and this one says what
+    // that costs out loud, because a credential that does not survive a reboot is
+    // the surprise that matters.
+    if (strcmp(argv[1], "login") == 0) {
+        config::Web &web_cfg = config::Get().web;
+        if (argc == 3 && strcmp(argv[2], "off") == 0) {
+            web_cfg.user[0] = '\0';
+            web_cfg.password[0] = '\0';
+            printf("the site is open to anyone who can reach it - 'config save' writes that "
+                   "to %s\n",
+                   config::kPath);
+            return 0;
+        }
+        if (argc != 4) {
+            printf("usage: web login <user> <password>   or   web login off\n");
+            return 1;
+        }
+        if (argv[2][0] == '\0' || argv[3][0] == '\0') {
+            // Half a credential is an open site, so the empty half is refused
+            // rather than stored: 'web login off' is how it is turned off, in as
+            // many words.
+            printf("both halves or neither - 'web login off' is how it is switched off\n");
+            return 1;
+        }
+        if (strchr(argv[2], ':') != nullptr) {
+            // Basic authentication cannot represent it (`web_auth.h`): the colon is
+            // the separator, so a user with one in it is two credentials wearing
+            // one name. Refused here so that it is refused *before* it becomes a
+            // device nobody can log into.
+            printf("a user name cannot contain a colon - basic auth uses it as the "
+                   "separator\n");
+            return 1;
+        }
+        if (strlen(argv[2]) >= config::kWebUserSize ||
+            strlen(argv[3]) >= config::kWebPasswordSize) {
+            printf("at most %u bytes of user and %u of password\n",
+                   static_cast<unsigned>(config::kWebUserSize - 1),
+                   static_cast<unsigned>(config::kWebPasswordSize - 1));
+            return 1;
+        }
+        snprintf(web_cfg.user, config::kWebUserSize, "%s", argv[2]);
+        snprintf(web_cfg.password, config::kWebPasswordSize, "%s", argv[3]);
+        // **The password is not echoed**, here or anywhere (§10.15). The user name
+        // is, because that is the half somebody has to type into a phone and
+        // getting it wrong is the ordinary mistake.
+        printf("the site now asks for user '%s' - in memory only, 'config save' writes it "
+               "to %s\n",
+               web_cfg.user, config::kPath);
+        printf("basic auth is not TLS: the password crosses this network readable\n");
         return 0;
     }
 

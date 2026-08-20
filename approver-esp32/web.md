@@ -1,7 +1,7 @@
 # approver-esp32 — the configuration site on the device
 
 This file owns **§10.16** of the project docs: the `esp_http_server` behind
-`components/web`, the six pages it serves off SPIFFS, the desired-state switch
+`components/web`, the seven pages it serves off SPIFFS, the desired-state switch
 that brings it up and down with the network, the whitelist that keeps a WPA
 passphrase off the LAN, the write path and what it refuses, and the numbers —
 including the 16 KB taken off LVGL to make a page arrive at all. Section numbers
@@ -11,7 +11,10 @@ number here.
 Two rules from elsewhere bind everything below, and neither is restated as
 though it were new: **nothing here can reach a verdict** (§10.10, in
 [`CLAUDE.md`](CLAUDE.md)), and the **trust boundary is the router** (§10.3, same
-file) — so `web.write` is a switch and not authentication.
+file) — so `web.write` is a switch and not authentication. There *is*
+authentication now, in a section of its own: a user and a password in `config.json`
+put basic auth on every route. It is a lock rather than a switch, it is still not
+TLS, and that section says both in as many words.
 
 Where the rest of §10 lives:
 
@@ -59,14 +62,16 @@ and the twenty rounds that follow are flat at 27,180 bytes with the same AP up.
 A single before/after pair cannot tell those apart, which is the whole argument
 for cycling.
 
-#### The site — six pages, one column, a phone's width
+#### The site — seven pages, one column, a phone's width
 
 The single `index.html` this section started with was a table and a `<pre>` on one
 page: enough to answer "does the server work", which is what it was for. What is
 there now is the site the repository owner asked for, in the order they asked for
 it — **the front page of buttons, the `devstatus` page, the restart, and the
 404**, and then **the Wi-Fi and bus pages**, which were drawn on the list and
-marked `soon` until they were asked for and are the two that write (below).
+marked `soon` until they were asked for and are the two that write (below). A
+seventh arrived with the credential — `401.html`, the only one nobody navigates
+to.
 
 | File | What it is |
 |---|---|
@@ -76,6 +81,7 @@ marked `soon` until they were asked for and are the two that write (below).
 | `nats.html` | one address, and what the bus is doing with it |
 | `reboot.html` | one action, asked for twice |
 | `404.html` | what a refusal and a missing file both look like |
+| `401.html` | what a request with no credential gets, behind the browser's own dialog — the one page whose body is only read by somebody who dismissed that box, so it says where the two words are set |
 | `app.js` | **the stylesheet and every page's script**, in one file — and the shape of that is a memory decision rather than a taste one, below |
 
 **Mobile first and mobile only, deliberately.** This page exists to be opened on a
@@ -217,6 +223,103 @@ then the case that matters — **the form as a browser submits it, every network
 no password in it, applied and saved, left all four keys on the filesystem exactly
 as they were**, and the static address with them. `config` on the console is what
 says so.
+
+#### A password on the door, and the question that was open until it existed
+
+**The open decision at the end of this section is now taken**, in the first of the
+two ways it named: HTTP basic authentication over the whole site, off until
+`config.json` carries a user and a password, asked for by the repository owner and
+modelled on the house firmware of §10.14.4, which answers the same question with
+`users.json` and the same scheme. `components/web/web_auth.h` is the rule and
+`web_auth.cpp` is 130 lines under it; the gate is the first statement in all eight
+handlers.
+
+| | |
+|---|---|
+| what turns it on | **the pair itself** — `web.user` and `web.password` in `config.json`, or `web login <user> <pw>` on the console. Either half alone leaves the site open, and the readout says `OPEN` in those words rather than letting a typo look like a lock |
+| what it covers | **everything**: the pages, `/api/status`, `/api/devstatus`, the settings form, the scan, the four actions and the reboot. Not the write path — the *whole* site |
+| what a refusal looks like | `401` with `WWW-Authenticate: Basic realm="approver-esp32"`, so a browser puts up its own dialog, and `401.html` behind it for whoever dismisses the box |
+| where it cannot be changed from | **the site**. `web` is not on the write path's whitelist, so nothing arriving over HTTP can lock this device or unlock it — the console and the file are the two ways in, and that is a test |
+| what it costs | `libweb.a` 13,155 → **14,845 bytes** (1,525 of flash and 165 of RAM, of which 157 is the header buffer); `libconfig.a` +178 for the two fields; `libcli.a` +680 for `web login` and two readout rows; the app 1,924,992 → **1,928,752 bytes**, 26 % of the slot still free. `401.html` is 1,325 bytes of a partition with 9.8 MB spare |
+
+**Four rules hold it up, and each is a host test** (21 of them, and they need no
+board because the file includes `<cstddef>` and `<cstdint>`):
+
+1. **The pair is the switch.** No third boolean to disagree with the two strings —
+   the call `Wifi::active` makes, and §10.15's reason for it. A device flashed with
+   the shipped `config.json`, which carries the two fields empty, therefore behaves
+   exactly as it did before this existed.
+2. **The credential is encoded, never decoded.** The expected `user:password` is
+   base64'd once per request and the header is compared against *that*. There is no
+   decoder here, and that is `web_paths.h`'s argument about percent-decoding
+   arriving from the other side: decoding is where the parsing bugs live, and a
+   device with no decoder has none of them. It is also why **mbedTLS is not on this
+   component's line** — the encoder is twenty lines of table lookup, which is what
+   keeps the one comparison standing between a network and this device's settings
+   testable by a host compiler. The honest cost is that a client sending a
+   non-canonical encoding of the right credential is refused, and no client does.
+3. **Fail closed, on every path that cannot answer.** No header, a scheme this does
+   not speak, a header longer than the device can hold, a colon in the user name —
+   all of them 401. A refusal is somebody retyping a password; the other kind of
+   mistake is a network.
+4. **The comparison does not stop early.** It runs to the end of the expected
+   string whatever the header says, so its duration carries no information about how
+   much of a guess was right. Cheap here, and the one class of bug a hand-written
+   compare walks straight into.
+
+Two smaller decisions that came out of writing it. The **scheme token is matched
+case-insensitively** — RFC 7235 says it is, and some clients take it at their word —
+while the base64 after it is data and is matched byte for byte. And **a colon is
+refused in the user name**, at the console and inside the encoder both: basic
+authentication uses it as the separator, so `a:b` + `c` and `a` + `b:c` are the same
+bytes on the wire, and a user with one in it is two credentials wearing one name.
+A colon in the *password* is fine and has to be — everything after the first one is
+the password.
+
+**And it must be said plainly, because the alternative is somebody believing
+otherwise: this is not TLS.** Basic authentication puts the password on the wire in
+base64, which is not encryption — anyone who can see the packets can read it, and
+§10.3 already says who that is on this LAN. What it buys is real and bounded: the
+site is no longer open to whoever finds the address, and a device on a network its
+owner half-trusts now has something better than a switch. TLS stays the real fix,
+in §2.5's company. The console says the same sentence when the credential is set,
+once, where somebody is looking.
+
+**What the board said**, over the LAN, with the device at `192.168.11.134` and the
+credential set from the console. All eleven routes answered `401` with no
+credential — the pages, `/app.js`, `/404.html`, both API reads, `GET
+/api/settings`, the scan, `POST /api/settings`, `POST /api/action?do=save` and
+**`POST /api/reboot?confirm=reboot`, which answered 401 instead of restarting**,
+which is the one of those eleven that would have been visible if the gate had been
+one statement lower. The header is what a browser needs
+(`WWW-Authenticate: Basic realm="approver-esp32", charset="UTF-8"`, with
+`Cache-Control: no-store`), `401.html` came back as the body, and every way a
+credential can be wrong reproduced what the host tests assert: wrong password,
+wrong user, a prefix (`admin:hunter`), a suffix (`admin:hunter22`), `Bearer` with
+the right bytes in it, the credential with no scheme in front, and a base64 string
+two characters short — all 401; a lower-case `basic` and extra spaces after it —
+200, as designed. With the credential, all seven readable routes answered 200 and
+`POST /api/action?do=nonsense` answered **400**, which is the useful shape: through
+the gate and refused by the verb. And the whitelist held on the other side of it —
+an authenticated `{"web":{"user":"attacker"}}` came back
+`{"ok":false,"error":"this device has no such setting","detail":"web"}` while
+`{"nats":{"url":…}}` went through. The readout: `auth basic, user 'admin'` with no
+password in it, `unauth 22`, and the server's stack margin unmoved at 1,756 of
+4,096 bytes.
+
+**One thing that run found, and it is a layer below this one.** An
+`Authorization` header of 400 characters is refused by the gate as too long for
+its buffer — fail-closed, counted, 401. One of **4,000** never arrives at all:
+`esp_http_server` drops it against `CONFIG_HTTPD_MAX_REQ_HDR_LEN` and closes the
+connection, so `curl` reports no response, `unauth` does not move, and the next
+request is served normally. Both outcomes are refusals and the device survives
+either; what it means for the code is that this component's own "too long" branch
+is only reachable between its 157 bytes and the framework's 512, and the range
+above that belongs to the framework. Worth knowing before somebody reads the
+missing 401 as a missing check.
+
+The line §10.10 draws is untouched either way: **nothing on this site can reach a
+verdict**, with a credential or without one.
 
 #### The one thing it can do without asking: `POST /api/reboot`
 
@@ -535,10 +638,12 @@ no page here has a stylesheet link.
   owner asked for those two pages; what survived the change is the shape of the
   answer, which is a list of what may be written rather than a merge of whatever
   arrives.
-- **Nothing authenticates.** `web.write: false` refuses the whole write path, and
-  it is a switch rather than a lock — anybody who can reach the server can submit
-  the form. That is §10.3's boundary and the decision at the end of this section
-  is where it gets moved on purpose.
+- **Nothing *else* authenticates, and nothing is encrypted.** The credential of the
+  section above is a lock on the door and `web.write: false` is still the switch
+  beside it, but on a device with no credential set — the shipped default — the site
+  is open to whoever can reach it, exactly as it was. And with one set, the password
+  crosses the network readable: basic authentication is not TLS, which is the
+  sentence that section refuses to bury.
 - **Nothing decides for the operator.** `web auto` is as close as this gets to
   automatic, and it is deliberately about the *access point* rather than about
   §10.9's window: the fallback AP going up is what raises the server, and its
@@ -572,19 +677,26 @@ defended against — and **nothing is percent-decoded**, because decoding is whe
 the traversal bugs live. All of it is `<cstddef>`-only and host-tested (28 tests, with 29 more next door over the write path),
 and the suite reads as a list of things that must not leave the device.
 
-And the decision that is still open, which the *write* path shipped ahead of:
-this section named authentication as the thing a writable config needed first,
-the pages above were then asked for, and what was built is the narrowest write
-there is — a whitelist, write-only passwords, memory until a save, and
-`web.write` to refuse the lot. **None of that is the missing piece.** The
-boundary moved when the first `POST` landed, and moving it back on purpose means
-one of two things: authentication (the house firmware of §10.14.4 answers this
-with `users.json` and basic auth), or — more likely for this device — **binding
-the server to the access-point interface only**. The server exists to configure a
-device that has no network yet; on the LAN §10.3 already put the trust boundary
-at the router for *reading*, and reading is what that argument covers.
+And the decision that was open here **is taken**, which is worth reading as the
+sequence it happened in rather than as a fact: this section named authentication as
+the thing a writable config needed first; the pages were then asked for and shipped
+ahead of it, with the narrowest write there is — a whitelist, write-only passwords,
+memory until a save, and `web.write` to refuse the lot; **none of which was the
+missing piece**, because the boundary moved when the first `POST` landed. It is
+moved back now, in the first of the two ways this paragraph named: basic
+authentication over every route, off until a credential is set, with its own
+section above.
 
-Until one of those is taken, `web.write` is the whole of the answer and it is a
-switch rather than a lock: it is what a device on a network its owner does not
-trust has, and it is not authentication.
+The **second** way is still worth having and is not made redundant by the first:
+**binding the server to the access-point interface only**. The server exists to
+configure a device that has no network yet, so on a working client link there is
+nothing it needs to be reachable for — and a socket that does not exist cannot have
+its password read off the wire, which is the one thing a credential over cleartext
+HTTP cannot fix. Nothing in the code decides this today: `web auto` is about the
+*access point being up*, not about which interface the listener binds to.
+
+So what a device on a network its owner does not trust has, in order of strength:
+the interface it is not on, then a password, then `web.write`. Only the last two
+exist, and TLS on the bus and on this port (§2.5) is what would make the middle one
+more than a speed bump.
 
