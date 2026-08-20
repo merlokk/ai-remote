@@ -1,7 +1,9 @@
 {
     "web": {
         "mode": "auto",
-        "write": true
+        "write": true,
+        "user": "",
+        "password": ""
     },
     "wifi": {
         "active": false,
@@ -10,7 +12,7 @@
         "apWindowSeconds": 120,
         "ap": {
             "ssid": "approver-esp32",
-            "password": "",
+            "password": "approver-esp32-ap",
             "channel": 6
         },
         "networks": []

@@ -311,16 +311,48 @@ mode — accept it and raise an open network instead — is an access point
 somebody believes is protected. Refusing is the honest answer, and `wifi`
 showing `open` next to a password that was set is the symptom to look for.
 
-**The two shipped files disagree about this on purpose, and the consequence is
-worth knowing before it surprises somebody**: `config.json` raises a WPA2 AP
-and `config.init.json` — the factory defaults — leaves it open, so a **restore
-(§10.15, or holding `KEY` at boot) opens the access point**. Neither is more
-correct than the other. A key committed to this repository is a key everyone
-with the repository has, so it is a lock against a casual neighbour rather than
-a secret; and while that AP still serves nothing and stays up two minutes at a
-time, an open one is not much of an exposure either. When §10.8.6 gives it a
-screen to serve — and a WPA key typed into it — this is the line to revisit,
-and the two files should stop disagreeing at the same time.
+**The two shipped files used to disagree about this and no longer do**, and the
+reason they were made to agree is worth more than the change itself. `config.json`
+raised a WPA2 AP; `config.init.json` — the factory defaults — left it open, so a
+**restore (§10.15, or holding `KEY` at boot) silently opened the access point**.
+That was defensible while the AP served nothing and stayed up two minutes at a
+time. It stopped being defensible when §10.16 put a **writable** configuration site
+on it: after a restore the device has no remembered networks, so that AP is the
+only way in short of a cable, and the restore state was therefore "open access
+point, writable config, no credential". Both files now carry
+`"password": "approver-esp32-ap"` and channel 6, so a restore changes what is
+*known* and never what is *on the air*.
+
+**What that key is, said plainly, because it is committed**: everyone with this
+repository has it, so it is not a secret and nothing should be built on it being
+one. What it buys over an open network is that joining requires having the
+repository rather than guessing — which is the difference the previous value,
+`88888888`, did not buy: eight digits is on every wordlist, so it was a lock
+against nobody while reading like a lock against somebody. Long and boring beats
+short and secret-shaped for a value that ships in git.
+
+Two things this deliberately does **not** do, and both are decisions rather than
+omissions:
+
+- **the factory defaults stay writable** (`web.write: true`). A restored device
+  with no networks is precisely the case §10.16 exists for — a phone on the AP is
+  the way back in without a cable — so switching writing off in the defaults would
+  disarm the recovery path to protect it. The residual risk is real and is written
+  down here instead: anyone with this repository who is in range of a *restored*
+  device can rewrite its network list and its bus address. They cannot reach a
+  verdict (§10.10), and the two real fixes are §10.16's own — a credential set by
+  the operator, or binding the listener to the AP interface only;
+- **no default HTTP credential.** A committed `web.user` / `web.password` would be
+  a credential everyone has, guarding the writable thing — strictly worse than the
+  WPA key, because it would read as authentication. §10.16's basic auth ships off
+  for exactly this reason, and setting it is an operator's first act on a restored
+  device (`web login`, then `config save`).
+
+The channel converged too, on the factory defaults' **6** rather than
+`config.json`'s 1, and that difference was drift rather than a decision — nothing
+here ever argued for either. 1, 6 and 11 are the non-overlapping 2.4 GHz channels
+and consumer routers commonly sit on 1, so 6 is the one least likely to land on top
+of the network this device is trying to replace.
 
 #### Is there an internet through it?
 
@@ -1022,6 +1054,15 @@ removing it; and `config.json` and `config.init.json` having the same shape —
 the last one is the test that catches the two drifting apart, and the Wi-Fi
 block of §10.9 was added to it as the newest half of the file and therefore the
 likeliest to be put in one file and forgotten in the other.
+
+**And one value beside the shape, because ignoring values is what let the AP
+password disagreement live** (§10.9): the two files must agree on **whether the
+access point has a key at all**. Not on the key — they may carry different ones
+some day — but on the driver's three cases, since a restore that silently turns
+the encryption off is not a setting changing, it is the device changing. It is
+deliberately the narrow assertion: the shape test's own reasoning is that values
+legitimately differ, and it is right about every value except this one. Confirmed
+by putting the old state back and watching it fail before it was kept.
 
 Four came with that block: the settings read back as written; an unknown
 `wifi.mode` keeping the default rather than being guessed at; the access point
