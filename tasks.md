@@ -147,16 +147,20 @@ so this is a `nats/` change, not a firmware one.
 
 ### 2.6 ESP32 device-tier checks written but not performed
 
-Each of these is a thing no host test can reach, listed with what it needs:
+Each of these is a thing no host test can reach, listed with what it needs. **Three
+of the original six are done** and are recorded where the behaviour lives rather
+than here — the touch calibration's four crosses pressed and the fit applied, the
+settings list dragged with a finger, and `poweroff` actually switching the board
+off, which needed the one session this repository cannot script: the cable out, so
+on battery, with no console to watch it from.
 
 | What | Needs | Where it is recorded |
 |---|---|---|
 | the **pressed half** of `tests/test_esp32_device.py` — one press producing a reply `hook.verify_reply` calls trusted, and the nine tamper assertions that come free with it | a finger | `tests.md` tier 3, `status.md` |
-| the settings list's **scroll by finger**, a row pressed, and the three seconds of `saved` | a finger (`screen` on the console deliberately cannot press a row or draw a gesture) | `screens.md` §10.8.5 |
-| the touch calibration's **on-glass half** — four crosses, the fit applied | a finger | `status.md` |
-| `poweroff` actually switching the board off | the cable out, and with the cable out there is no console to watch it from — waits for a battery-powered session | `protocol.md` §10.7, `screens.md` §10.8.5 |
+| the settings list's **three seconds of `saved`** — the row saying what it did after a press. The save works from the console and the row calls the same function; nobody has watched the row say so | a finger | `screens.md` §10.8.5 |
 | Wi-Fi **auth-failure classification** (sticky, and spelled differently from "no such network") | a network whose password is deliberately wrong | `firmware.md` §10.9 |
 | SNTP's **six-hour interval** and its backoff | a device up that long | `status.md` |
+| a **browser** on the configuration site of §10.16 — the credential dialog put up and dismissed. Every route was checked with `curl`, which is not a browser | a phone or a laptop on the same network | `web.md` §10.16, `status.md` |
 
 ### 2.7 Frame-level fuzzing of the NATS client is still owed (§10.5)
 

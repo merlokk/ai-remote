@@ -547,9 +547,13 @@ on purpose: a `config.json` write interrupted mid-reboot is the power cut
 §10.15 already recovers from at boot, so there is nothing here worth waiting
 for that is not already handled.
 
-**The refusal is tested on hardware; the shutdown itself is not, and cannot be
-from here** — it needs the cable out, and with the cable out there is no console
-to watch it from. That half waits for a battery-powered session.
+**Both halves are tested on hardware now.** The refusal always could be, from a
+console over the cable that causes it. The shutdown could not: it needs the cable
+out, and with the cable out there is no console to watch it from — so it waited for
+a battery-powered session, and that session has happened. The board switches off.
+Worth keeping the sentence rather than deleting it, because it names the one class
+of behaviour on this device that no amount of tooling here can reach: what happens
+after the port goes away.
 
 The exchange itself is §6 verbatim, and the order of operations is the part that
 must not be "simplified":

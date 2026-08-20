@@ -1072,9 +1072,17 @@ of mistake that looks fine in every test.
 
 The scroll container is on the glass with its scrollbar showing five rows of seven,
 photographed, and the console reads the offset back (`showing rows 1-5 of 7`).
-What is still owed is a **finger**: the drag itself, a row pressed, and the three
-seconds of `saved` are host-tested or LVGL's and have not been done by hand, because
-`screen` on the console deliberately cannot press a row or draw a gesture (§10.7).
+**And the drag has been done with a finger**, which is the half no console could
+stand in for — `screen` deliberately cannot press a row or draw a gesture (§10.7),
+so until somebody dragged it, "it scrolls" was LVGL's reputation rather than this
+device's behaviour. A row pressed by finger is confirmed too, and by the shortest
+route there is: the touch calibration two sections down was reached by pressing its
+row.
+
+What is left of that list is one thing and it is small: **the three seconds of
+`saved`** on the `config save` row. The save itself works from the console and the
+row calls the same function; what nobody has watched is the row saying so
+afterwards.
 
 ##### Reboot and power off ask twice, and the console does not
 
@@ -1116,6 +1124,12 @@ writes nothing; the row does the honest half of that:
 There is a third way to switch this board off and no code of ours is in it:
 holding `PWR` for six seconds is the AXP2101's own behaviour (§10.1). Worth
 knowing when this row refuses.
+
+**And the shutdown has now happened**, which took the one session that cannot be
+scripted from here: the cable out, so the board on its battery, and therefore no
+console to watch it from — two presses on the armed row and it switches off. It
+was the last thing on this screen whose *effect* nobody had seen, as against its
+refusals, which the console could always check.
 
 All of that is `ui/settings_menu.h`, which includes `<cstdint>` and nothing else
 and is where §10.11 can reach it: every way of getting a single press to reach a
@@ -1275,6 +1289,13 @@ Then:
   reaches the filesystem, the way it is for every other setting (§10.15) — so a
   calibration that turns out worse than the one before it is undone by a reboot;
 - **`PWR` part-way through changes nothing at all.**
+
+**And it has been run on the glass**: four crosses pressed, the fit applied. Until
+that happened this section described a sequence whose deciding half was
+host-tested to the mutation and whose *pressing* half nobody had done — which for
+a screen whose whole subject is where a finger actually lands is the half that
+matters. The console could never stand in for it: `screen touch` opens the screen
+and deliberately cannot press a cross (§10.12.2).
 
 ###### Two guards, and why they had to be pulled apart
 
