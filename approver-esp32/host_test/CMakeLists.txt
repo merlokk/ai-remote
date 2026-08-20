@@ -54,7 +54,14 @@ set(UNITY_DIR "${IDF_PATH}/components/unity/unity/src")
 # cJSON is a managed component, so it is not in git — `idf.py build` fetches it
 # into `managed_components/`. Depending on it here is the price of testing the
 # real parser instead of a stand-in.
-set(CJSON_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../managed_components/espressif__cjson/cJSON")
+#
+# Overridable for the same reason `IDF_PATH` above is: a machine that has not run
+# `idf.py build` can still point this at the same sources. That is what CI does —
+# `espressif/cjson` 1.7.18 vendors upstream cJSON 1.7.19, so a clone of that tag
+# is the identical file rather than a stand-in (`.github/workflows/tests.yml`).
+if(NOT DEFINED CJSON_DIR)
+    set(CJSON_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../managed_components/espressif__cjson/cJSON")
+endif()
 
 if(NOT EXISTS "${CJSON_DIR}/cJSON.c")
     message(FATAL_ERROR

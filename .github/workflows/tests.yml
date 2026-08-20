@@ -1,0 +1,190 @@
+# The test tiers, on every push and every pull request.
+#
+# Root `CLAUDE.md` §1 is a TDD rule enforced by hand until now: four commands,
+# four languages, run by whoever remembered. This runs them.
+#
+# **It checks tests and nothing else.** No build artefacts, no release, no
+# deploy, no lint beyond the one formatter the Rust tier already had. Nothing
+# here writes anywhere — `permissions: contents: read`.
+#
+# Two tiers are deliberately absent, because both need something a runner has
+# not got:
+#
+#   * the **device tier** (`tests/test_esp32_device.py`, §10.11) needs the board
+#     on the desk and a finger on it. It is opt-in on an env var precisely so
+#     that runs like this one skip it;
+#   * the **browser tier** (`tests/test_web_browser.py`) needs a browser, a Next
+#     dev server and `agent-browser`. It would fit here, and it is left out for
+#     now on the same rule as everything else: the four commands `tasks.md` named
+#     are the four this file runs. `scripts\web-approval.cmd` is the local one.
+#
+# So a green run means: the Python suite, the Rust suite and its formatter, the
+# Node suite and its type-check, and the ESP32 host tier — 448 + 59 + 38 + 688
+# assertions' worth, with the hardware-dependent ones skipping as designed.
+
+name: tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+# A second push supersedes the first: nobody reads the older run's result.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # The Python tier, and the only job that needs a bus. Every other tier either
+  # has no NATS in it or skips gracefully without one — this one has both
+  # (`requires_nats`), and running it *with* a server is what makes the §6 and §7
+  # integration tests real rather than skipped.
+  python:
+    name: python — pytest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The repository's own compose file (§3), not a hand-written `docker run`:
+      # the 64 KB payload ceiling and the monitoring port come from it, and one
+      # of the bus tests reads a connection name back out of `/connz` (§4).
+      # Only the server — the dashboard and `nats-box` are for humans.
+      - name: bring up NATS (CLAUDE.md §3)
+        run: docker compose -f nats/docker-compose.yml up -d nats
+
+      - name: wait for it to answer
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:8222/varz > /dev/null; then
+              echo "NATS is up"; exit 0
+            fi
+            sleep 1
+          done
+          echo "NATS never came up:"
+          docker compose -f nats/docker-compose.yml logs nats
+          exit 1
+
+      # `uv.lock` is the source of truth (§1), so `--frozen`: a job that resolved
+      # its own versions would be testing something nobody runs. uv fetches the
+      # 3.14 interpreter `pyproject.toml` asks for, which is why there is no
+      # `setup-python` step here.
+      - name: install uv
+        run: python -m pip install --upgrade uv
+
+      - name: uv sync
+        run: uv sync --frozen
+
+      # The YubiKey tiers skip (no device, and the extra is not installed), the
+      # device and browser tiers skip on their env vars, and everything else runs.
+      - name: pytest
+        run: uv run pytest -q
+
+  # The status line. `cargo fmt --check` is here because it is one of the four
+  # commands `tasks.md` §2.12 listed, and because a formatter is the one check
+  # that can never be a false positive.
+  rust:
+    name: rust — cargo test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: statusline
+    steps:
+      - uses: actions/checkout@v4
+
+      # `tests/nats_publish.rs` prints a reason and returns when there is no
+      # server, so this job would be green without a bus — and would silently
+      # stop covering the one place where this binary meets the real thing.
+      - name: bring up NATS (CLAUDE.md §3)
+        working-directory: .
+        run: docker compose -f nats/docker-compose.yml up -d nats
+
+      - name: wait for it to answer
+        working-directory: .
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:8222/varz > /dev/null; then exit 0; fi
+            sleep 1
+          done
+          echo "NATS never came up"; exit 1
+
+      - name: cargo fmt --check
+        run: cargo fmt --check
+
+      - name: cargo test
+        run: cargo test -q
+
+  # The web responder's own tier: parity vectors against what `protocol.py`
+  # produces, the two watch-only documents, and the `clients` map. `npm run
+  # build` is in here rather than in a job of its own because it *is* the
+  # type-check — including of the test files (`approver-web/CLAUDE.md`).
+  node:
+    name: node — npm test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: approver-web
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: approver-web/package-lock.json
+
+      - name: npm ci
+        run: npm ci
+
+      - name: npm test
+        run: npm test
+
+      - name: npm run build
+        run: npm run build
+
+  # The ESP32 host tier (§10.11) — 688 tests that need no board, and the one job
+  # that is not on Linux.
+  #
+  # **Windows because that is where this suite is known to build.** Its
+  # `CMakeLists.txt` has a non-MSVC branch, and it has never been run: MSVC gets
+  # a forced-include of `fakes/posix_compat.h` and `/W4 /WX`, GCC would get
+  # `-Wall -Wextra -Werror` for the first time here. A CI job is the wrong place
+  # to find that out, so this mirrors the configuration `host_test/run.cmd` uses
+  # on the development machine.
+  #
+  # **And it needs no ESP-IDF install.** The suite wants two files from outside
+  # the repository — Unity, which ESP-IDF vendors as a submodule, and cJSON,
+  # which the `espressif/cjson` managed component vendors — so both are cloned at
+  # the versions this project builds against: ESP-IDF v6.0.2 ships Unity 2.6.0,
+  # and `espressif/cjson` 1.7.18 vendors upstream cJSON 1.7.19. Identical files,
+  # not stand-ins, which is the whole reason this is honest without the 2 GB of
+  # toolchain that `idf.py build` would need.
+  esp32-host:
+    name: esp32 — host tier
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: fetch Unity and cJSON
+        run: |
+          git clone --depth 1 --branch v2.6.0 https://github.com/ThrowTheSwitch/Unity "$env:RUNNER_TEMP/idf/components/unity/unity"
+          git clone --depth 1 --branch v1.7.19 https://github.com/DaveGamble/cJSON "$env:RUNNER_TEMP/cjson"
+
+      # The Visual Studio generator rather than `run.cmd`'s Ninja: it needs no
+      # `vcvarsall` and no separate Ninja, and this is the one place where the
+      # local script's hard-coded tool paths cannot be reused anyway.
+      - name: cmake configure
+        run: >
+          cmake -S approver-esp32/host_test -B "$env:RUNNER_TEMP/build"
+          -G "Visual Studio 17 2022" -A x64
+          -DIDF_PATH="$env:RUNNER_TEMP/idf"
+          -DCJSON_DIR="$env:RUNNER_TEMP/cjson"
+
+      - name: cmake build
+        run: cmake --build "$env:RUNNER_TEMP/build" --config Debug
+
+      # Unity exits with the number of failures, so this step is the assertion.
+      - name: run the host tests
+        run: |
+          & "$env:RUNNER_TEMP/build/Debug/host_test.exe"

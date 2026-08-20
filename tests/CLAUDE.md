@@ -6,6 +6,12 @@ with `py -m pytest` from the repository root. The Rust status line has its own
 tier (`cargo test`, §9.6 in [`../statusline/CLAUDE.md`](../statusline/CLAUDE.md))
 and `approver-web` its own (`npm test`, `node:test` — no runner dependency).
 
+**CI runs this suite on every push** (`.github/workflows/tests.yml`), against a
+NATS server brought up from `nats/docker-compose.yml` — so the `requires_nats`
+tier is not skipped there, which is the one thing a runner can give this suite
+that a bare local run without Docker cannot. The two hardware tiers skip there
+exactly as they do here.
+
 **A bare `py -m pytest` on a fresh clone is green.** Nothing here requires
 Docker, a YubiKey, or the `fido2` extra; everything that could is guarded and
 skips with a reason instead of failing. That invariant is the point of the file

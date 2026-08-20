@@ -56,6 +56,18 @@ Three tiers, and the first one is where nearly everything belongs:
    already here for §10.12.1's LVGL preview, CMake and Ninja ship with
    ESP-IDF. One command, in [`working-with-code.md`](working-with-code.md).
 
+   **And it runs in CI, on a runner with no ESP-IDF at all**
+   (`.github/workflows/tests.yml`). Two files come from outside this repository —
+   Unity, which ESP-IDF vendors as a submodule, and cJSON, which the
+   `espressif/cjson` managed component vendors — so both are cloned at the
+   versions this project builds against (ESP-IDF v6.0.2 ships Unity 2.6.0;
+   `espressif/cjson` 1.7.18 vendors upstream cJSON 1.7.19). Identical files, which
+   is what makes the job honest without the toolchain `idf.py build` would need;
+   `CJSON_DIR` became overridable for it, next to the `IDF_PATH` that already was.
+   The job runs on **Windows**, because the `else()` branch of that
+   `CMakeLists.txt` — GCC with `-Wall -Wextra -Werror` — has never been exercised,
+   and a CI job is the wrong place to find out what it says.
+
    **What is under it today is the navigator, every screen's arithmetic, all
    of §6 and §7's wire format, four of the five chips on the I²C bus, the
    settings file, the buttons, the zone table, the speaker, the Wi-Fi policy,

@@ -186,26 +186,16 @@ the "is it connected" story of §10.8.1. The collision is already named — a sc
 that blanks is fine, a *radio* that sleeps means requests arrive late or not at
 all, and a responder that is asleep is a responder that times out.
 
-### 2.12 There is no CI
-
-No `.github/`, no workflow, nothing that runs any of the four test tiers on a
-push. Root §1's TDD rule is enforced by hand today. `firmware.md` §10.14.4 already
-flags the shape of the ESP-IDF half of it ("Their `sdkconfig.ci` — a second
-configuration kept for CI — is worth remembering when there is CI").
-
-Four commands would cover it, and three of them need nothing but a checkout:
-`py -m pytest -q`, `cargo test` + `cargo fmt --check`, `npm test`, and
-`approver-esp32/host_test/run.cmd` (which needs `managed_components/`, so one
-`idf.py build` first).
-
-### 2.13 Smaller open ends
+### 2.12 Smaller open ends
 
 - **`tools/make_vectors.py` has no repo-level runner.** The staleness guard
   (`tests/test_esp32_vectors.py`) is in the pytest suite and passing, so this is
   cosmetic — but regenerating is a hand-typed command under the venv.
 - **The ESP32 host suite is not reachable from `scripts/`.** Every other tier has
   either a documented one-liner in a `CLAUDE.md` or a `.cmd`; this one is
-  `approver-esp32/host_test/run.cmd`, which `scripts/README.md` does not list.
+  `approver-esp32/host_test/run.cmd`, which `scripts/README.md` does not list. CI
+  runs it now, which is the part that mattered; a developer still has to know
+  where that file is.
 - **`screens/7. web-approver screenshot.png`** is committed and referenced by no
   document. Root §2 now says so rather than implying `yubikey-hackaton.md` walks
   through it, so what is left is the choice: give it a place in that walkthrough,

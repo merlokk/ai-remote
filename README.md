@@ -1,5 +1,7 @@
 # ai-remote — Claude Code permission approver over NATS
 
+[![tests](https://github.com/merlokk/ai-remote/actions/workflows/tests.yml/badge.svg)](https://github.com/merlokk/ai-remote/actions/workflows/tests.yml)
+
 Move Claude Code's permission prompt **out of the terminal**. Instead of the
 interactive "allow / deny?" prompt, a `PermissionRequest` hook publishes the
 request onto [NATS](https://nats.io/), a human responder somewhere else signs the
@@ -162,6 +164,13 @@ py -m pytest -q
 
 Expected: all tests pass (bus/integration tests run only if NATS is up on
 `127.0.0.1:4222`).
+
+The same suite runs in CI on every push, next to the other three tiers — the Rust
+status line, the `approver-web` parity tests, and the ESP32 host tests — with NATS
+brought up from this repository's own compose file, so nothing there is skipped
+for want of a broker. The badge at the top is that run;
+`.github/workflows/tests.yml` is what it does. The two tiers that need hardware
+(the board, a browser) stay local.
 
 ### 2. Run the end-to-end checks (Windows)
 
