@@ -145,9 +145,26 @@ tier cannot reach them, so they belong to the device tier):
   And one number worth keeping: the 64 KB message that **succeeded** took the heap
   low-water mark from 89,480 to **23,068** free. That is §10.14.1's "number that
   says whether the device is safe", and 23 KB is what an attacker-chosen payload
-  size can currently take it to before the server bound above existed. It is also
-  the argument for measuring that section's worst case — a request arriving during
-  a Wi-Fi scan with the codec running — before trusting the margin.
+  size could take it to before the server bound above existed.
+
+  **That measurement has since been redone against a finished firmware, and the
+  boundary has moved a long way** (§10.14.1 has the table). The 64 KB that was
+  delivered intact here was delivered into 89,480 free bytes; a working build with
+  the configuration site of §10.16 up has about **37,000**, and the boundary
+  between "delivered" and "socket dropped" is now around **15 KB**. Nobody changed
+  a limit — it is the same `Failed to allocate read buffer` path, and what moved
+  is the heap it asks from. The proof is one variable: the same 15,634-byte message
+  is **accepted** with that site down and **refused** with it up.
+
+  Two things follow for this section. The good half above is confirmed on a
+  fuller device: the allocation refuses rather than succeeding and squeezing
+  everything else, so the low-water never approached zero — 4,260 free was the
+  worst ever seen, and that took a sequence of near-limit messages. And the bad
+  half is now **cheaper for an attacker than it was**: the server's
+  `--max_payload=65536` bounds the megabyte case and does nothing about a 15 KB
+  one, which drops this responder's socket just as effectively and is under the
+  bound. The fix is the one named above and it has not moved: a cap of *ours*
+  ahead of the library's allocation, rather than a limit inside it.
 - **Bound every read.** A truncated `MSG` header, a server that stops mid-payload
   and a `PING` that never comes must all end in a socket timeout and a
   reconnect, not a blocked task and a watchdog panic.

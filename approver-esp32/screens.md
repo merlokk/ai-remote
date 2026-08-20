@@ -1079,10 +1079,10 @@ device's behaviour. A row pressed by finger is confirmed too, and by the shortes
 route there is: the touch calibration two sections down was reached by pressing its
 row.
 
-What is left of that list is one thing and it is small: **the three seconds of
-`saved`** on the `config save` row. The save itself works from the console and the
-row calls the same function; what nobody has watched is the row saying so
-afterwards.
+**And the `config save` row has been pressed from the glass**, with `saved` on it
+for its three seconds afterwards — which was the last thing on this screen that
+only a finger could answer. So the whole of this list is confirmed on hardware
+now: the drag, the row press, and the row saying what it did.
 
 ##### Reboot and power off ask twice, and the console does not
 

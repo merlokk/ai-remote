@@ -592,9 +592,79 @@ What that means in practice, including the parts that are not obvious:
   scroll position and its half-typed password intact. A screen that is rebuilt
   is a screen that lost its state and touched the allocator to do it.
 - **The numbers are recorded, not assumed.** `idf.py size-components` (§10.12)
-  for static footprint, and the low-water heap mark under load — a request
-  arriving during a Wi-Fi scan with the codec running is the worst case worth
-  measuring.
+  for static footprint, and the low-water heap mark under load. This bullet used
+  to name the case to measure — "a request arriving during a Wi-Fi scan with the
+  codec running" — and the measurement has now been taken. **It named the wrong
+  worst case**, which is the most useful thing about it.
+
+##### The low-water mark, measured
+
+`heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL)`, read with `status` after
+each condition, each figure from its own boot so it is attributable to what
+caused it. `free before` is the free heap the instant before the load arrived;
+`peak` is the difference, which is the number this rule is about.
+
+| Condition | free before | low-water | peak |
+|---|---|---|---|
+| boot, then idle | 44,000 | 27,128–30,756 across runs | boot **is** the dip: ~13–17 KB |
+| the configuration site up (§10.16) | 36,7xx | ~28.8–31 K | 7,084 held while it is up |
+| **this bullet's own case** — a real request off the bus (card raised, alert through the codec, reply signed) during a `wifi scan`, with a page being served and the server up | 36,7xx | **28,988 — the boot floor, untouched** | nothing beyond boot |
+| one **14,134-byte** message accepted off `approvals.*` | 43,944 | 21,832 | 22,112 |
+| the same, with the site up | 36,728 | 14,596 | 22,132 |
+| one **15,134-byte** message | 43,968 | 20,856 | 23,144 |
+| the same, site up and a page in flight | 36,804 | **10,300** | 26,504 |
+| a sequence of them, site up, two cards handled | 36,236 | **4,260** | ~32,000 |
+| **15,634 bytes** with the site up | — | unchanged | the socket is dropped and reconnects: **no heap cost at all** |
+| the same **15,634 bytes** with the site *down* | 44,028 | 20,396 | 23,632 — **accepted**, which is the whole finding below |
+| 16 K, 32 K, 60 K, any state | — | unchanged | dropped, reconnected, no heap cost |
+
+**Three things follow, and the first is why the case named above was the wrong
+one.** Everything this device *does of its own accord* — raise a card, play the
+alert, sign a reply, scan the air, serve a page — costs less than its own boot,
+together, at once. That is the static-allocation rule working: the card queue, the
+label buffers and the chunk buffer are all in `.bss` and were paid for before
+`app_main` returned.
+
+**What costs is one message arriving**, at roughly **1.7× its size in peak heap**,
+because the client allocates a buffer for it before any bound of ours can apply
+(§10.5 has the size half of this). So the margin on this device is not set by
+anything it does; it is set by the largest thing somebody can send it. And
+§10.3 says who can send it: anyone on that LAN.
+
+**Nothing crashed in any run, and the reason is the good half of §10.5.** The
+client asks the allocator for a buffer the size of the message; when it cannot
+have one it fails the read, **drops the socket** and reconnects two seconds later
+with the subscription restored. It never succeeds by squeezing everything else.
+That is why the floor never approached zero: the lowest ever seen was 4,260, and
+that took a *sequence* of near-limit messages rather than one.
+
+**So the size that is safe is not a constant, and that is the finding to carry
+away.** The same 15,634-byte message is accepted with the configuration site down
+and refused with it up — the last two rows of that table, one variable between
+them. The boundary tracks what the allocator can still hand out, so it moves with
+whatever else is running and it shrinks as this firmware grows: §10.5 recorded
+**64 KB** being delivered intact when this device had 89,480 bytes free, and the
+boundary is around **15 KB** now that a working build with the site up has about
+37,000. Nobody changed a limit; the headroom went.
+
+Two consequences worth stating rather than leaving to be rediscovered:
+
+- **the protection is a third-party allocation failure, not a rule of ours.**
+  `ui::kToolInputSize` (2,048) is applied *after* the buffer exists, so what keeps
+  the heap intact today is `debsahu/espidf-nats` failing politely. It does fail
+  politely — measured, repeatedly — but a cap of ours ahead of it would be a
+  design instead of a dependency;
+- **the number that predicts this is not reported anywhere.** Free heap and the
+  low-water mark are on the `system` status page and in `status`; the one that
+  decides whether the next message lands is `heap_caps_get_largest_free_block`,
+  and nothing prints it. This bullet already says the About screen should show the
+  low-water mark; the largest block belongs next to it.
+
+And the cost of the protection is the one §10.5 already names: a dropped socket is
+a responder that is not answering, so a loop of near-limit publishes on
+`approvals.*` is §10.10's denial of service reached without a malformed frame.
+That is bounded at the server (`--max_payload=65536`) against the *huge* case and
+not at all against the ~15 KB one, which is now the cheaper attack of the two.
 
 #### 10.14.2 The library layer comes first, and knows nothing about approvals
 

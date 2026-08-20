@@ -148,16 +148,16 @@ so this is a `nats/` change, not a firmware one.
 ### 2.6 ESP32 device-tier checks written but not performed
 
 Each of these is a thing no host test can reach, listed with what it needs. **Three
-of the original six are done** and are recorded where the behaviour lives rather
-than here — the touch calibration's four crosses pressed and the fit applied, the
-settings list dragged with a finger, and `poweroff` actually switching the board
-off, which needed the one session this repository cannot script: the cable out, so
-on battery, with no console to watch it from.
+of the original six are done**, and a fourth since — all recorded where the
+behaviour lives rather than here: the touch calibration's four crosses pressed and
+the fit applied, the settings list dragged with a finger **and its `config save` row
+pressed, `saved` watched for its three seconds**, and `poweroff` actually switching
+the board off, which needed the one session this repository cannot script: the
+cable out, so on battery, with no console to watch it from.
 
 | What | Needs | Where it is recorded |
 |---|---|---|
-| the **pressed half** of `tests/test_esp32_device.py` — one press producing a reply `hook.verify_reply` calls trusted, and the nine tamper assertions that come free with it | a finger | `tests.md` tier 3, `status.md` |
-| the settings list's **three seconds of `saved`** — the row saying what it did after a press. The save works from the console and the row calls the same function; nobody has watched the row say so | a finger | `screens.md` §10.8.5 |
+| the **pressed half** of `tests/test_esp32_device.py` — the nine tamper assertions that come free with one press. **A press producing a reply `hook.verify_reply` calls trusted has now happened twice** (`test-request.cmd`, `TRUSTED`, this board's key), so what is left is running the suite that turns that press into the other nine | a finger, and `scripts\esp32-approval.cmd` | `tests.md` tier 3, `status.md` |
 | Wi-Fi **auth-failure classification** (sticky, and spelled differently from "no such network") | a network whose password is deliberately wrong | `firmware.md` §10.9 |
 | SNTP's **six-hour interval** and its backoff | a device up that long | `status.md` |
 | a **browser** on the configuration site of §10.16 — the credential dialog put up and dismissed. Every route was checked with `curl`, which is not a browser | a phone or a laptop on the same network | `web.md` §10.16, `status.md` |
@@ -176,14 +176,39 @@ All three need something pretending to be a NATS server rather than a real one.
 The frame parser is `debsahu/espidf-nats`'s now, not ours, which is exactly why it
 has to be attacked rather than trusted.
 
-### 2.8 The worst-case heap number has not been measured (§10.14.1, §10.5)
+### 2.8 Nothing of ours bounds an inbound message before the library allocates for it (§10.5, §10.14.1)
 
-`firmware.md` §10.14.1 names the measurement it wants and it has not been taken:
-**a request arriving during a Wi-Fi scan with the codec running**, read as
-`heap_caps_get_minimum_free_size()`. The numbers that exist are each from one
-condition at a time; the one that says whether the device is safe is the
-combination. §10.5 makes the same argument from the other end after a 64 KB
-message took the low-water mark to 23,068 free.
+**The measurement this section used to ask for has been taken** (§10.14.1 has the
+table, from a board) and it named the wrong worst case. Everything this device does
+of its own accord — a card raised, the alert played, a reply signed, a Wi-Fi scan,
+a page served, all at once — never went below its own **boot** floor. What costs is
+one message arriving, at about **1.7× its size** in peak heap, because
+`debsahu/espidf-nats` allocates a buffer for it before `ui::kToolInputSize` (2,048)
+or anything else of ours is reached.
+
+What is open is therefore narrower and more concrete than "measure it":
+
+- **the boundary is a third-party allocation failure, not a rule.** When the
+  allocator cannot satisfy the buffer the library fails the read, drops the socket
+  and reconnects — politely, repeatedly, measured. That is why the low-water never
+  approached zero (4,260 free was the worst seen, and it took a sequence of
+  near-limit messages). But it means the thing protecting the heap is a dependency
+  behaving well, and §10.5 has said since it was written that a cap of *ours* ahead
+  of that allocation is the fix.
+- **the safe size is not a constant and it is shrinking.** §10.5 recorded 64 KB
+  delivered intact into 89,480 free bytes; a finished build with §10.16's site up
+  has ~37,000 and the boundary is now ~15 KB. One variable proves it: the same
+  15,634-byte message is accepted with that site down and refused with it up. Every
+  feature added moves this number and nothing notices.
+- **the number that predicts it is not reported.** Free heap and the low-water mark
+  are in `status` and on the `system` status page; `heap_caps_get_largest_free_block`
+  is the one that decides whether the next message lands, and nothing prints it.
+  §10.14.1 already asks for the low-water on the About screen — this belongs beside
+  it, and it is the cheapest item here.
+- **the denial of service got cheaper, not dearer.** The server's
+  `--max_payload=65536` bounds the megabyte case; a ~15 KB publish is under that
+  bound and drops this responder's socket just as effectively (§10.10's scenario,
+  no malformed frame needed).
 
 ### 2.11 Battery and sleep (§10.13)
 
