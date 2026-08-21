@@ -52,9 +52,29 @@ current free heap only describes this instant.
 
 ### `power`
 The AXP2101: charge state, whether VBUS is present and at what voltage, battery
-millivolts and percentage, the system rail, die temperature, the power-button
-thresholds this board is actually configured with, why the chip last powered on,
-and the state of the DCDC1 / ALDO2 / ALDO3 rails.
+millivolts and percentage, the system rail, die temperature, **the charger's four
+currents**, the power-button thresholds this board is actually configured with, why
+the chip last powered on, and the state of the DCDC1 / ALDO2 / ALDO3 rails.
+
+```
+charge     500 mA limit — in constant current, so about what is flowing
+           precharge 50 mA, stops at 50 mA
+input      2000 mA limit from usb
+```
+
+**Those are settings, and the readout says which of the two it is** — because this
+chip cannot measure a current: its ADC has five channels (battery, TS, VBUS,
+system, die) and no ammeter, and the board has no sense resistor
+(`pmic/axp2101.h`). What the four lines show is what the charger is configured to
+allow, read back off the registers rather than remembered from what boot wrote, so
+a chip that came back from somewhere holding something else says so. During the
+**constant-current** phase the first number is also roughly what flows into the
+cell, and the sentence after it changes to say when that is true. A code this
+firmware has no table for prints as `code N, no table for it` rather than as
+`0 mA` — the charge-current field is not a dense enum and three of its values are
+undocumented. The power status page (§10.8.5) shows the same two useful numbers in
+punctuation rather than prose: `charging, 500 mA` in constant current,
+`charging, <500 mA` otherwise.
 
 ### `reboot`
 Restarts the device. **Anything set and not saved is lost** — `config set`
@@ -247,7 +267,7 @@ Calibrating needs the screen — `screen touch`, then `BOOT` and four presses.
 Four crosses need four fingers in four places, and there is no honest way to send
 that down a serial port.
 
-### `screen [clock|settings|status|touch|wifi|networks|page|back]`
+### `screen [clock|limits|settings|status|touch|wifi|networks|page|back]`
 Which screen is up — and, with a word, a way to move between them that is not a
 finger.
 
@@ -286,6 +306,14 @@ It goes through the same door a swipe does, so what it reaches is what the
 operator would reach: a request card still outranks it, and settings still
 cannot be opened from inside itself. `screen page` turns a status page and
 `screen touch` opens the touch test — both navigation rather than a press.
+
+`screen limits` is the newest word and the one with a bug behind it. The limits
+screen **arrives** rather than being navigated to (§10.8.3), so the interesting
+state — that screen up with a document that is hours old — needed a finger to set
+up, which is why the firmware sat in it all night before anybody noticed. This
+does what the swipe does: three backs to the clock, then one step of the carousel.
+It arms the same one-minute visit the swipe arms, so a device left on it comes home
+by itself, and while it is up the age carries `stopped` next to it.
 
 `screen wifi` and `screen networks` reach the two of §10.8.6, and each prints
 what is on it:

@@ -19,6 +19,27 @@
 // The swipe still works — the navigator kept it — but nothing depends on it, and
 // on a device with three of five screens missing it is not how anybody gets here.
 //
+// ## The screen nobody arrived at, and the overnight bug it caused
+//
+// Every rule above is about a **burst**, and the cue that ends one fires exactly
+// once. That left the case where the screen goes up with no burst behind it: the
+// carousel is still there, so a swipe reaches the limits when the stream has been
+// quiet for hours, and `Tick` had nothing to say about a screen it had already
+// taken away once. Nothing took it off again — so a board left overnight was
+// found parked on last night's numbers with `4000 s ago` under them, drawn
+// exactly like numbers from two seconds ago.
+//
+// Two answers, because the bug was two things:
+//
+//   * **the visit gets its own minute** (`Visited`). Not less than an arrival
+//     gets: somebody who swiped here did it to read the last numbers. And not a
+//     second timer over a live one — a screen the documents are holding up keeps
+//     the burst's minute, or a swipe would cut a working session short.
+//   * **the numbers say how old they are** (`Stale`, and `AgeText` below). The
+//     age was already on the glass; what it lacked was units a person reads and
+//     any mark saying the stream had stopped, both of which the console's own
+//     `limits` readout has had all along.
+//
 // What that buys is a desk object that shows what the session is spending *while*
 // there is a session, and a clock the rest of the time. §9.7 publishes on every
 // render, so documents arrive every few seconds while Claude Code is working and
@@ -108,6 +129,20 @@ Level ContextLevel(uint8_t used_percent);
 // `59m`, `1h59m`, `4d8h`. Writes into the caller's buffer and never allocates.
 void Countdown(int64_t seconds_left, char *out, size_t capacity);
 
+// Room for `1193046h 12m`, which is what a `uint32_t` of seconds can reach, plus
+// the terminator.
+inline constexpr size_t kAgeTextSize = 16;
+
+// **How long ago, in the units a person reads**: `3 s`, `66 m`, `8h 05m`. The
+// same three bands `cli/console.cpp` has printed since it was written — and it
+// prints them by calling this, so the age on the glass and the age in a pasted
+// `limits` cannot say the same instant two different ways. `4000 s ago` is the
+// reading this replaces, and the comment above that function is the argument:
+// "21600 s ago is a conversion nobody should have to do in their head".
+//
+// Writes into the caller's buffer, never allocates, always terminates.
+void AgeText(uint32_t seconds, char *out, size_t capacity);
+
 class LimitsView {
    public:
     // §10.8.3's "connected means a document arrived recently". The owner's rule
@@ -137,8 +172,27 @@ class LimitsView {
     // back.
     void Dismissed();
 
+    // **The operator arrived, by hand, at a screen no document raised.** Arms the
+    // visit's own minute — but only while the stream is quiet: with documents
+    // still coming the burst above owns the timer, and a second one would take
+    // the screen away from a session that is still spending. See the header.
+    void Visited(uint32_t now_ms);
+
+    // The operator left it again, so nothing is armed. Without this the cue would
+    // fire later at a screen that is no longer on the glass — harmless, and
+    // exactly the kind of harmless nobody can reason about twice.
+    void VisitEnded();
+    bool Visiting() const { return visiting_; }
+
     bool HasDocument() const { return has_; }
     bool Quiet() const { return quiet_; }
+
+    // **Older than the quiet window**: a snapshot rather than a reading, and the
+    // screen has to say so — `5h 2 %` from last night is drawn exactly like
+    // `5h 2 %` from two seconds ago, and that is the half of the overnight bug
+    // that survives being navigated away from. `ActivityView::Stale` is the same
+    // call one line further down the same screen.
+    bool Stale(uint32_t now_ms) const;
     bool DismissedNow() const { return dismissed_; }
 
     const Limits &Document() const { return limits_; }
@@ -167,6 +221,8 @@ class LimitsView {
     bool dismissed_ = false;
     uint32_t arrived_ms_ = 0;
     uint32_t received_ = 0;
+    bool visiting_ = false;
+    uint32_t visit_ms_ = 0;
 };
 
 }  // namespace ui

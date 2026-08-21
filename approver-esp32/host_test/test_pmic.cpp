@@ -606,6 +606,102 @@ void test_pmic_the_power_key_can_be_configured_the_other_way(void) {
     TEST_ASSERT_EQUAL_HEX8(0, chip->regs[kRegCommonConfig]);
 }
 
+// --- The currents, which are settings and not measurements ---------------
+//
+// **The AXP2101 cannot measure a current.** Its ADC channel register (0x30) has
+// five channels — battery, TS, VBUS, system, die — and none of them is an
+// ammeter, which is why `XPowersLib`'s AXP2101 class has no `getBattChargeCurrent`
+// where its AXP192 one does. So what the readouts can honestly show is what the
+// charger is *set to*, read back off the chip rather than remembered from what
+// `Init` wrote — and these tests are about that difference, because a register
+// somebody else reset is exactly the case a remembered value cannot see.
+
+void test_pmic_reads_the_charge_currents_back_off_the_chip(void) {
+    i2cbus::Bus bus;
+    BringUp(bus);
+    fake::Device *chip = PutOnWire();
+
+    pmic::Axp2101 axp;
+    TEST_ASSERT_EQUAL_INT(ESP_OK, axp.Init(bus));
+
+    // What `Init` put there — the vendor's 50/500/50 mA and a 2 A input limit.
+    pmic::Status status = {};
+    TEST_ASSERT_EQUAL_INT(ESP_OK, axp.Read(&status));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(pmic::ChargeCurrent::k500mA),
+                            status.charge_limit_code);
+    TEST_ASSERT_EQUAL_UINT16(500, pmic::ChargeCurrentMa(status.charge_limit_code));
+    TEST_ASSERT_EQUAL_UINT16(50, pmic::PrechargeCurrentMa(status.precharge_code));
+    TEST_ASSERT_EQUAL_UINT16(50, pmic::TerminationCurrentMa(status.termination_code));
+    TEST_ASSERT_EQUAL_UINT16(2000, pmic::VbusCurrentLimitMa(status.vbus_limit_code));
+
+    // And a chip that came back from somewhere holding something else says so,
+    // rather than repeating what this driver believes it wrote once.
+    chip->regs[0x62] = 0xE0 | static_cast<uint8_t>(pmic::ChargeCurrent::k100mA);
+    chip->regs[0x16] = static_cast<uint8_t>(pmic::VbusCurrentLimit::k500mA);
+    TEST_ASSERT_EQUAL_INT(ESP_OK, axp.Read(&status));
+    TEST_ASSERT_EQUAL_UINT16(100, pmic::ChargeCurrentMa(status.charge_limit_code));
+    TEST_ASSERT_EQUAL_UINT16(500, pmic::VbusCurrentLimitMa(status.vbus_limit_code));
+}
+
+void test_pmic_the_current_fields_are_the_ones_they_share_a_register_with(void) {
+    // Each of the four lives in a field of a register that holds something else,
+    // so a decode that forgot its mask would read a neighbour's bits. The high
+    // bits are set here for exactly that reason.
+    i2cbus::Bus bus;
+    BringUp(bus);
+    fake::Device *chip = PutOnWire();
+
+    pmic::Axp2101 axp;
+    TEST_ASSERT_EQUAL_INT(ESP_OK, axp.Init(bus));
+
+    chip->regs[0x61] = 0xFC | static_cast<uint8_t>(pmic::PrechargeCurrent::k75mA);
+    chip->regs[0x62] = 0xE0 | static_cast<uint8_t>(pmic::ChargeCurrent::k1000mA);
+    chip->regs[0x63] = 0xF0 | static_cast<uint8_t>(pmic::TerminationCurrent::k100mA);
+    chip->regs[0x16] = 0xF8 | static_cast<uint8_t>(pmic::VbusCurrentLimit::k1500mA);
+
+    pmic::Status status = {};
+    TEST_ASSERT_EQUAL_INT(ESP_OK, axp.Read(&status));
+    TEST_ASSERT_EQUAL_UINT16(75, pmic::PrechargeCurrentMa(status.precharge_code));
+    TEST_ASSERT_EQUAL_UINT16(1000, pmic::ChargeCurrentMa(status.charge_limit_code));
+    TEST_ASSERT_EQUAL_UINT16(100, pmic::TerminationCurrentMa(status.termination_code));
+    TEST_ASSERT_EQUAL_UINT16(1500, pmic::VbusCurrentLimitMa(status.vbus_limit_code));
+}
+
+void test_pmic_a_charge_current_code_nobody_documented_is_not_guessed(void) {
+    // The charge-current field is not a dense enum: it goes 0 mA at 0 and then
+    // jumps to 100 mA at 4, and `XPowersLib` lists nothing for 1, 2 and 3. A
+    // decoder that filled the gap with 25/50/75 mA would be inventing a
+    // datasheet — so it answers 0, and the raw code travels next to it so a
+    // readout can say `code 2` instead of a number that is not true.
+    TEST_ASSERT_EQUAL_UINT16(0, pmic::ChargeCurrentMa(0));
+    TEST_ASSERT_EQUAL_UINT16(0, pmic::ChargeCurrentMa(1));
+    TEST_ASSERT_EQUAL_UINT16(0, pmic::ChargeCurrentMa(3));
+    TEST_ASSERT_EQUAL_UINT16(100, pmic::ChargeCurrentMa(4));
+    TEST_ASSERT_EQUAL_UINT16(0, pmic::ChargeCurrentMa(17));
+    TEST_ASSERT_EQUAL_UINT16(0, pmic::ChargeCurrentMa(0xFF));
+
+    // The other three are dense, and every step of each is pinned: these are
+    // the numbers that make a `mA` on the glass mean anything.
+    TEST_ASSERT_EQUAL_UINT16(125, pmic::ChargeCurrentMa(5));
+    TEST_ASSERT_EQUAL_UINT16(200, pmic::ChargeCurrentMa(8));
+    TEST_ASSERT_EQUAL_UINT16(300, pmic::ChargeCurrentMa(9));
+    TEST_ASSERT_EQUAL_UINT16(1000, pmic::ChargeCurrentMa(16));
+
+    TEST_ASSERT_EQUAL_UINT16(0, pmic::PrechargeCurrentMa(0));
+    TEST_ASSERT_EQUAL_UINT16(25, pmic::PrechargeCurrentMa(1));
+    TEST_ASSERT_EQUAL_UINT16(75, pmic::PrechargeCurrentMa(3));
+
+    TEST_ASSERT_EQUAL_UINT16(0, pmic::TerminationCurrentMa(0));
+    TEST_ASSERT_EQUAL_UINT16(50, pmic::TerminationCurrentMa(2));
+    TEST_ASSERT_EQUAL_UINT16(100, pmic::TerminationCurrentMa(4));
+    TEST_ASSERT_EQUAL_UINT16(0, pmic::TerminationCurrentMa(7));
+
+    TEST_ASSERT_EQUAL_UINT16(100, pmic::VbusCurrentLimitMa(0));
+    TEST_ASSERT_EQUAL_UINT16(900, pmic::VbusCurrentLimitMa(2));
+    TEST_ASSERT_EQUAL_UINT16(2000, pmic::VbusCurrentLimitMa(5));
+    TEST_ASSERT_EQUAL_UINT16(0, pmic::VbusCurrentLimitMa(6));
+}
+
 void RegisterPmicTests(void) {
     RUN_TEST(test_pmic_init_identifies_the_chip);
     RUN_TEST(test_pmic_refuses_a_chip_that_is_not_an_axp2101);
@@ -617,6 +713,10 @@ void RegisterPmicTests(void) {
     RUN_TEST(test_pmic_init_is_one_uninterrupted_sequence);
 
     RUN_TEST(test_pmic_read_decodes_the_status_bits);
+
+    RUN_TEST(test_pmic_reads_the_charge_currents_back_off_the_chip);
+    RUN_TEST(test_pmic_the_current_fields_are_the_ones_they_share_a_register_with);
+    RUN_TEST(test_pmic_a_charge_current_code_nobody_documented_is_not_guessed);
     RUN_TEST(test_pmic_vbus_needs_both_bits);
     RUN_TEST(test_pmic_battery_is_thirteen_bits_and_the_rest_are_fourteen);
     RUN_TEST(test_pmic_die_temperature_converts);

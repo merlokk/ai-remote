@@ -185,8 +185,17 @@ Two consequences that shape the firmware rather than decorate it:
   requests arrive late or not at all — and a responder that is asleep is a
   responder that times out.
 - **Of the rest of the board, three parts have a job and the others do not.**
-  The PCF85063 keeps the clock (§10.8.2), the AXP2101 reports charge, and the
-  codec plays the one chirp (§10.8.1). The IMU, the microphones and the TF slot
+  The PCF85063 keeps the clock (§10.8.2), the AXP2101 reports charge — voltages
+  and a percentage, and **not a current**, which is worth stating because it is
+  the one thing people ask this chip for. Its ADC channel register (`0x30`) has
+  five channels — battery, TS, VBUS, system, die temperature — and no ammeter
+  among them, `XPowersLib`'s AXP2101 class has no `getBattChargeCurrent` where
+  its AXP192 one does, and there is no sense resistor anywhere on this board. So
+  "how fast is it charging" and "how much is the device drawing" have no true
+  answer here; what the readouts show instead is what the charger is *configured
+  to allow* (§10.8.5, `power` in [`commands.md`](commands.md)), which during the
+  constant-current phase is also about what flows and at no other time is — and
+  the codec plays the one chirp (§10.8.1). The IMU, the microphones and the TF slot
   do not: they are on the board, which is not a reason to use them. In
   particular, **no gesture ever approves anything** — a wrist-flick verdict is
   precisely the reflex §10.8.4 is built to prevent.

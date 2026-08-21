@@ -117,19 +117,15 @@ storage::Entry entries[kMaxListed];
 // A duration a person reads at a glance. The internet check prints plain
 // seconds because its numbers *are* seconds; the clock's are hours, and
 // "21600 s ago" is a conversion nobody should have to do in their head.
+// **The three bands live in `ui::AgeText` now**, and this calls it rather than
+// keeping a second copy: the limits screen puts the same age on the glass, and
+// two implementations of "how long ago" is how a console and a panel come to
+// describe one instant two different ways. It is also the half that is
+// host-tested — nothing in this file is.
 void PrintDuration(uint32_t ms) {
-    const uint32_t seconds = ms / 1000;
-    if (seconds < 90) {
-        printf("%u s", static_cast<unsigned>(seconds));
-        return;
-    }
-    const uint32_t minutes = seconds / 60;
-    if (minutes < 90) {
-        printf("%u m", static_cast<unsigned>(minutes));
-        return;
-    }
-    printf("%uh %02um", static_cast<unsigned>(minutes / 60),
-           static_cast<unsigned>(minutes % 60));
+    char text[ui::kAgeTextSize];
+    ui::AgeText(ms / 1000, text, sizeof text);
+    printf("%s", text);
 }
 
 // Where the clock's time actually comes from, which is a different question
@@ -2231,6 +2227,7 @@ int CmdForget(int argc, char **argv) {
 void PrintScreenUsage(void) {
     printf("usage: screen                which screen is up\n");
     printf("       screen clock          go home\n");
+    printf("       screen limits         the rate limits, off the clock\n");
     printf("       screen settings       the settings list\n");
     printf("       screen status         the status pages, inside settings\n");
     printf("       screen touch          the touch test and calibration\n");
@@ -2307,6 +2304,22 @@ int CmdScreen(int argc, char **argv) {
             screens::Navigate(ui::Nav::kBack);
             screens::Navigate(ui::Nav::kBack);
             screens::Navigate(ui::Nav::kBack);
+        } else if (strcmp(where, "limits") == 0) {
+            // **The carousel, from wherever this is.** A sideways swipe reaches the
+            // limits from the clock and leaves the clock from anywhere else, so
+            // three backs and then one step of the carousel is the pair of gestures
+            // a finger would make — and it lands on the same screen from every
+            // starting point rather than only from home.
+            //
+            // It exists because the state that stranded a board overnight
+            // (`ui/limits_view.h`) could not be reached from a script at all:
+            // getting onto this screen while the stream is already quiet needed a
+            // finger, so the one bug here that a person found before a test did was
+            // also the one no test could set up.
+            screens::Navigate(ui::Nav::kBack);
+            screens::Navigate(ui::Nav::kBack);
+            screens::Navigate(ui::Nav::kBack);
+            screens::Navigate(ui::Nav::kSwipeLeft);
         } else if (strcmp(where, "settings") == 0) {
             screens::Navigate(ui::Nav::kSwipeUp);
         } else if (strcmp(where, "status") == 0) {
@@ -2532,9 +2545,12 @@ int CmdLimits(int argc, char **) {
     if (doing.ready && doing.has_document) {
         const ui::Activity &now = doing.document;
         printf("doing      %s\n", doing.headline[0] != 0 ? doing.headline : "-");
-        printf("           %s, %s, %" PRIu32 " s ago%s\n", ui::ActivityEventText(now.event),
-               ui::ActivityStateText(now.state), doing.age_ms / 1000,
-               doing.stale ? " - too old to believe" : "");
+        printf("           %s, %s, ", ui::ActivityEventText(now.event),
+               ui::ActivityStateText(now.state));
+        // Ten minutes is where this one goes stale (`ui/activity_view.h`), so it
+        // reaches numbers nobody should have to divide by sixty either.
+        PrintDuration(doing.age_ms);
+        printf(" ago%s\n", doing.stale ? " - too old to believe" : "");
         if (now.tool[0] != 0) {
             // **The tool, always, even in the state where the line above refuses
             // to draw it.** A `thinking` headline is deliberately just the word
@@ -2566,8 +2582,13 @@ int CmdLimits(int argc, char **) {
 
     printf("screen     %s%s\n", view.on_screen ? "up" : "on the clock",
            view.dismissed ? " (dismissed until the stream goes quiet)" : "");
-    printf("last       %" PRIu32 " s ago%s\n", view.age_ms / 1000,
-           view.quiet ? " - the stream has stopped" : "");
+    // **The same words the glass uses for the same fact** (§10.8.3): the screen
+    // draws this age too, and a console that spelled 4000 seconds `4000 s` while
+    // the panel said `66 m` would be two readouts of one number. `PrintDuration`
+    // is `ui::AgeText`.
+    printf("last       ");
+    PrintDuration(view.age_ms);
+    printf(" ago%s\n", view.quiet ? " - the stream has stopped" : "");
 
     const ui::Limits &doc = view.document;
     printf("model      %s%s%s\n", doc.model[0] != 0 ? doc.model : "unknown",
@@ -2650,6 +2671,22 @@ int CmdTerm(int argc, char **argv) {
     return 0;
 }
 
+// One current, or the raw code when this firmware has no number for it. The
+// AXP2101's charge-current field is not a dense enum and three of its codes are
+// undocumented (`pmic/axp2101.h`), so `0 mA` and "a code nobody has a table for"
+// are two different readouts and printing the first for the second would be the
+// one thing every readout in this firmware is written not to do.
+void PrintCurrent(const char *lead, uint8_t code, uint16_t ma) {
+    printf("%s", lead);
+    if (ma > 0) {
+        printf("%u mA", static_cast<unsigned>(ma));
+    } else if (code == 0) {
+        printf("off");
+    } else {
+        printf("code %u, no table for it", static_cast<unsigned>(code));
+    }
+}
+
 int CmdPower(int, char **) {
     pmic::Axp2101 &axp = board::Pmic();
     if (!axp.Present()) {
@@ -2685,6 +2722,31 @@ int CmdPower(int, char **) {
 
     printf("system     %u mV\n", static_cast<unsigned>(s.system_mv));
     printf("die temp   %.1f C\n", static_cast<double>(s.die_celsius));
+
+    // **The currents, and the sentence under them is the point.** The chip
+    // has no ammeter (`pmic/axp2101.h` says where that is established), so
+    // these four are what the charger is *allowed* to do — read back off the
+    // registers on this same snapshot, so a chip that lost its configuration
+    // shows it. During the constant-current phase the first one is also
+    // roughly what flows into the cell, and this says when that is true
+    // rather than leaving somebody to know it.
+    const uint16_t charge_ma = pmic::ChargeCurrentMa(s.charge_limit_code);
+    const bool in_cc =
+        s.charging && s.charge_code == static_cast<uint8_t>(pmic::ChargeState::kConstantCurrent);
+    PrintCurrent("charge     ", s.charge_limit_code, charge_ma);
+    if (charge_ma > 0) {
+        printf(" limit — %s",
+               in_cc ? "in constant current, so about what is flowing"
+                     : "a setting, not a measurement");
+    }
+    printf("\n");
+    PrintCurrent("           precharge ", s.precharge_code,
+                 pmic::PrechargeCurrentMa(s.precharge_code));
+    PrintCurrent(", stops at ", s.termination_code,
+                 pmic::TerminationCurrentMa(s.termination_code));
+    printf("\n");
+    PrintCurrent("input      ", s.vbus_limit_code, pmic::VbusCurrentLimitMa(s.vbus_limit_code));
+    printf(" limit from usb\n");
     // The two rails that are not decoration: ALDO3 resets the panel, ALDO2
     // powers the amplifier (§10.1). ALDO3 is **already on out of reset** — the
     // PMIC's own default on this board, not something the firmware writes —

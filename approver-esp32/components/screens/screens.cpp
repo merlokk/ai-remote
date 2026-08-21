@@ -461,11 +461,38 @@ void FillPower(StatusFacts *facts, bool battery_valid, const pmic::Status &batte
     } else if (!battery.battery_present) {
         state = "no cell";
     }
-    Row(facts, "charge", "%s", state);
 
+    // **The current next to the state, and the `<` is doing real work.** The
+    // AXP2101 has no ammeter (`pmic/axp2101.h` establishes where that comes from),
+    // so this number is the charger's constant-current *limit* — which during the
+    // constant-current phase is about what actually flows into the cell, and at
+    // every other point of a charge is a ceiling the taper is under. So the phase
+    // decides the punctuation: `500 mA` when the chip says it is holding that
+    // current, `<500 mA` when it is not, and nothing at all when it is not
+    // charging — a limit is not a reading and the screen must not let one be read
+    // as the other. The console's `power` says the same thing in a sentence.
+    const uint16_t charge_ma = pmic::ChargeCurrentMa(battery.charge_limit_code);
+    const bool in_cc = battery.charging && battery.charge_code ==
+                                               static_cast<uint8_t>(pmic::ChargeState::kConstantCurrent);
+    if (battery.charging && charge_ma > 0) {
+        Row(facts, "charge", "%s, %s%u mA", state, in_cc ? "" : "<",
+            static_cast<unsigned>(charge_ma));
+    } else {
+        Row(facts, "charge", "%s", state);
+    }
+
+    // The cable, its voltage, and **what may be drawn through it** — the other
+    // half of the question the row above answers, and the one that says why a
+    // charge cannot go faster than it is going.
     if (battery.vbus_present) {
-        Row(facts, "usb", "in, %u.%02u V", battery.vbus_mv / 1000U,
-            (battery.vbus_mv % 1000U) / 10U);
+        const uint16_t input_ma = pmic::VbusCurrentLimitMa(battery.vbus_limit_code);
+        if (input_ma > 0) {
+            Row(facts, "usb", "in %u.%02u V, <%u mA", battery.vbus_mv / 1000U,
+                (battery.vbus_mv % 1000U) / 10U, static_cast<unsigned>(input_ma));
+        } else {
+            Row(facts, "usb", "in, %u.%02u V", battery.vbus_mv / 1000U,
+                (battery.vbus_mv % 1000U) / 10U);
+        }
     } else {
         Row(facts, "usb", "out");
     }
@@ -742,6 +769,18 @@ bool Apply(ui::Nav nav) {
         // §10.8.3: a back out of the limits is also a dismissal, or the numbers
         // arriving every few seconds would put the screen straight back.
         g_limits.Dismissed();
+    }
+    // **Somebody navigated to the limits, or away from them.** Every route here is
+    // by hand — a gesture, `KEY`, the console — which is exactly the arrival
+    // `LimitsView`'s quiet timer cannot see: it ages a *document* out, and a
+    // screen swiped to hours after the last one has no document to age. Without
+    // these two lines the device parks there for good, drawing last night's
+    // numbers under an age that keeps counting (`ui/limits_view.h` has the case).
+    const uint32_t nav_now_ms = static_cast<uint32_t>(esp_timer_get_time() / 1000);
+    if (g_nav.Screen() == ui::ScreenId::kLimits) {
+        g_limits.Visited(nav_now_ms);
+    } else if (leaving_limits) {
+        g_limits.VisitEnded();
     }
     if (g_nav.Screen() == ui::ScreenId::kSettings) {
         // Arriving at the list clears whatever the last visit left armed and puts

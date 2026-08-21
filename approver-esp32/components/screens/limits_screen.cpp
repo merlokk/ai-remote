@@ -186,6 +186,16 @@ esp_err_t LimitsScreen::Create(lv_obj_t *parent) {
     }
 
     cwd_ = Text(root_, &lv_font_montserrat_14, Faint(), kLimitsPad, kLimitsCwdTop, cwd_text_);
+    if (cwd_ != nullptr) {
+        // **Bounded and scrolling, like the line above it.** Unbounded, this label
+        // drew straight off the right edge of the panel with nothing to say it had
+        // been cut — which is exactly the failure `LV_LABEL_LONG_MODE_CLIP` was
+        // rejected for one row up, arriving on this row because nothing here had a
+        // width at all. Every string on this screen is static, so `DOTS` is still
+        // not available (`lv_label.c` returns early for a static buffer).
+        lv_obj_set_width(cwd_, kBarWidth);
+        lv_label_set_long_mode(cwd_, LV_LABEL_LONG_MODE_SCROLL);
+    }
 
     return ESP_OK;
 }
@@ -342,13 +352,35 @@ void LimitsScreen::Apply(const ui::LimitsView &view, const ui::ActivityView &act
     // numbers are a current value with no stream behind it (§9.7): they are as true
     // as they are recent, and nothing else here would say so.
     //
+    // **And past a minute it says the stream has stopped**, in those words, because
+    // the age alone was not enough: this line read `4000 s ago` on a board left
+    // overnight while the three bars above it were drawn exactly as they are for a
+    // document two seconds old. The bars cannot say it — a grey `2 %` is a
+    // different number, not an older one — so the one line that already carries the
+    // age carries the caveat too. `ui::AgeText` is what turns 4000 seconds into
+    // `66 m`, and the console's `limits` prints the same words out of the same
+    // function.
+    //
     // One buffer, so either half changing rewrites it — which for the age is once a
     // second and for the directory is once a document.
-    if (seconds != shown_seconds_ || fresh) {
+    const bool stale = view.Stale(now_ms);
+    if (seconds != shown_seconds_ || stale != shown_stale_ || fresh) {
         shown_seconds_ = seconds;
-        std::snprintf(cwd_text_, sizeof cwd_text_, "%s  -  %u s ago",
-                      limits.cwd[0] != '\0' ? limits.cwd : "session directory unknown",
-                      static_cast<unsigned>(seconds));
+        shown_stale_ = stale;
+        char age[ui::kAgeTextSize];
+        ui::AgeText(seconds, age, sizeof age);
+        // **The age first, and that order was chosen off a photograph.** With the
+        // directory in front, a stale line read `…approver-esp32  -  70 s ago, the
+        // stream ha` — the caveat is the longest part and the panel ends before it
+        // does, so the one thing this line exists to say was the one thing cut off
+        // (§10.8.5 records the same lesson on the status page's value column). The
+        // two facts now go in the order they are worth reading, so the age and its
+        // clause are always on the glass and it is the path that runs out of room —
+        // and the path scrolls rather than being clipped, for the reason the
+        // activity line above it does.
+        std::snprintf(cwd_text_, sizeof cwd_text_, "%s ago%s  -  %s", age,
+                      stale ? ", stopped" : "",
+                      limits.cwd[0] != '\0' ? limits.cwd : "session directory unknown");
         lv_label_set_text_static(cwd_, cwd_text_);
     }
 }

@@ -460,6 +460,7 @@ depends on it either way. What actually happens:
 | a `status` document lands | the screen comes up — unless a request card is up, which outranks it (§10.8.1), or the operator is in settings, which arriving numbers must not take them out of |
 | a minute with no document | back to the clock |
 | `PWR` | back to the clock now |
+| **reached by hand while the stream is already quiet** — the swipe below, or `screen limits` on the console | it stays a minute, then back to the clock. And the numbers carry `stopped` next to their age for as long as it is up |
 
 Why it is better than the swipe on this device: §9.7 publishes on **every render**
 of the status line, so documents arrive every few seconds while Claude Code is
@@ -477,6 +478,27 @@ therefore means "not for this burst", which is the only reading in which the
 button does anything at all. `ui/limits_view.h` carries that argument next to the
 code.
 
+**And one case this section had no rule for, found on a board left overnight.**
+Every rule above is about a *burst*, and the cue that ends one fires exactly once
+— deliberately, because a second one would be a second navigation. Which left the
+screen nobody arrived at: the carousel still works, so a swipe reaches the limits
+when the stream has been quiet for hours, and there was then nothing left to take
+the screen away. The device was found in the morning parked on the previous
+evening's numbers with `4000 s ago` under them, drawn exactly as they are drawn two
+seconds after they land. Two things were wrong and both are fixed:
+
+- **the visit gets a minute of its own.** Not less than an arrival gets — somebody
+  who swiped here did it to read the last numbers — and not a second timer over a
+  live one, because a screen the documents are holding up must not be cut short at
+  a minute while a session is still spending. `screen limits` on the console arms
+  the same minute, which is also how this state became reachable from a script at
+  all: the one bug in this firmware that a person found before a test did was also
+  the one no test could set up.
+- **the age says the stream has stopped**, in that word, and reads in units a
+  person reads — `66 m ago, stopped` rather than `4000 s ago`. The bars cannot
+  carry that caveat, since a greyed `2 %` is a different number rather than an
+  older one, so the line that already carries the age carries it too.
+
 - **It is a pair of subscriptions on the connection that is already open, neither
   is ever answered, and the request path must not read either.** `status` for the
   numbers, `activity` for the line under them (§9.10) — same test `approver-web`
@@ -485,11 +507,19 @@ code.
 - **"Connected" means a document arrived recently, and nothing more.** §9.7
   publishes a current value with no stream: an idle session simply stops
   publishing and there is nothing to catch up on. So the screen shows the
-  document's **age**, marks it `stale` past ~2 minutes (`approver-web`'s
-  threshold — keep them equal) instead of dropping the numbers, and says "no
+  document's **age**, marks it stale instead of dropping the numbers, and says "no
   session" only when it has never had one or the last is long dead. A stale
   percentage is still the best available answer as long as it does not claim to
   be current.
+
+  **The threshold is one minute here, and not `approver-web`'s two.** This
+  sentence used to say "keep them equal", and the overnight bug above is what
+  changed it: the minute that concludes the stream has stopped and takes the
+  screen away cannot also be a minute in which the numbers are still presented as
+  current. Two thresholds would leave a window — 60 to 120 seconds — in which this
+  firmware has decided the session is gone and the glass has not said so. The page
+  and the device still answer the same question the same way; what differs is that
+  on the device that number is also a navigation rule.
 - **The traffic light is §9.2's, not a new one.** A rate-limit window is green to
   50 % spent and yellow to 80 %; the context window green to 20 % and yellow to
   45 %. Three implementations of these two scales now exist (`render.rs`,
@@ -690,10 +720,22 @@ readout's.
 **What it cost in layout, since the panel was already full.** The gauge stride went
 from 104 pixels to 98 — three rows now end at 396 instead of 408, and nothing
 inside a row moved — and the two 14-point lines at the bottom became one
-(`E:\projects\ai-remote  -  3 s ago`). Both facts they carried are kept, which was
+(`3 s ago  -  E:\projects\ai-remote`). Both facts they carried are kept, which was
 the condition: the directory because without it the screen reads as belonging to
 whatever request is on the card, and the age because §9.7 is a current value with
 no stream behind it. That freed the 44-pixel band the line sits in.
+
+**The age comes first on that line, and the order was chosen off a photograph
+rather than designed.** With the directory in front, a stale line came out as
+`…approver-esp32  -  70 s ago, the stream ha` — the caveat is the longest part of
+the line, the panel ends before it does, and so the one thing the line exists to
+say was the one thing cut off. It is §10.8.5's finding about the status page's
+value column arriving on another row, and the general form of it is that **a
+character budget is only true for the characters it was counted with.** So the two
+facts go in the order they are worth reading, the clause was shortened to
+`, stopped`, and the label is bounded and scrolls — like the activity line above
+it, and for the reason that line gives: a clipped line ends at the panel edge with
+nothing to say it was clipped.
 
 **And then the band was measured rather than eyeballed, which is how the first
 version of it turned out to be wrong.** The three gaps under the `ctx` bar were 8,
@@ -1141,7 +1183,7 @@ Three, and each answers a different question rather than a third of one:
 
 | Page | What is on it |
 |------|---------------|
-| **power** | the battery and its voltage, whether it is charging, VBUS in and its voltage, the system rail, ALDO2 and ALDO3 with their states, the PMIC die temperature — and **why the board is awake**, which is the chip's own answer (§10.1) and not something the firmware participates in |
+| **power** | the battery and its voltage, whether it is charging **and at what current**, VBUS in with its voltage **and what may be drawn through it**, the system rail, ALDO2 and ALDO3 with their states, the PMIC die temperature — and **why the board is awake**, which is the chip's own answer (§10.1) and not something the firmware participates in |
 | **system** | why the firmware last restarted (`esp_reset_reason`), uptime, **the free heap and its low-water mark on one line** — §10.14.1's point is that the first only means something next to the second, and they were two rows until the page ran out of them — the firmware version, the Wi-Fi state with its SSID, signal and channel, the address, whether the bus is connected, and **whether the configuration web server is up** (§10.16). That row's first word is now always the fact — `up, port 80`, or `stopped` with which of the three reasons — because it used to lead with `auto` / `on` / `off`, and the repository owner read it and said what it looks like from the desk: there was no state on the row, only a desired state. `auto` is a setting; `stopped` is what is happening |
 | **motion** | the three acceleration axes, the **magnitude** — the one line that says the other three mean anything, since at rest it must be 1 g (§10.7) — **the position in words** (`card-slot edge down`, `flat, screen up`), the three gyroscope axes, and the IMU die temperature |
 
@@ -1171,6 +1213,31 @@ Rules it keeps:
   than two words drawn on top of each other. `magnitude` was the ninth, and what
   was on the panel was the label and the number sharing pixels. It is `total`
   now.
+
+**The two currents on the power page, and why they are not measurements.** The
+repository owner asked for the current the battery is charging at and the current
+the device is drawing, with a fourth page offered if they did not fit. They fit —
+the power page had one row spare and the numbers went next to the two rows they
+belong to, `charge` and `usb` — but neither is a *reading*, because **the AXP2101
+cannot measure a current**: its ADC channel register has five channels (battery,
+TS, VBUS, system, die) and no ammeter among them, and there is no sense resistor
+on this board either. `pmic/axp2101.h` records where that is established.
+
+So what is shown is what the charger is *configured to allow*, read back off the
+registers on the same snapshot the voltages come from — so a chip that lost its
+configuration shows that rather than what `Init` believes it wrote — and the
+punctuation carries the difference:
+
+| On the glass | What it means |
+|---|---|
+| `charge  charging, 500 mA` | the chip says it is in its **constant-current** phase, so the limit is about what is flowing into the cell |
+| `charge  charging, <500 mA` | charging in some other phase — the taper is under that ceiling and this firmware cannot say by how much |
+| `charge  discharging` / `idle` / `no cell` | not charging, so a charge limit would be a number about nothing |
+| `usb  in 5.07 V, <2000 mA` | the cable is in, and that is the input limit the PMIC is set to — the other half of why a charge cannot go faster than it is going |
+
+The console's `power` says the same thing in a sentence rather than in
+punctuation, and adds the precharge and termination currents, which are a
+charger's settings and not something a screen needs.
 
 ##### The board that would not come back, and what it actually was
 

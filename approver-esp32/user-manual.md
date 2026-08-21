@@ -94,11 +94,18 @@ The time, the date, and three indicators down the left: the **Wi-Fi bars**, the
 model that is answering, the effort level, how much of the **5h** and **7d**
 windows is spent with the time until each resets, how full the **context** window
 is — and one line at the bottom saying what that session is *doing* right now,
-with the working directory under it.
+with how old the numbers are and which directory they came from under it.
 
 The gauges are green to half spent and amber past that; the context window turns
 amber sooner. **PWR** dismisses the screen for the current burst of work — it
 stays away until the stream goes quiet and starts again.
+
+**Read the bottom-left corner before you trust the bars.** It says how long ago
+the numbers arrived — `3 s ago` while a session is working — and if it says
+`stopped` next to that, nothing has come for over a minute: the numbers are the
+last ones there were, not the current ones. You can also reach this screen
+yourself, by swiping left or right on the clock; reached that way it shows the
+last numbers for a minute and then goes back to the clock on its own.
 
 ### Request — the screen it exists for
 
@@ -141,8 +148,16 @@ Press **BOOT**, or tap the body, to turn the page.
 
 | Power | System | Motion |
 |---|---|---|
-| <img src="images/status-power.png" alt="Status page 1: battery, charge, usb, rails, die temperature" width="240"> | <img src="images/status-system.png" alt="Status page 2: restart reason, uptime, heap, firmware, wi-fi, ip, bus, web" width="240"> | <img src="images/status-motion.png" alt="Status page 3: accelerometer, orientation, gyro, die temperature" width="240"> |
-| the battery and its voltage, whether the cable is in, the regulators, the die temperature | why it last restarted, how long it has been up, free memory, the firmware build, the network, the bus, the web server | which way up it is standing, and what the accelerometer and gyro say |
+| <img src="images/status-power.png" alt="Status page 1: battery, charge and its current, usb and its limit, rails, die temperature" width="240"> | <img src="images/status-system.png" alt="Status page 2: restart reason, uptime, heap, firmware, wi-fi, ip, bus, web" width="240"> | <img src="images/status-motion.png" alt="Status page 3: accelerometer, orientation, gyro, die temperature" width="240"> |
+| the battery and its voltage, whether it is charging and at what current, whether the cable is in and what may be drawn through it, the regulators, the die temperature | why it last restarted, how long it has been up, free memory, the firmware build, the network, the bus, the web server | which way up it is standing, and what the accelerometer and gyro say |
+
+**About the two currents on the power page.** The board cannot actually measure a
+current — there is no meter in it — so those numbers are what the charger is *set
+to*: `charging, 500 mA` means it is in the phase where it holds that current, so
+that is about what is going into the battery, and `charging, <500 mA` means it is
+finishing the charge somewhere under that. The `usb` row's number is how much the
+device is allowed to draw from the cable, which is the other half of why a charge
+does not go faster.
 
 ### Touch test — check the glass, and correct it
 

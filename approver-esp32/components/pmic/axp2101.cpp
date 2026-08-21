@@ -184,6 +184,64 @@ esp_err_t SetRailVoltage(i2cbus::Lease &lease, uint8_t reg, uint16_t min_mv,
 
 }  // namespace
 
+// The four code-to-milliamp tables. Written out rather than computed: only two of
+// the four are arithmetic (25 mA steps), the charge-current one is not a dense
+// enum at all, and a formula with two exceptions in it is harder to check against
+// `XPowersLib` than a list — which is the whole reason these numbers are trusted.
+uint16_t ChargeCurrentMa(uint8_t code) {
+    switch (code & 0x1F) {
+        case 0:
+            return 0;
+        // 1..3 are absent from `XPowersLib`'s enum and are **not** filled in with
+        // 25/50/75: see the header. They fall through to 0 with the raw code kept.
+        case 4:
+            return 100;
+        case 5:
+            return 125;
+        case 6:
+            return 150;
+        case 7:
+            return 175;
+        case 8:
+            return 200;
+        case 9:
+            return 300;
+        case 10:
+            return 400;
+        case 11:
+            return 500;
+        case 12:
+            return 600;
+        case 13:
+            return 700;
+        case 14:
+            return 800;
+        case 15:
+            return 900;
+        case 16:
+            return 1000;
+        default:
+            return 0;
+    }
+}
+
+uint16_t PrechargeCurrentMa(uint8_t code) {
+    static const uint16_t table[] = {0, 25, 50, 75};
+    return table[code & 0x03];
+}
+
+uint16_t TerminationCurrentMa(uint8_t code) {
+    static const uint16_t table[] = {0, 25, 50, 75, 100, 0, 0, 0};
+    return table[code & 0x07];
+}
+
+uint16_t VbusCurrentLimitMa(uint8_t code) {
+    // Six values in a three-bit field: 6 and 7 are not a limit anybody set, so
+    // they answer 0 the way an undocumented charge code does.
+    static const uint16_t table[] = {100, 500, 900, 1000, 1500, 2000, 0, 0};
+    return table[code & 0x07];
+}
+
 const char *PressOnTimeName(uint8_t code) {
     static const char *names[] = {"128 ms", "512 ms", "1 s", "2 s"};
     return names[code & 0x03];
@@ -462,6 +520,21 @@ esp_err_t Axp2101::Read(Status *out) {
     if (lease.ReadRegister(kAddress, kRegAldo1Voltage + 2, &rail, 1) == ESP_OK) {
         out->aldo3_mv =
             static_cast<uint16_t>((rail & kRailVoltageMask) * kRailStepMv + kAldoMinMv);
+    }
+
+    // **The charger's four currents, off the chip rather than remembered.** Three
+    // of them are adjacent, so this is two transactions on a lease that already
+    // holds a dozen — and it is what makes the readouts show a chip that lost its
+    // configuration instead of what `Init` believes it wrote.
+    uint8_t currents[3] = {};
+    if (lease.ReadRegister(kAddress, kRegPrechargeCurrent, currents, sizeof(currents)) == ESP_OK) {
+        out->precharge_code = currents[0] & 0x03;
+        out->charge_limit_code = currents[1] & 0x1F;
+        out->termination_code = currents[2] & 0x07;
+    }
+    uint8_t vbus_limit = 0;
+    if (lease.ReadRegister(kAddress, kRegVbusCurrentLimit, &vbus_limit, 1) == ESP_OK) {
+        out->vbus_limit_code = vbus_limit & 0x07;
     }
 
     uint8_t pair[2] = {};

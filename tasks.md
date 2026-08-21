@@ -31,7 +31,7 @@ never confused with a broken build:
 | Rust format | `cargo fmt --check` | clean |
 | Node | `npm test` (in `approver-web/`) | **38 passed** |
 | Browser tier | `scripts\web-approval.cmd` | **16 passed** in ~35s (needs NATS and `agent-browser`) |
-| Host tier (ESP32) | `scripts\esp32-host-tests.cmd` | **714 passed, 0 failures** — run rather than counted, which is the honest form of this row: the 688 it held before was a `RUN_TEST` grep, and §10.16's gate plus §10.9's AP assertion added 27 tests on top of what that grep saw |
+| Host tier (ESP32) | `scripts\esp32-host-tests.cmd` | **724 passed, 0 failures** — run rather than counted, which is the honest form of this row: the 688 it held before was a `RUN_TEST` grep, and §10.16's gate plus §10.9's AP assertion added 27 tests on top of what that grep saw |
 | Parity vectors (ESP32) | `scripts\make-vectors.cmd --check` | up to date |
 | Markdown links | every relative link in every tracked `.md` | all resolve |
 
@@ -147,19 +147,22 @@ so this is a `nats/` change, not a firmware one.
 
 ### 2.6 ESP32 device-tier checks written but not performed
 
-Each of these is a thing no host test can reach, listed with what it needs. **Three
-of the original six are done**, and a fourth since — all recorded where the
+Each of these is a thing no host test can reach, listed with what it needs. **Four
+of the original six are done**, and a fifth since — all recorded where the
 behaviour lives rather than here: the touch calibration's four crosses pressed and
 the fit applied, the settings list dragged with a finger **and its `config save` row
-pressed, `saved` watched for its three seconds**, and `poweroff` actually switching
+pressed, `saved` watched for its three seconds**, `poweroff` actually switching
 the board off, which needed the one session this repository cannot script: the
-cable out, so on battery, with no console to watch it from.
+cable out, so on battery, with no console to watch it from — and **SNTP's six-hour
+interval**, which needed only a board left alone for long enough and now has one:
+a 13½-hour uptime with syncs at 00:10:57, 06:10:57 and 12:10:57 local, each moving
+the clock `+0 s`. `status.md` has it, with the half that is still owed (a *failed*
+sync, so the backoff, has never happened on this board).
 
 | What | Needs | Where it is recorded |
 |---|---|---|
 | the **pressed half** of `tests/test_esp32_device.py` — the nine tamper assertions that come free with one press. **A press producing a reply `hook.verify_reply` calls trusted has now happened twice** (`test-request.cmd`, `TRUSTED`, this board's key), so what is left is running the suite that turns that press into the other nine | a finger, and `scripts\esp32-approval.cmd` | `tests.md` tier 3, `status.md` |
 | Wi-Fi **auth-failure classification** (sticky, and spelled differently from "no such network") | a network whose password is deliberately wrong | `firmware.md` §10.9 |
-| SNTP's **six-hour interval** and its backoff | a device up that long | `status.md` |
 | a **browser** on the configuration site of §10.16 — the credential dialog put up and dismissed. Every route was checked with `curl`, which is not a browser | a phone or a laptop on the same network | `web.md` §10.16, `status.md` |
 
 ### 2.7 Frame-level fuzzing of the NATS client is still owed (§10.5)

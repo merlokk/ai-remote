@@ -73,6 +73,32 @@ enum class TerminationCurrent : uint8_t {
     k100mA = 4,
 };
 
+// **The four fields above, back the other way: a register code into milliamps.**
+//
+// They exist because a readout wants a number and the chip holds a code, and they
+// are here — pure, no bus, no state — so that §10.11 can pin every step of every
+// one of them. Getting a step wrong is the class of mistake this whole driver is
+// careful about: `300` where the chip means `400` is a plausible number.
+//
+// **And the reason a *setting* is what gets shown at all**: the AXP2101 cannot
+// measure a current. Its ADC channel register (`0x30`) has five channels —
+// battery, TS, VBUS, system, die — and no ammeter among them, which is why
+// `XPowersLib`'s AXP2101 class has no `getBattChargeCurrent` where its AXP192 one
+// does. There is no sense resistor on this board either (§10.1). So "how fast is
+// it charging" and "how much is the device drawing" have no true answer here, and
+// the honest substitute is what the charger is configured to allow — which during
+// the constant-current phase is also roughly what flows, and at no other time is.
+// Every readout that prints these says which of the two it is.
+//
+// An **undocumented code answers 0**, never a guess: the charge-current field is
+// not a dense enum (0 mA at 0, then straight to 100 mA at 4) and `XPowersLib`
+// lists nothing for 1..3. The raw code travels next to the number in `Status` for
+// exactly this case, so a readout can print `code 2` rather than `0 mA`.
+uint16_t ChargeCurrentMa(uint8_t code);
+uint16_t PrechargeCurrentMa(uint8_t code);
+uint16_t TerminationCurrentMa(uint8_t code);
+uint16_t VbusCurrentLimitMa(uint8_t code);
+
 // What `Init` writes. The defaults are Waveshare's for this board, from
 // `Custom_PmicRegisterInit()` in their `pmicpower` component — not this
 // author's judgement about someone else's battery.
@@ -148,6 +174,17 @@ struct Status {
     uint16_t dc1_mv;      // the C6's own supply
     uint16_t aldo2_mv;
     uint16_t aldo3_mv;
+
+    // **The charger's four currents, as codes, read off the chip on every
+    // `Read`** — not remembered from what `Init` wrote, because a chip that came
+    // back from a soft power-off holding something else is the one case a
+    // remembered value cannot see, and it is the same argument §10.1 makes about
+    // the power key. `ChargeCurrentMa` and its three neighbours turn them into
+    // milliamps; they are **settings, not measurements** (see above).
+    uint8_t charge_limit_code;   // 0x62 bits 4:0 — the constant-current limit
+    uint8_t precharge_code;      // 0x61 bits 1:0
+    uint8_t termination_code;    // 0x63 bits 2:0 — where charging stops
+    uint8_t vbus_limit_code;     // 0x16 bits 2:0 — what may be drawn from USB
 
     // The PWRON key — `PWR` on the board, GPIO18, active low (§10.1). These
     // say what the *chip* does with it, which is not something the firmware

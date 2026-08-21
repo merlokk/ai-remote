@@ -177,10 +177,14 @@ class LimitsScreen {
     char model_text_[ui::kModelNameSize] = {};
     char effort_text_[ui::kEffortSize + 8] = {};
     char activity_text_[ui::kActivityHeadlineSize] = {};
-    // The session and its age share a line now, so one buffer holds both.
-    char cwd_text_[ui::kSessionCwdSize + 32] = {};
+    // The session and its age share a line now, so one buffer holds both — and a
+    // stale line adds a clause after the age, so the room for it went 32 to 64.
+    char cwd_text_[ui::kSessionCwdSize + 64] = {};
 
     uint32_t shown_seconds_ = 0xFFFFFFFFu;
+    // Whether the line currently carries the caveat, so the repaint bookkeeping
+    // covers the clause as well as the number in front of it.
+    bool shown_stale_ = false;
     uint32_t shown_received_ = 0xFFFFFFFFu;
     // What the activity line has on it, so a screen repainted ten times a second
     // repaints nothing while nothing changed — the same bookkeeping every other

@@ -23,7 +23,12 @@
 //     path and the reason this file's refusals assert what is *still there*;
 //   * **the arrival rules the owner asked for**: a document raises the screen, a
 //     minute of silence drops it, and `PWR` dismisses the burst rather than one
-//     message — see `limits_view.h` for why the last one cannot be literal.
+//     message — see `limits_view.h` for why the last one cannot be literal;
+//   * **and the screen nobody arrived at**: a swipe onto the limits while the
+//     stream has been quiet for hours used to park the device there for good,
+//     drawing last night's numbers under an age that kept counting. The visit
+//     gets a minute of its own, the numbers go stale, and the age reads in the
+//     units the console prints.
 
 #include <cstdint>
 #include <cstdio>
@@ -365,6 +370,161 @@ void test_a_gauge_with_no_reset_has_no_countdown(void) {
     TEST_ASSERT_EQUAL_STRING("", out);
 }
 
+// ---------------------------------------------------------------------------
+// A screen reached by hand, and a document old enough to say so.
+//
+// **Found on a board left overnight.** The rules above are all about a *burst*:
+// documents raise the screen, and a minute after the last one takes it away —
+// once, because a second cue would be a second navigation. Which leaves the
+// case where the screen goes up with no burst behind it: §10.8.3's carousel is
+// still there, so a swipe reaches the limits when the stream has been quiet for
+// hours. `Tick` had nothing to say about that screen, so nothing ever took it
+// off, and it drew numbers from the night before with an age that just kept
+// counting — `4000 s ago` on a device whose session had ended at midnight.
+
+void test_a_screen_entered_by_hand_while_quiet_leaves_after_a_minute(void) {
+    LimitsView view;
+    view.Arrived(Sample(), 1000);
+
+    // The burst ends and the screen goes, exactly as before.
+    TEST_ASSERT_TRUE(view.Tick(1000 + LimitsView::kQuietMs));
+    TEST_ASSERT_TRUE(view.Quiet());
+
+    // Hours later, a finger. The document is the same stale one.
+    const uint32_t swiped = 1000 + 8u * 3600u * 1000u;
+    view.Visited(swiped);
+    TEST_ASSERT_TRUE(view.Visiting());
+
+    // The visit gets the same minute an arrival gets, and not less: somebody who
+    // swiped here did it to read the last numbers.
+    TEST_ASSERT_FALSE(view.Tick(swiped + LimitsView::kQuietMs - 1));
+    TEST_ASSERT_TRUE(view.Visiting());
+
+    TEST_ASSERT_TRUE(view.Tick(swiped + LimitsView::kQuietMs));
+    TEST_ASSERT_FALSE(view.Visiting());
+
+    // Once only, like the other cue: the screen has already left.
+    TEST_ASSERT_FALSE(view.Tick(swiped + LimitsView::kQuietMs + 60000));
+}
+
+// A swipe onto a screen the numbers are already holding up must not arm a second
+// timer — that would cut a working session's screen short at a minute whatever
+// the stream does.
+void test_a_hand_visit_is_not_armed_while_the_stream_runs(void) {
+    LimitsView view;
+    view.Arrived(Sample(), 1000);
+
+    view.Visited(2000);
+    TEST_ASSERT_FALSE(view.Visiting());
+
+    // The minute still runs from the document and not from the visit: it ends at
+    // 1000 + kQuietMs, which is a second *before* the visit's would have.
+    TEST_ASSERT_FALSE(view.Tick(1000 + LimitsView::kQuietMs - 1));
+    TEST_ASSERT_TRUE(view.Tick(1000 + LimitsView::kQuietMs));
+    TEST_ASSERT_FALSE(view.Visiting());
+}
+
+// A session that starts while somebody is standing there reading the old numbers
+// takes the screen over: the stream's minute is the live one, and the visit stops
+// being what holds the screen up.
+void test_a_document_takes_a_hand_visit_over(void) {
+    LimitsView view;
+    view.Arrived(Sample(), 1000);
+    TEST_ASSERT_TRUE(view.Tick(1000 + LimitsView::kQuietMs));
+
+    const uint32_t swiped = 500000;
+    view.Visited(swiped);
+    TEST_ASSERT_TRUE(view.Visiting());
+
+    view.Arrived(Sample(), swiped + 10000);
+    TEST_ASSERT_FALSE(view.Visiting());
+    TEST_ASSERT_FALSE(view.Quiet());
+
+    // The visit's minute would have expired here; the document's has not.
+    TEST_ASSERT_FALSE(view.Tick(swiped + LimitsView::kQuietMs));
+    TEST_ASSERT_TRUE(view.Tick(swiped + 10000 + LimitsView::kQuietMs));
+}
+
+// Swiped in, swiped out. Nothing is left armed, or the cue would fire later at a
+// screen that is not on the glass.
+void test_leaving_the_screen_ends_a_hand_visit(void) {
+    LimitsView view;
+    view.Arrived(Sample(), 1000);
+    TEST_ASSERT_TRUE(view.Tick(1000 + LimitsView::kQuietMs));
+
+    view.Visited(500000);
+    view.VisitEnded();
+    TEST_ASSERT_FALSE(view.Visiting());
+    TEST_ASSERT_FALSE(view.Tick(500000 + LimitsView::kQuietMs));
+}
+
+// The ~49-day millisecond wrap, asked of the second timer as well as the first.
+void test_the_visit_minute_survives_the_millisecond_wrap(void) {
+    LimitsView view;
+    view.Arrived(Sample(), 1000);
+    TEST_ASSERT_TRUE(view.Tick(1000 + LimitsView::kQuietMs));
+
+    const uint32_t before = 0xFFFFFFFFu - 1000;
+    view.Visited(before);
+    TEST_ASSERT_FALSE(view.Tick(before + LimitsView::kQuietMs - 1));
+    TEST_ASSERT_TRUE(view.Tick(before + LimitsView::kQuietMs));
+}
+
+// **What the glass says about it.** The numbers are a current value with no
+// stream behind them (§9.7), so past the quiet window they are a snapshot rather
+// than a reading — and the screen has to say so, because a `5h 2 %` from last
+// night is drawn exactly like one from two seconds ago. `ActivityView::Stale` is
+// the same call one line further down the same screen.
+void test_the_numbers_go_stale_a_minute_after_they_land(void) {
+    LimitsView view;
+    TEST_ASSERT_FALSE(view.Stale(1000));  // nothing has arrived; nothing is stale
+
+    view.Arrived(Sample(), 1000);
+    TEST_ASSERT_FALSE(view.Stale(1000));
+    TEST_ASSERT_FALSE(view.Stale(1000 + LimitsView::kQuietMs - 1));
+    TEST_ASSERT_TRUE(view.Stale(1000 + LimitsView::kQuietMs));
+
+    // A fresh document is a fresh reading.
+    view.Arrived(Sample(), 500000);
+    TEST_ASSERT_FALSE(view.Stale(500000));
+}
+
+// The age in the units a person reads, and the boundaries are the console's own:
+// `cli/console.cpp`'s `PrintDuration` calls this function, so the glass and a
+// paste of `limits` cannot say the age two different ways. `4000 s ago` is what
+// this is for — the number a board left overnight actually showed.
+void test_the_age_reads_the_way_the_console_prints_it(void) {
+    char out[ui::kAgeTextSize];
+
+    ui::AgeText(0, out, sizeof out);
+    TEST_ASSERT_EQUAL_STRING("0 s", out);
+    ui::AgeText(3, out, sizeof out);
+    TEST_ASSERT_EQUAL_STRING("3 s", out);
+    ui::AgeText(89, out, sizeof out);
+    TEST_ASSERT_EQUAL_STRING("89 s", out);
+
+    ui::AgeText(90, out, sizeof out);
+    TEST_ASSERT_EQUAL_STRING("1 m", out);
+    ui::AgeText(4000, out, sizeof out);
+    TEST_ASSERT_EQUAL_STRING("66 m", out);
+    ui::AgeText(5399, out, sizeof out);
+    TEST_ASSERT_EQUAL_STRING("89 m", out);
+
+    ui::AgeText(5400, out, sizeof out);
+    TEST_ASSERT_EQUAL_STRING("1h 30m", out);
+    ui::AgeText(8 * 3600 + 5 * 60, out, sizeof out);
+    TEST_ASSERT_EQUAL_STRING("8h 05m", out);
+    ui::AgeText(25 * 3600, out, sizeof out);
+    TEST_ASSERT_EQUAL_STRING("25h 00m", out);
+
+    // Never writes past the end, and always terminated — the rule every string
+    // in this firmware is held to (§10.14.1).
+    char small[4];
+    std::memset(small, 'x', sizeof small);
+    ui::AgeText(5400, small, sizeof small);
+    TEST_ASSERT_EQUAL_UINT32(3, std::strlen(small));
+}
+
 }  // namespace
 
 void RegisterLimitsTests(void) {
@@ -388,6 +548,14 @@ void RegisterLimitsTests(void) {
     RUN_TEST(test_a_dismissal_ends_when_the_stream_does);
     RUN_TEST(test_the_age_is_the_time_since_it_landed);
     RUN_TEST(test_the_quiet_window_survives_the_millisecond_wrap);
+
+    RUN_TEST(test_a_screen_entered_by_hand_while_quiet_leaves_after_a_minute);
+    RUN_TEST(test_a_hand_visit_is_not_armed_while_the_stream_runs);
+    RUN_TEST(test_a_document_takes_a_hand_visit_over);
+    RUN_TEST(test_leaving_the_screen_ends_a_hand_visit);
+    RUN_TEST(test_the_visit_minute_survives_the_millisecond_wrap);
+    RUN_TEST(test_the_numbers_go_stale_a_minute_after_they_land);
+    RUN_TEST(test_the_age_reads_the_way_the_console_prints_it);
 
     RUN_TEST(test_the_countdown_is_computed_when_the_clock_is_believable);
     RUN_TEST(test_the_countdown_falls_back_to_what_the_publisher_resolved);
