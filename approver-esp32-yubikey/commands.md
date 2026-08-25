@@ -51,9 +51,9 @@ separate on purpose: a ranking that says `ready` next to an emitter showing red 
 a bug you can only see if both are printed.
 ```
 state      not-enrolled — no security key enrolled - run `key enrol`
-showing    cyan, fast, 50%
+showing    cyan, fast, 15%
 rgb        0,255,255
-ceilings   50% normal, 8% idle
+ceilings   15% normal, 7% idle
 wire       3671 writes, 0 failed
 changes    4 state transitions since boot
 stack      1636 B free

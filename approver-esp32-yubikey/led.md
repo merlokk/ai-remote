@@ -87,7 +87,7 @@ that showed nothing would be a device that looks unplugged.
 `config.json` has two LED fields and both are **brightness**:
 
 ```json
-"led": { "brightness": 50, "idleBrightness": 8 }
+"led": { "brightness": 15, "idleBrightness": 7 }
 ```
 
 The palette is compiled into `led_frames.h` and cannot be reached from the
@@ -98,16 +98,15 @@ output is one emitter, which colour means what *is* the protocol.
 The two numbers are a ceiling and a resting level, not a level and an override:
 
 * **`brightness`** is what a state that wants a human is allowed to reach —
-  `pending`, `fault`, `booting`, a verdict flash. **50 % by default, and that
-  number was settled by looking at the thing** — it was 40, then 70, then 50 with
-  the board on a desk. This is a bare emitter with no diffuser: there is a
-  ceiling past which every colour reads as white with a tint, and a lower one past
-  which it is simply unpleasant to sit next to. 50 is under both and still reads
-  across a lit room. **That it took three tries is the argument for this being a
-  file field rather than a constant** — a brightness cannot be chosen on paper;
+  `pending`, `fault`, `booting`, a verdict flash. **15 % by default**;
 * **`idleBrightness`** is what the resting states settle to — `ready`,
-  `watching`, `no-fido-key`. 8 % by default: findable in a dark room, not read
-  from across it. A device that is *fine* should not be a lamp.
+  `watching`, `no-fido-key`. **7 %**: findable in a dark room, not read from
+  across it. A device that is *fine* should not be a lamp.
+
+**Both numbers are lower than they look, and §10.17.5 is why.** They went
+40 → 70 → 50 → 15 over four sittings with the board on a desk, and the last step
+was not a change of taste — it was noticing that the top three quarters of the
+range do almost nothing.
 
 A request never uses the idle ceiling. That is a rule in `LookOf` rather than a
 convention, and it is what stops a quiet-brightness setting from making a request
@@ -115,7 +114,62 @@ invisible.
 
 `config set led <0..100>` and `config set ledidle <0..100>` change them, and both
 are applied **at once** rather than at the next state change — a brightness you
-cannot see the effect of is one you cannot judge.
+cannot see the effect of is one you cannot judge. **That it took four sittings to
+settle them is the argument for their being file fields rather than constants**: a
+brightness cannot be chosen on paper.
+
+## 10.17.5 Why 15 and 7 are not as dim as they sound
+
+An observation from the desk, worth writing down because it will otherwise be
+re-discovered as a bug: **turning this LED up stops doing anything at about 20 %,
+and the range from there to 100 is nearly wasted.**
+
+Two things cause it and they compound.
+
+**1. `Scale` is linear in duty cycle and the eye is not.** Perceived lightness
+goes as roughly the cube root of radiated power — CIE L\* is `116·Y^(1/3) − 16` —
+so the numbers this device takes and the brightness a person sees pull apart
+badly:
+
+| duty (`config set led`) | 2 % | 5 % | 7 % | 10 % | 15 % | 20 % | 30 % | 50 % | 70 % | 100 % |
+|---|---|---|---|---|---|---|---|---|---|---|
+| **seen** (CIE L\*, 0–100) | 15.5 | 26.7 | 31.8 | 37.8 | 45.6 | 51.8 | 61.7 | 76.1 | 87.0 | 100 |
+
+**Half of everything a person can see is in the bottom fifth of the numbers.**
+20 % already looks like slightly over half of full; the remaining 80 % of the
+range buys the other 48 points, and the last half of it — 50 to 100 — buys 24.
+
+So 15 % is not "dim". It is a bit under half of what this emitter can look like,
+and 7 % is a bit over two thirds of *that* rather than the one half the
+arithmetic suggests.
+
+**2. Above roughly a fifth the colour goes.** This is a bare RGB die with no
+diffuser, at arm's length. Past that point the eye reads a point source that
+bright as glare rather than as a hue, and a saturated colour turns into a white
+dot with a tint. On a device where **which colour it is** *is* the interface
+(§10.17.2), losing hue discrimination costs more than the extra light is worth.
+
+Between them, the useful range on this part is about **5 to 25**, and both
+defaults sit inside it.
+
+### Why the scale is left linear anyway
+
+The obvious fix is to gamma-correct `Scale`, so that `config set led 50` means
+"half as bright as it looks at 100" rather than "half the duty cycle". It is
+deliberately not done, for the reason the function's own comment states: **this is
+the operator's ceiling, and a ceiling that is not proportional to the number typed
+is a ceiling nobody can reason about** — a `led` readout saying `50%` next to an
+emitter running at 12 % duty is a readout that has to be explained every time.
+
+The perceptual curve *is* applied, in the one place it belongs: `kBreathRamp`,
+the sixty-step Weber–Fechner table the breath walks (§10.17.3). There it is not a
+setting anybody reads back — it is the shape of an animation, and a linear ramp
+there looks like a lamp that snaps on and then does nothing for most of its
+travel, which is exactly the effect this section is about.
+
+If the numbers ever want to mean perceived brightness instead, the change is one
+line in `Scale` plus a re-derivation of both defaults — and this section is the
+note to read first.
 
 ## 10.17.3 The wire: a WS2812 driven from a UART
 

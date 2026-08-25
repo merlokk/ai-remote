@@ -563,26 +563,33 @@ void FillDefaults(Data *out) {
     // back to.
     out->time.sntp_server[0] = '\0';
     out->time.sync_hours = 6;
-    // **50 %, and this number was set by looking at the thing.** It started at
-    // 40, went to 70 on the repository owner's instruction, and came back to 50
-    // when the board sat on a desk with it — which is the only way a brightness
-    // is ever settled, and the reason this is a `config.json` field rather than a
-    // constant anybody has to rebuild to change (§10.17.2).
+    // **15 %, and the low number is the honest one for this part** (§10.17.2).
     //
-    // The emitter on this board is bare, with no diffuser: there is a real
-    // ceiling past which every colour reads as white with a tint, and past which
-    // it is simply unpleasant to sit next to. 50 is comfortably below both and
-    // still reads across a lit room.
+    // It went 40 -> 70 -> 50 -> 15 over four sittings with the board on a desk,
+    // and the last step is not a change of taste: **`Scale` is linear in duty
+    // cycle and the eye is not.** Perceived lightness goes as roughly the cube
+    // root of radiated power, so half of everything a person can see is in the
+    // bottom fifth of this number:
+    //
+    //     duty      2%    5%    7%   10%   15%   20%   50%  100%
+    //     seen    15.5  26.7  31.8  37.8  45.6  51.8  76.1   100    (CIE L*)
+    //
+    // Which is why 20 and 100 look nearly alike on a bare emitter at arm's
+    // length — there is 48 % of the perceptual range spread over 80 % of the
+    // numbers, and the top of it is where the colours wash out as well.
+    // **The useful range on this device is about 5..25**, and 15 sits in the
+    // middle of it.
     //
     // It is a *ceiling*, not a level: the resting states use `idle_percent`
-    // below, so the number that is on most of the time is the quiet one. What
-    // this one buys is that `pending` — the one state whose job is to be noticed
-    // (§10.17) — is noticed.
-    out->led.percent = 50;
-    // And 8 for the resting breath (§10.17): findable in a dark room, not read
-    // from across it. A request ignores this and uses the number above, because
-    // a request nobody notices is a request that times out.
-    out->led.idle_percent = 8;
+    // below. What this one buys is that `pending` — the one state whose job is
+    // to be noticed (§10.17) — is noticed.
+    out->led.percent = 15;
+    // And 7 for the resting breath: findable in a dark room, not read from
+    // across it, and — on the table above — a bit over two thirds of what the
+    // ceiling above looks like rather than the one seventh the numbers suggest.
+    // A request ignores this and uses the number above, because a request nobody
+    // notices is a request that times out.
+    out->led.idle_percent = 7;
 
     // **The gate, closed** (§10.18). The default is the careful one — no key on
     // the port means no `allow` leaves this device — because the failure of the

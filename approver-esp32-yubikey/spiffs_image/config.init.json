@@ -32,8 +32,8 @@
         "syncHours": 6
     },
     "led": {
-        "brightness": 50,
-        "idleBrightness": 8
+        "brightness": 15,
+        "idleBrightness": 7
     },
     "approval": {
         "requireKey": true,

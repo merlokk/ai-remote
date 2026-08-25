@@ -96,7 +96,16 @@ inline constexpr uint32_t kBreathStepMs = 150;
 // **Not gamma-corrected**, and that is deliberate rather than an omission. This
 // is the operator's ceiling — "how bright may this thing be" — and a ceiling
 // that is not proportional to the number typed is a ceiling nobody can reason
-// about. The perceptual curve is `kBreathRamp`'s job, and it applies on top.
+// about: a `led` readout saying `50%` next to an emitter running at 12 % duty is
+// a readout that has to be explained every time. The perceptual curve is
+// `kBreathRamp`'s job, and it applies on top.
+//
+// **What it costs is that the top three quarters of the range do almost
+// nothing**, which is a real effect somebody will meet before they meet this
+// comment: perceived lightness goes as the cube root of power, so half of what a
+// person can see lives below 20 % here. §10.17.5 has the table, the second reason
+// (a bare die past a fifth reads as glare rather than as a hue), and the one line
+// that would change this if the numbers should ever mean perceived brightness.
 Rgb Scale(Rgb colour, uint8_t percent);
 
 // What the emitter should be showing, given a colour, a rhythm and a clock.

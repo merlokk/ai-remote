@@ -117,7 +117,7 @@ all unchanged:
 ### What is in it that is not next door
 
 ```json
-"led":      { "brightness": 50, "idleBrightness": 8 },
+"led":      { "brightness": 15, "idleBrightness": 7 },
 "approval": { "requireKey": true, "touchTimeoutSeconds": 30, "denyButton": true }
 ```
 
