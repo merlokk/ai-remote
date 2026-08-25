@@ -116,10 +116,8 @@ add_executable(host_test
 
     test_request_card.cpp
     test_config.cpp
-    test_timezone.cpp
     test_wifi_policy.cpp
     test_reachability.cpp
-    test_timesync.cpp
     test_nats.cpp
     test_signing.cpp
     test_registration.cpp
@@ -157,16 +155,12 @@ add_executable(host_test
     # The atomic write of §10.15, which has no ESP-IDF in it and so is the
     # sequence that ships rather than a model of one in `fakes/`.
     ../components/storage/file_ops.cpp
-    ../components/timezone/timezone.cpp
     ../components/buttons/buttons.cpp
     # The policy half of the Wi-Fi pair (§10.9). Like the ranking it includes
     # nothing, so it needs no fake — the driver next to it is all ESP-IDF and
     # belongs to the device tier.
     ../components/wifimgr/wifi_policy.cpp
     ../components/wifimgr/reachability.cpp
-    # And the clock's half of the same shape: when to ask a server what time it
-    # is, with the asking left next door.
-    ../components/timesync/sync_policy.cpp
     # And the bus link's (§10.5): where the server is, and when to have a
     # connection to it.
     ../components/nats/endpoint.cpp
@@ -193,11 +187,9 @@ target_include_directories(host_test PRIVATE
     ../components/fido
     ../components/ui
     ../components/config
-    ../components/timezone
     ../components/buttons
     ../components/storage
     ../components/wifimgr
-    ../components/timesync
     ../components/nats
     ../components/protocol
     "${CJSON_DIR}"
@@ -214,21 +206,10 @@ target_compile_definitions(host_test PRIVATE UNITY_INCLUDE_DOUBLE)
 target_compile_definitions(host_test PRIVATE
     SPIFFS_IMAGE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../spiffs_image")
 
-# `setenv`, `tzset`, `localtime_r` and `timegm` under the names the firmware
-# calls them, forced into every C++ translation unit so the shipping sources need
-# no `#ifdef _WIN32`. **CXX only** — Unity and cJSON are C, and a header that
-# includes `<cstdlib>` makes MSVC refuse the file outright.
 if(MSVC)
-    # No quotes inside the flag: CMake would quote the whole token and MSVC then
-    # reads the path as part of the option name. The path has no spaces.
-    target_compile_options(host_test PRIVATE
-        "$<$<COMPILE_LANGUAGE:CXX>:/FI${CMAKE_CURRENT_SOURCE_DIR}/fakes/posix_compat.h>")
-endif()
-
-if(MSVC)
-    # MSVC calls `fopen`, `tzset` and friends deprecated. That is its opinion
-    # about the standard C library, not a finding about this code, and the
-    # firmware compiles the same lines under GCC with -Wall -Wextra -Werror.
+    # MSVC calls `fopen` and friends deprecated. That is its opinion about the
+    # standard C library, not a finding about this code, and the firmware
+    # compiles the same lines under GCC with -Wall -Wextra -Werror.
     target_compile_definitions(host_test PRIVATE _CRT_SECURE_NO_WARNINGS
                                                  _CRT_NONSTDC_NO_WARNINGS)
     target_compile_options(host_test PRIVATE /W4 /WX)

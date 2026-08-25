@@ -11,13 +11,14 @@
 //
 // **This file is the sibling folder's, kept general on purpose.** That board has
 // three buttons and this one has one; the class is a table of pins either way,
-// and the two copies differ only in these opening paragraphs. The `PWR` note
-// that used to be here is gone with the PMIC it described.
+// and the two copies differ only in these opening paragraphs. The `PWR` note that
+// used to be here is gone with the power-management chip it described — there is
+// none on this board, and no I²C bus for one to sit on (§10.13).
 //
 // **Polled, not interrupt-driven, and no task of its own.** Nothing in this
 // firmware needs a press faster than a poll delivers it, and an ISR plus a queue
-// would be machinery with no consumer — the same argument §10.14.3 makes about
-// the I²C fake. The owner polls — on this board the responder's gate task, every
+// would be machinery with no consumer. The owner polls — on this board the
+// responder's gate task, every
 // `kPollIntervalMs` — and gets edges back. When something needs a callback, it
 // arrives with the thing that needs it.
 //

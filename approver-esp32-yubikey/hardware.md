@@ -81,11 +81,15 @@ perform.
 `RST` (labelled `EN`) is wired to the chip's enable line and is gone before any
 code runs. It is not readable and never will be.
 
-**3. There is no real-time clock, no PMIC, no IMU and no codec.**
+**3. There is no I²C bus, and so no real-time clock, no PMIC, no IMU and no
+codec.**
 
-The sibling board has five chips on an I²C bus and this one has none. Most of why
-this firmware is a third of the size of that one is in that sentence. §10.13 has
-what each absence costs.
+The sibling board has five chips on a leased I²C bus and this one has no bus at
+all — nor an I²S peripheral for a speaker, nor a panel, nor a touch controller.
+Most of why this firmware is a third of the size of that one is in that sentence,
+and none of these is a chip this firmware chooses not to talk to: they are not on
+the board. §10.13 has what each absence costs, and the short answer for the clock
+is that it costs nothing, because nothing here reads one.
 
 ### The pin map
 
@@ -118,11 +122,11 @@ to reveal it.
 
 | Absent | What it would have done | What it costs, and what covers it |
 |--------|-------------------------|-----------------------------------|
-| **A real-time clock** (the sibling has a PCF85063) | keep the time across a power cut | **Nothing that matters.** §7's `ts` is *echoed from the request*, never re-derived from this device's clock (`protocol/signing.h` states it), so a device that thinks it is 1970 still produces signatures that verify. What is affected is log timestamps and `date` on the console, and both say so: `date` prints `never set - no RTC on this board, and no sync yet` until SNTP has spoken. `timesync::Init` takes no chip argument here, and its header explains the difference |
+| **A real-time clock** (the sibling has a PCF85063) | keep the time across a power cut | **Nothing at all, and there is no clock here of any kind.** §7's `ts` is *echoed from the request*, never re-derived from this device's clock (`protocol/signing.h` states it), so a device that thinks it is 1970 still produces signatures that verify — and nothing else here reads a wall-clock time. So the chip's absence was not covered by SNTP: **SNTP is gone too**, and with it the zone table, the `date` command and the `tz` / `sntp` / `sync` settings. A time that is only right once a server has been asked, on a board with nowhere to show it, is machinery with no consumer; every duration this firmware measures is a monotonic one off `esp_timer`. The one wall-clock number it prints — when it registered — comes off the handler's own clock in the reply, and `keys` prints it as UTC and says so |
 | **A PMIC** (AXP2101) | battery charge state, rail voltages, a power button | This board is mains-powered over USB and has no battery. `poweroff` does not exist as a console command, because there is nothing to switch off |
-| **An IMU** (QMI8658) | orientation, which the sibling uses for an idle policy | There is no panel to dim, so there is nothing an orientation would decide |
-| **A codec and speaker** (ES8311) | a chirp on a new request | The LED is the whole notification (§10.17). A device with one emitter and no sound is quieter than the other one on purpose — this is a thing that sits next to a person working |
-| **A panel and touch** | seven screens | §10.17 is the replacement, and it is not a smaller version of a screen — it is a different design, because one emitter cannot show two things and a screen can |
+| **An IMU** (QMI8658) | orientation, which the sibling uses for an idle policy | There is no panel to dim, so there is nothing an orientation would decide. Nothing in this firmware has an idle policy at all — the light's resting brightness is a setting, not a decision |
+| **A codec and speaker** (ES8311) | a chirp on a new request | The LED is the whole notification (§10.17). A device with one emitter and no sound is quieter than the other one on purpose — this is a thing that sits next to a person working. There is no I²S peripheral in use either, so the audio path is absent rather than switched off |
+| **A panel and touch** (SH8601 + CST9217) | seven screens, and a keyboard to type a registration token on | §10.17 is the replacement, and it is not a smaller version of a screen — it is a different design, because one emitter cannot show two things and a screen can. The token is typed on the console instead (§10.7), which is the only way in and is a socket rather than a surface |
 
 And the two that *are* on the board and have no job:
 

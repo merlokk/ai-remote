@@ -207,8 +207,9 @@ allocation and it must never become one.
 **A request arriving with nothing in the OTG port is the ordinary case**, not an
 edge one: the operator sees the light, reaches into a pocket, and plugs one in. So
 the gate *waits* for a key rather than refusing at the door — polling the button,
-the bus and the clock at 100 ms until a key appears, somebody taps BOOT, the bus
-goes, or the request runs out.
+the bus and the deadline at 100 ms until a key appears, somebody taps BOOT, the
+bus goes, or the request runs out. The deadline is a monotonic one off
+`esp_timer`, which is the only kind this board has (§10.13).
 
 That is not only a convenience. The first version refused immediately, which
 collapsed the whole gate to a microsecond: nothing was decided, the request stayed

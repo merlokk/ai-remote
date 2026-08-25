@@ -188,9 +188,9 @@ class Radio {
     // an association takes anyway.
     esp_err_t Stop();
 
-    // A snapshot, taken under the status lock — every field belongs to the
-    // same instant, which is the same promise `Axp2101::Read` makes about its
-    // dozen registers for the same reason.
+    // A snapshot, taken under the status lock — every field belongs to the same
+    // instant. A caller that read the fields one at a time could see a link that
+    // is up with an address from before it came up.
     Status Get() const;
 
     // What is on the air, sorted by signal. **Blocking**, for a second or two,

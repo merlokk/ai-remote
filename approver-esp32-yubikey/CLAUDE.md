@@ -39,6 +39,15 @@ sibling board and by [`approver-web/`](../approver-web/CLAUDE.md), and this devi
 does not subscribe to either. It has one output, and its whole vocabulary is
 §10.17's fourteen states.
 
+**There is also no clock, and that follows from the same sentence.** No RTC — the
+board has no I²C bus for one (§10.13) — and no SNTP either, because a time that
+is only right once a server has been asked, on a device with nowhere to show it,
+is machinery with no consumer. §7's `ts` is echoed from the request and never
+re-derived, and every interval this firmware measures is monotonic. The same
+reasoning removes the accelerometer, the codec and the touch panel from every list
+in this folder: they are not parts this firmware declines to use, they are parts
+that are not there.
+
 ## The documents
 
 These docs are section **10** of the project docs, the same section number the
@@ -58,7 +67,7 @@ status summary below, whose long form is [`status.md`](status.md).
 
 | File | What it owns |
 |------|--------------|
-| [`hardware.md`](hardware.md) | **§10.1** the board, the two USB-C sockets that are not interchangeable, and the one button that is also a boot strap; **§10.13** which parts have a job and which deliberately do not — including the clock this board does not have |
+| [`hardware.md`](hardware.md) | **§10.1** the board, the two USB-C sockets that are not interchangeable, and the one button that is also a boot strap; **§10.13** what is not on this board at all — no I²C bus and so no clock, no PMIC, no accelerometer and no codec; no panel and no touch — and what each absence costs |
 | [`led.md`](led.md) | **§10.17** the one output: the palette, the ranking behind it, and the UART trick that drives a WS2812 with no extra component. The whole user interface of this device is in this file |
 | [`key.md`](key.md) | **§10.18** the security key: what it is and what it is not, enrolment as a separate step from registration, the four checks an assertion has to pass, and why there is no PIN |
 | [`protocol.md`](protocol.md) | **§10.5** the NATS client and the subset of it this device uses; **§10.6** key custody, as designed and as shipped; **§10.7** registration, and the console it is driven from |
@@ -73,8 +82,7 @@ status summary below, whose long form is [`status.md`](status.md).
 
 **The device is real and the loop is closed up to the key.** It boots, mounts its
 filesystem, derives an Ed25519 identity and self-tests it, joins Wi-Fi, connects
-to the NATS server on the LAN, syncs its clock, registers with the handler over
-§6, and takes its place on `approvals.*` in the `approvers` queue group. A
+to the NATS server on the LAN, registers with the handler over §6, and takes its place on `approvals.*` in the `approvers` queue group. A
 request put on it appears as a white flashing light, waits for a fingertip,
 expires with **no reply** if none comes, and the counters say which of those happened. All of that has been done on
 the board on this desk, against the real handler and the real NATS server.
@@ -97,8 +105,8 @@ Below the key, what runs: the WS2812 on GPIO48 driven off a UART (§10.17.1), a
 fourteen-state ranking that decides what a single emitter says about a device
 that is several things at once (§10.17), the BOOT button as a deny, the settings
 file on SPIFFS with the restore that puts it back, the Wi-Fi radio with a manager
-above it, the clock's SNTP half, the bus, and a console on the CH343P bridge with
-a command per piece of it ([`commands.md`](commands.md) is the list).
+above it, the bus, and a console on the CH343P bridge with a command per piece of
+it ([`commands.md`](commands.md) is the list).
 
 Read §10.3 before anything else: it is the one part of this that changes
 something outside this folder.

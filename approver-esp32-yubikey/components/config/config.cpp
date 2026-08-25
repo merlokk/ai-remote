@@ -7,7 +7,6 @@
 #include "cJSON.h"
 #include "esp_log.h"
 #include "storage.h"
-#include "timezone.h"
 
 namespace config {
 
@@ -285,32 +284,6 @@ esp_err_t Parse(const char *json, Data *out) {
         CopyString(nats, "url", out->nats.url, sizeof(out->nats.url));
     }
 
-    const cJSON *time = cJSON_GetObjectItemCaseSensitive(root, "time");
-    if (cJSON_IsObject(time)) {
-        CopyString(time, "zone", out->time.zone, sizeof(out->time.zone));
-        CopyString(time, "posix", out->time.posix, sizeof(out->time.posix));
-        CopyString(time, "sntp", out->time.sntp_server, sizeof(out->time.sntp_server));
-
-        // Hours, and **0 is off** rather than a floor of one: "never sync" has
-        // to be expressible, and a field that silently became hourly would be
-        // a device asking a stranger's server 24 times a day because somebody
-        // typed a zero.
-        long value = out->time.sync_hours;
-        CopyNumber(time, "syncHours", 0, 255, &value);
-        out->time.sync_hours = static_cast<uint8_t>(value);
-
-        // A file that names a zone but carries no rule — hand-edited, or
-        // written by a firmware whose table was smaller — is completed from
-        // the table rather than refused. The name is the operator's intent;
-        // the rule is an implementation detail they should not have to know.
-        const char *known = tz::Lookup(out->time.zone);
-        if (known != nullptr &&
-            (out->time.posix[0] == '\0' ||
-             cJSON_GetObjectItemCaseSensitive(time, "posix") == nullptr)) {
-            snprintf(out->time.posix, sizeof(out->time.posix), "%s", known);
-        }
-    }
-
     const cJSON *led = cJSON_GetObjectItemCaseSensitive(root, "led");
     if (cJSON_IsObject(led)) {
         long value = out->led.percent;
@@ -428,14 +401,6 @@ esp_err_t Serialise(const Data &in, size_t *length) {
         cJSON_AddStringToObject(nats, "url", in.nats.url);
     }
 
-    cJSON *time = cJSON_AddObjectToObject(root, "time");
-    if (time != nullptr) {
-        cJSON_AddStringToObject(time, "zone", in.time.zone);
-        cJSON_AddStringToObject(time, "posix", in.time.posix);
-        cJSON_AddStringToObject(time, "sntp", in.time.sntp_server);
-        cJSON_AddNumberToObject(time, "syncHours", in.time.sync_hours);
-    }
-
     cJSON *led = cJSON_AddObjectToObject(root, "led");
     if (led != nullptr) {
         cJSON_AddNumberToObject(led, "brightness", in.led.percent);
@@ -545,24 +510,11 @@ void FillDefaults(Data *out) {
     out->internet.target_count = 3;
 
     // The bus this device is actually built against (§10.3): the NATS server
-    // on the home LAN, no TLS, no credentials. Unlike `sntp` below it names a
-    // machine of the operator's own rather than a stranger's, so having a
-    // default here is the difference between a restored device that connects
-    // and one that has to be told where the bus is over USB first.
+    // on the home LAN, no TLS, no credentials. It names a machine of the
+    // operator's own rather than a stranger's, so having a default here is the
+    // difference between a restored device that connects and one that has to be
+    // told where the bus is over USB first.
     snprintf(out->nats.url, sizeof(out->nats.url), "nats://192.168.11.70:4222");
-    snprintf(out->time.zone, sizeof(out->time.zone), "UTC");
-    snprintf(out->time.posix, sizeof(out->time.posix), "UTC0");
-    // **Empty on purpose, and the only string field that is.** Every other
-    // default here is a number this firmware can pick for itself; this one
-    // names somebody else's machine, and a device that talks to a host the
-    // operator never wrote down is the same mistake `internet.targets` refuses
-    // to make. No server in the file means no server — and therefore no clock
-    // sync, rather than an exchange that fails every interval forever. The
-    // shipped `config.init.json` names `pool.ntp.org`, so a device that can
-    // read its filesystem does sync; this is what a device that cannot falls
-    // back to.
-    out->time.sntp_server[0] = '\0';
-    out->time.sync_hours = 6;
     // **15 %, and the low number is the honest one for this part** (§10.17.2).
     //
     // It went 40 -> 70 -> 50 -> 15 over four sittings with the board on a desk,

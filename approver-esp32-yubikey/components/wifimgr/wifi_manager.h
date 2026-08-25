@@ -134,9 +134,10 @@ void OnTick(TickHandler handler, void *user);
 // Ask about the internet now instead of at the next interval — the console's
 // `wifi ping`. Does nothing when there is no client link to ask through.
 //
-// **This is the seam SNTP will hang off** (§10.8.2): a clock that syncs is one
-// more thing that wants to know there is an internet before it tries, and it
-// should read `Snapshot::internet` rather than grow a second probe of its own.
+// **Nothing on this board acts on the answer except the light** (§10.17): the
+// sibling firmware also had a clock that waited for an internet before asking a
+// time server, and there is no clock here (§10.13). Anything that grows one later
+// should read `Snapshot::internet` rather than add a second probe of its own.
 void CheckInternetNow();
 
 // Straight through to the driver, and blocking for a second or two. Never

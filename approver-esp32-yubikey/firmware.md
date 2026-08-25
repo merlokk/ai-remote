@@ -80,8 +80,10 @@ convention:
 ### 10.14.3 The bus that is not here
 
 The sibling folder's §10.14.3 is about leasing an I²C bus between five chips and
-the three driver bugs that found. **There is no I²C bus on this board** (§10.13),
-so that section has no counterpart here — which is most of why this firmware is a
+the three driver bugs that found. **There is no I²C bus on this board and no chip
+that would want one** (§10.13), so that section has no counterpart here — no
+lease, no epoch bookkeeping, and none of it in the host tier's fake either, which
+is a fifth of the size that board's is. That is most of why this firmware is a
 third of the size.
 
 What replaced it as the one shared, contended resource is the **USB port**:
@@ -121,8 +123,10 @@ all unchanged:
 "approval": { "requireKey": true, "touchTimeoutSeconds": 30, "denyButton": true }
 ```
 
-and what is *gone*: `display`, `touch`, `audio` (no such hardware) and `web`
-(no web server here). §10.17.2 and §10.18.4 argue the two that replaced them.
+and what is *gone*: `display`, `touch`, `audio` (no such hardware), `web` (no web
+server here) and **`time`** — `zone`, `posix`, `sntp` and `syncHours`, which
+configured a clock this board does not have and cannot show (§10.13). §10.17.2 and
+§10.18.4 argue the two that replaced them.
 
 ### The restore, and the one place this board differs
 
@@ -151,10 +155,10 @@ restore that ran after the parse could not rescue it.
 ### Who is told when the fields move
 
 A reload or a restore replaces every field at once, and three subsystems hold
-copies: the LED a brightness, the Wi-Fi manager a network list, the clock's sync
-task an interval and a server, the bus a URL. Telling them is not `config`'s job —
-it has never heard of a UART — but *remembering* to tell them cannot be the
-caller's either, because there are two callers.
+copies: the LED a brightness, the Wi-Fi manager a network list, the bus a URL.
+Telling them is not `config`'s job — it has never heard of a UART — but
+*remembering* to tell them cannot be the caller's either, because there are two
+callers.
 
 So it is a hook: `main` registers `SettingsChanged`, and `Reload`/`Restore` call
 it themselves on success. `Init` deliberately does not — it runs before any of

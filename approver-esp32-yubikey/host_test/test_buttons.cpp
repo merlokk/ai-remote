@@ -230,11 +230,12 @@ void test_buttons_refuses_a_table_it_cannot_use(void) {
 }
 
 void test_buttons_active_low_and_active_high_are_both_honoured(void) {
-    // **§10.1's inverted `PWR`.** `BOOT` and `KEY` short their pin to ground;
-    // GPIO18 rests at 0 and goes high while the button is held, which is the
-    // opposite of the AXP2101's own PWRON pin. Assuming one polarity gave a
-    // button that was pressed for the whole uptime — this is the test that
-    // would have caught it.
+    // **Both polarities, on a board that only has one of them.** `BOOT` shorts
+    // its pin to ground; the third entry in this table rests at 0 and goes high
+    // while held. This device has no such button — the sibling board's `PWR` was
+    // the inverted one — and the case is kept because the table is shared and
+    // assuming a single polarity once gave a button that read as pressed for the
+    // whole uptime.
     buttons::Buttons keys;
     BringUp(keys);
 

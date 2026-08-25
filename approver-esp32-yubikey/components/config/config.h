@@ -46,8 +46,6 @@ inline constexpr size_t kSsidSize = 33;      // 32 bytes + terminator
 inline constexpr size_t kPasswordSize = 65;  // 64 bytes + terminator
 
 inline constexpr size_t kUrlSize = 64;
-inline constexpr size_t kTimezoneSize = 48;  // POSIX TZ, e.g. CET-1CEST,M3.5.0,M10.5.0/3
-inline constexpr size_t kHostSize = 64;
 
 // "255.255.255.255" plus the terminator. Addresses are kept as **text**, the
 // way they were typed: that is what `cat config.json` shows and what the
@@ -146,34 +144,6 @@ struct Nats {
     char url[kUrlSize];
 };
 
-struct Time {
-    // **Two fields for one setting, and the pair is the point** (§10.8.2; the
-    // house firmware of §10.14.4 keeps the same two): `zone` is what a person
-    // reads and types — `Europe/Kyiv` — and `posix` is the rule libc is
-    // actually given. Keeping both means a zone whose transitions moved can be
-    // corrected on the device by writing `posix` alone, without waiting for a
-    // firmware whose table knows the new rule.
-    //
-    // Neither of them moves the clock. The RTC and `time_t` are UTC, always;
-    // a zone is how a time is shown and how a typed time is read, never how it
-    // is stored.
-    char zone[kTimezoneSize];
-    char posix[kTimezoneSize];
-    char sntp_server[kHostSize];
-
-    // How often the clock is corrected from `sntp_server` (§10.8.2), in hours.
-    // **Zero is off**, which is the one switch rather than a second boolean
-    // that could disagree with it — the same call `Wifi::active` makes. An
-    // empty `sntp_server` is off as well, and for the same reason: both are
-    // the setting being absent rather than two settings arguing.
-    //
-    // It is a floor on the gap between *scheduled* syncs and not the whole
-    // rule: a fresh boot and an internet that has just come back both sync at
-    // once, whatever this says. `sync_policy.h` owns that, and this is the one
-    // number of it the operator gets to set.
-    uint8_t sync_hours;
-};
-
 // How many addresses the internet check may try (§10.9). Must match
 // `wifimgr::kMaxProbeTargets`, which is asserted where the two meet.
 inline constexpr size_t kMaxProbeTargets = 4;
@@ -251,7 +221,6 @@ struct Data {
     Wifi wifi;
     InternetCheck internet;
     Nats nats;
-    Time time;
     Led led;
     Approval approval;
 };
@@ -279,20 +248,16 @@ esp_err_t Restore();
 // --- Who has to be told when the fields moved under them ------------------
 //
 // A `Reload` or a `Restore` replaces every field at once, and four subsystems are
-// holding copies of some of them: the codec has a volume, the panel a brightness,
-// the Wi-Fi manager a network list, the clock's sync task an interval and a
-// server, the bus a URL, the web server a mode. Telling them is not this
-// component's job — it has never heard of a codec (§10.14.2) — but *remembering*
-// to tell them cannot be the caller's, because there are three callers now: the
-// console's `config reload`, the settings screen's row (§10.8.5) and the
-// restore.
+// holding copies of some of them: the light has a brightness, the Wi-Fi manager a
+// network list, the bus a URL, the gate a timeout. Telling them is not this
+// component's job — it has never heard of a radio (§10.14.2) — but *remembering*
+// to tell them cannot be the caller's, because there are two callers: the
+// console's `config reload` and the restore.
 //
-// **So it is a hook, for the fifth time in this firmware** (after
-// `screens::OnDecision`, `wifimgr::OnTick`, `web::SetDiagnostics` and
-// `nats`'s): `main` registers what has to happen, and `Reload`/`Restore` call it
-// themselves on success — which is what makes a reload from a finger and a reload
-// from the console the same reload rather than two lists somebody has to keep in
-// step.
+// **So it is a hook, and `nats`'s is the other one**: `main` registers what has to
+// happen, and `Reload`/`Restore` call it themselves on success — which is what
+// makes a reload typed on the console and a restore the same reload rather than
+// two lists somebody has to keep in step.
 //
 // **`Init` deliberately does not call it.** It runs before any of those
 // subsystems exists, and `main` applies each of them explicitly in an order that

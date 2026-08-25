@@ -38,9 +38,9 @@ bool Mounted();
 // would not fit or the input is empty — never a truncated path, which would
 // open the wrong file rather than fail.
 //
-// Public because playback streams a file itself rather than reading it whole
-// (`audio::Speaker`), and one convention about what a path may look like beats
-// two implementations of it.
+// Public because more than one caller resolves a path — `ls` and `cat` on the
+// console, and the settings' own atomic write — and one convention about what a
+// path may look like beats several implementations of it.
 bool ResolvePath(const char *path, char *out, size_t capacity);
 
 // Bytes the filesystem accounts for. `total` is smaller than the partition:

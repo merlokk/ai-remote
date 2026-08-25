@@ -9,13 +9,22 @@
 // Gone: `imu`, `power`, `poweroff`, `display`, `audio`, `play`, `touch`,
 // `screen`, `clock`, `screenshot` and `web` — eleven commands and about 1,400
 // lines, every one of them about a chip or a panel that is not here. Gone with
-// them: `limits`, which was a readout of §9.7's and §9.10's documents — this
-// device has no display and does not watch what a Claude Code session is
-// spending or doing, so there is nothing to read out. Added: `led` (§10.17) and
-// `key` with its two verbs (§10.18). Everything in between — `status`, `date`,
-// `config`, `wifi`, `nats`, `keys`, `register`, `forget`, `ls`, `cat`, `term`,
-// `reboot` — is unchanged on purpose, so that an operator who knows one of these
-// two devices knows the other.
+// them, and for the same reason:
+//
+//   * `limits`, a readout of §9.7's and §9.10's documents. There is no display
+//     and this device watches neither subject, so there is nothing to read out;
+//   * `date` and `config zones`, and the `tz` / `sntp` / `sync` settings under
+//     them. **There is no clock on this board** (§10.13) — no RTC, and after this
+//     no SNTP either. A time that is only right once a server has been asked, on
+//     a device with nowhere to show it and nothing that reads it, is machinery
+//     with no consumer: §7's `ts` is echoed from the request and never
+//     re-derived (`signing.h`), and every duration this console prints is a
+//     monotonic one off `esp_timer`.
+//
+// Added: `led` (§10.17) and `key` with its two verbs (§10.18). Everything in
+// between — `status`, `config`, `wifi`, `nats`, `keys`, `register`, `forget`,
+// `ls`, `cat`, `term`, `reboot` — is unchanged on purpose, so that an operator
+// who knows one of these two devices knows the other.
 //
 // `commands.md` in this folder is the list of what you can type. Design
 // documents describe why; that one describes what.
@@ -62,8 +71,6 @@
 #include "age_text.h"
 #include "request_card.h"
 #include "storage.h"
-#include "timesync.h"
-#include "timezone.h"
 #include "wifi_manager.h"
 #include "wifi_radio.h"
 
@@ -146,221 +153,6 @@ void PrintDuration(uint32_t ms) {
     char text[ui::kAgeTextSize];
     ui::AgeText(ms / 1000, text, sizeof text);
     printf("%s", text);
-}
-
-// Where the clock's time actually comes from, which is a different question
-// from what time it is — and the one nobody can answer by looking at a clock
-// face. Whether syncing is on, when it last worked, **how far it moved the
-// clock** (a device stepped by four seconds every time has an RTC to be
-// suspicious of, and nothing else here would ever say so), and when the next
-// one is due.
-void PrintSyncStatus() {
-    if (!timesync::Ready()) {
-        printf("sync       not running\n");
-        return;
-    }
-
-    const timesync::Status sync = timesync::Get();
-    const config::Time &settings = config::Get().time;
-
-    // What the setting is.
-    if (!sync.enabled) {
-        printf("sync       off%s\n",
-               settings.sntp_server[0] == '\0' ? " — no server set" : " — sync hours is 0");
-    } else {
-        printf("sync       %s every %u h%s\n", settings.sntp_server,
-               static_cast<unsigned>(settings.sync_hours), sync.syncing ? ", asking now" : "");
-    }
-
-    // **When it last heard from a server, printed whether or not syncing is
-    // still on.** That is a fact about the time above rather than about the
-    // schedule, and switching the schedule off afterwards does not unmake it —
-    // it makes it the *only* thing that says where this clock's time came
-    // from.
-    //
-    // Shown in the configured zone, like the `local` line above it: the device
-    // keeps UTC and a zone is presentation (§10.8.2), and "when did it last
-    // sync" is a question people ask in wall-clock time.
-    if (sync.ever_synced) {
-        struct tm fields = {};
-        localtime_r(&sync.last_utc, &fields);
-        printf("           last %04d-%02d-%02d %02d:%02d:%02d %s, ", fields.tm_year + 1900,
-               fields.tm_mon + 1, fields.tm_mday, fields.tm_hour, fields.tm_min, fields.tm_sec,
-               settings.zone);
-        PrintDuration(sync.since_last_ms);
-        printf(" ago, moved the clock %+d s\n", static_cast<int>(sync.last_step_seconds));
-    } else {
-        printf("           never synced\n");
-    }
-
-    if (!sync.enabled) {
-        // Nothing is scheduled and the line above already said why. A "next"
-        // clause here would be a countdown to something that will not happen.
-        return;
-    }
-
-    printf("           ");
-    if (sync.next_in_ms == timesync::kNever) {
-        // Enabled and nothing scheduled can only mean one thing, and saying it
-        // is the difference between a broken device and a waiting one.
-        printf("no internet to ask through");
-    } else if (sync.next_in_ms == 0) {
-        printf("due now");
-    } else {
-        printf("next in ");
-        PrintDuration(sync.next_in_ms);
-    }
-    if (sync.failures > 0) {
-        printf(", %u attempt(s) failed since", static_cast<unsigned>(sync.failures));
-    }
-    printf("\n");
-}
-
-// `date` (CLAUDE.md §10.13). **Three readouts on the sibling board and two
-// here**, because there is no battery-backed clock on this one: the system time,
-// and the same instant through the configured zone.
-//
-// What that costs is stated rather than hidden. `date set` sets the system clock
-// **for this boot only** — there is nowhere to store it — and a device that has
-// never synced says so. Nothing in the approval path reads any of it
-// (`signing.h`: §7's `ts` is echoed from the request, never re-derived), so a
-// wrong clock here is a wrong log line and not a wrong signature.
-int CmdDate(int argc, char **argv) {
-    // `sync` first, because it is the one form that works on a device which has
-    // just booted and knows nothing about what time it is.
-    if (argc == 2 && strcmp(argv[1], "sync") == 0) {
-        if (!timesync::Ready()) {
-            printf("the clock sync task is not running — see the boot log\n");
-            return 1;
-        }
-        timesync::Status sync = timesync::Get();
-        if (!sync.enabled) {
-            printf("clock sync is off — 'config set sync <hours>' turns it on\n");
-            return 1;
-        }
-        if (!sync.internet) {
-            printf("no internet to ask through; it will sync by itself as soon as there is\n");
-            return 1;
-        }
-
-        const uint32_t before = static_cast<uint32_t>(sync.successes) + sync.failures;
-        timesync::SyncNow();
-        printf("asking %s…\n", config::Get().time.sntp_server);
-        // Waiting for the answer rather than returning to the prompt, the same
-        // call `wifi ping` makes: a command that returns before its result
-        // does is a command people run twice.
-        for (uint32_t waited = 0; waited < 20000; waited += 200) {
-            vTaskDelay(pdMS_TO_TICKS(200));
-            sync = timesync::Get();
-            if (static_cast<uint32_t>(sync.successes) + sync.failures != before) {
-                break;
-            }
-        }
-        PrintSyncStatus();
-        return 0;
-    }
-
-    if (argc == 1) {
-        const time_t system_now = time(nullptr);
-        // **An obviously unset clock beats a plausible wrong one**, which is the
-        // sibling board's rule about its RTC applied to the one clock this board
-        // has. ESP-IDF starts `time_t` at the epoch, so anything before 2001 is a
-        // device that has not been told, and saying so is the difference between
-        // a broken clock and a waiting one.
-        if (system_now < 978307200) {
-            printf("system     never set - no RTC on this board, and no sync yet\n");
-        }
-        struct tm utc_fields = {};
-        gmtime_r(&system_now, &utc_fields);
-        printf("system     %04d-%02d-%02d %02d:%02d:%02d UTC\n", utc_fields.tm_year + 1900,
-               utc_fields.tm_mon + 1, utc_fields.tm_mday, utc_fields.tm_hour, utc_fields.tm_min,
-               utc_fields.tm_sec);
-
-        // The same instant, shown through the configured zone. UTC is what the
-        // device keeps; this line is the only place a zone means anything.
-        struct tm local_fields = {};
-        localtime_r(&system_now, &local_fields);
-        const int offset = tz::OffsetSeconds(system_now);
-        printf("local      %04d-%02d-%02d %02d:%02d:%02d %s (UTC%+03d:%02d%s)\n",
-               local_fields.tm_year + 1900, local_fields.tm_mon + 1, local_fields.tm_mday,
-               local_fields.tm_hour, local_fields.tm_min, local_fields.tm_sec,
-               config::Get().time.zone, offset / 3600, abs(offset % 3600) / 60,
-               tz::IsDaylightSaving(system_now) ? ", DST" : "");
-        PrintSyncStatus();
-        return 0;
-    }
-
-    // `date set` takes **local** time, because that is what an operator reads
-    // off a wall or a phone. `date set utc …` is the escape hatch for the
-    // moment when the zone is wrong and the clock still has to be right.
-    //
-    // The two forms are picked apart by naming the arguments rather than by
-    // shifting `argv`, which is how the first version of this got it wrong: a
-    // shift moves the word the *next* check is looking for.
-    bool as_utc = false;
-    const char *date_arg = nullptr;
-    const char *time_arg = nullptr;
-    if (argc == 4 && strcmp(argv[1], "set") == 0) {
-        date_arg = argv[2];
-        time_arg = argv[3];
-    } else if (argc == 5 && strcmp(argv[1], "set") == 0 && strcmp(argv[2], "utc") == 0) {
-        as_utc = true;
-        date_arg = argv[3];
-        time_arg = argv[4];
-    }
-
-    if (date_arg == nullptr) {
-        printf("usage: date                    read it: system in UTC, plus local\n");
-        printf("       date sync                              ask the time server now\n");
-        printf("       date set <YYYY-MM-DD> <HH:MM:SS>       in %s\n", config::Get().time.zone);
-        printf("       date set utc <YYYY-MM-DD> <HH:MM:SS>   in UTC\n");
-        printf("a set survives until the next reboot; this board has no RTC\n");
-        return 1;
-    }
-
-    unsigned year = 0, month = 0, day = 0, hour = 0, minute = 0, second = 0;
-    if (sscanf(date_arg, "%4u-%2u-%2u", &year, &month, &day) != 3 ||
-        sscanf(time_arg, "%2u:%2u:%2u", &hour, &minute, &second) != 3) {
-        printf("could not parse '%s %s'; expected YYYY-MM-DD HH:MM:SS\n", date_arg, time_arg);
-        return 1;
-    }
-
-    // **The typed time is converted to UTC first, and UTC is what is stored.**
-    // `mktime` reads the fields as local and applies the zone; `timegm` takes
-    // them as UTC already. `tm_isdst = -1` is the important half of the local
-    // case: it tells libc to work out for itself whether summer time was in
-    // force on that date, instead of this code assuming.
-    struct tm fields = {};
-    fields.tm_year = static_cast<int>(year) - 1900;
-    fields.tm_mon = static_cast<int>(month) - 1;
-    fields.tm_mday = static_cast<int>(day);
-    fields.tm_hour = static_cast<int>(hour);
-    fields.tm_min = static_cast<int>(minute);
-    fields.tm_sec = static_cast<int>(second);
-    fields.tm_isdst = as_utc ? 0 : -1;
-
-    const time_t seconds = as_utc ? timegm(&fields) : mktime(&fields);
-    if (seconds <= 0) {
-        printf("that is not a date this clock can hold\n");
-        return 1;
-    }
-
-    struct tm utc_fields = {};
-    gmtime_r(&seconds, &utc_fields);
-
-    // **The system clock, and nothing else — there is nowhere else.** On the
-    // sibling board this also went into the PCF85063 so the next boot started
-    // from a good number; here the next boot starts from the epoch again unless
-    // SNTP has something to say.
-    const timeval tv = {.tv_sec = seconds, .tv_usec = 0};
-    settimeofday(&tv, nullptr);
-
-    printf("set to %04u-%02u-%02u %02u:%02u:%02u %s\n", year, month, day, hour, minute, second,
-           as_utc ? "UTC" : config::Get().time.zone);
-    printf("held as %04d-%02d-%02d %02d:%02d:%02d UTC, until the next reboot\n",
-           utc_fields.tm_year + 1900, utc_fields.tm_mon + 1, utc_fields.tm_mday,
-           utc_fields.tm_hour, utc_fields.tm_min, utc_fields.tm_sec);
-    return 0;
 }
 
 int CmdReboot(int argc, char **) {
@@ -582,7 +374,7 @@ int CmdButtons(int argc, char **argv) {
 // name the same fields, and two hand-kept enumerations of the same nine words is
 // the drift that rule exists to prevent.
 constexpr const char *kSettableFields =
-    "led, ledidle, requirekey, denybutton, touchtimeout, nats, tz, sntp, sync, wifi";
+    "led, ledidle, requirekey, denybutton, touchtimeout, nats, wifi";
 
 int SetConfigField(const char *key, const char *value) {
     config::Data &c = config::Get();
@@ -603,7 +395,6 @@ int SetConfigField(const char *key, const char *value) {
         // How long a request waits for a fingertip (§10.18). Shorter than the
         // hook's own timeout on purpose.
         {"touchtimeout", 1, 600, " s"},
-        {"sync", 0, 255, " h"},
     };
 
     for (const NumberField &field : kNumbers) {
@@ -628,13 +419,9 @@ int SetConfigField(const char *key, const char *value) {
             // people stop making. It is also the only way to judge a brightness:
             // by looking at it.
             led::SetBrightness(c.led.percent, c.led.idle_percent);
-        } else if (strcmp(key, "touchtimeout") == 0) {
+        } else {
             c.approval.touch_timeout_seconds = static_cast<uint16_t>(parsed);
             // Nothing to apply: the gate reads it when the next request arrives.
-        } else {
-            c.time.sync_hours = static_cast<uint8_t>(parsed);
-            // Applied at once, and **only the sync**, not the connection.
-            timesync::Apply();
         }
         printf("%s = %ld%s, in memory only — 'config save' writes it to %s\n", field.name, parsed,
                field.unit, config::kPath);
@@ -646,45 +433,6 @@ int SetConfigField(const char *key, const char *value) {
         char *target;
         size_t capacity;
     };
-    if (strcmp(key, "tz") == 0) {
-        // A name from the table, or a raw POSIX rule for a zone it does not
-        // know. Both are accepted; what is refused is a *third* thing —
-        // something that is neither, which is almost always a typo and which
-        // libc would quietly read as UTC.
-        const char *posix = tz::Lookup(value);
-        const char *name = value;
-        if (posix == nullptr) {
-            if (!tz::LooksLikePosix(value)) {
-                printf("'%s' is neither a zone this firmware knows nor a POSIX rule.\n", value);
-                printf("try 'config zones' for the list, or give a rule like EET-2EEST,M3.5.0/3,M10.5.0/4\n");
-                return 1;
-            }
-            // Stored as `Custom` rather than named after a zone that happens
-            // to share the rule: one rule serves many zones, so naming it
-            // would tell the operator they are in Athens when they typed the
-            // rule for Kyiv.
-            posix = value;
-            name = tz::kCustomName;
-        }
-        if (strlen(name) >= sizeof(c.time.zone) || strlen(posix) >= sizeof(c.time.posix)) {
-            printf("that name or rule is longer than the %u characters the field holds\n",
-                   static_cast<unsigned>(sizeof(c.time.zone) - 1));
-            return 1;
-        }
-
-        snprintf(c.time.zone, sizeof(c.time.zone), "%s", name);
-        snprintf(c.time.posix, sizeof(c.time.posix), "%s", posix);
-        // Applied at once, like the volume: the point of a zone is what `date`
-        // prints, and a setting you cannot see the effect of is one you cannot
-        // check.
-        tz::Apply(c.time.posix);
-        const int offset = tz::OffsetSeconds();
-        printf("tz = %s (%s, UTC%+03d:%02d%s), in memory only — 'config save' writes it to %s\n",
-               c.time.zone, c.time.posix, offset / 3600, abs(offset % 3600) / 60,
-               tz::IsDaylightSaving() ? ", DST now" : "", config::kPath);
-        return 0;
-    }
-
     // **The same check `nats url` makes**, because otherwise this is the way
     // round it — and a URL that will not parse is a bus the device silently
     // never connects to, which looks exactly like a bus that is down. Empty is
@@ -699,7 +447,6 @@ int SetConfigField(const char *key, const char *value) {
 
     const StringField strings[] = {
         {"nats", c.nats.url, sizeof(c.nats.url)},
-        {"sntp", c.time.sntp_server, sizeof(c.time.sntp_server)},
     };
 
     for (const StringField &field : strings) {
@@ -717,25 +464,18 @@ int SetConfigField(const char *key, const char *value) {
         }
         snprintf(field.target, field.capacity, "%s", value);
         const bool cleared = value[0] == '\0';
-        if (strcmp(key, "sntp") == 0) {
-            // The server is half of whether syncing happens at all (an empty
-            // one is off), so the task is told — and told nothing else.
-            timesync::Apply();
-        }
         if (strcmp(key, "nats") == 0) {
-            // Likewise the narrowest thing that changed: a new address drops
-            // the connection, an unchanged one costs nothing.
+            // The narrowest thing that changed: a new address drops the
+            // connection, an unchanged one costs nothing.
             nats::Apply();
         }
         if (cleared) {
-            // `sntp = , in memory only` is what the general form prints for an
+            // `nats = , in memory only` is what the general form prints for an
             // empty value, and it reads like a bug. Clearing a field is a
-            // deliberate thing to do here — an empty time server is how
-            // syncing is switched off — so it gets said in words.
+            // deliberate thing to do here — an empty URL is how the bus is
+            // switched off — so it gets said in words.
             printf("%s cleared%s, in memory only — 'config save' writes it to %s\n", field.name,
-                   strcmp(key, "sntp") == 0   ? "; the clock will not sync"
-                   : strcmp(key, "nats") == 0 ? "; nothing will be connected"
-                                              : "",
+                   strcmp(key, "nats") == 0 ? "; nothing will be connected" : "",
                    config::kPath);
             return 0;
         }
@@ -803,7 +543,6 @@ void PrintConfigUsage() {
     printf("       config save                   write the current settings back\n");
     printf("       config restore                the factory defaults over them\n");
     printf("       config set <field> <value>    %s\n", kSettableFields);
-    printf("       config zones [filter]         the time zones known by name\n");
     printf("the networks and the ping targets are lists — 'wifi join', 'wifi check'\n");
     printf("'set' changes memory only; 'save' is what writes %s\n", config::kPath);
 }
@@ -816,27 +555,6 @@ int CmdConfig(int argc, char **argv) {
     if (argc == 2 && (strcmp(argv[1], "help") == 0 || strcmp(argv[1], "-h") == 0 ||
                       strcmp(argv[1], "--help") == 0)) {
         PrintConfigUsage();
-        return 0;
-    }
-
-    // At most one filter: `config zones a b` used to list the whole table and
-    // silently drop the second word, which reads as "no zone matched neither".
-    if (argc >= 2 && argc <= 3 && strcmp(argv[1], "zones") == 0) {
-        // The table, optionally filtered — `config zones Europe` is how an
-        // operator finds the spelling without scrolling past Australia.
-        const char *filter = argc == 3 ? argv[2] : nullptr;
-        size_t shown = 0;
-        for (size_t i = 0; i < tz::Count(); ++i) {
-            const tz::Zone &zone = tz::At(i);
-            if (filter != nullptr && strcasestr(zone.name, filter) == nullptr) {
-                continue;
-            }
-            printf("  %-22s %s\n", zone.name, zone.posix);
-            ++shown;
-        }
-        printf("%u of %u zone(s)%s. Any POSIX rule is accepted too.\n",
-               static_cast<unsigned>(shown), static_cast<unsigned>(tz::Count()),
-               filter != nullptr ? " matched" : "");
         return 0;
     }
 
@@ -919,15 +637,6 @@ int CmdConfig(int argc, char **argv) {
                c.wifi.networks[i].ip.enabled ? c.wifi.networks[i].ip.address : "dhcp");
     }
     printf("nats       %s\n", c.nats.url);
-    const int offset = tz::OffsetSeconds();
-    printf("time       %s (%s), UTC%+03d:%02d%s\n", c.time.zone, c.time.posix, offset / 3600,
-           abs(offset % 3600) / 60, tz::IsDaylightSaving() ? ", DST now" : "");
-    if (c.time.sync_hours == 0) {
-        printf("           sntp %s, sync off\n", c.time.sntp_server);
-    } else {
-        printf("           sntp %s every %u h\n", c.time.sntp_server,
-               static_cast<unsigned>(c.time.sync_hours));
-    }
     printf("led        %u%%, idle %u%%\n", static_cast<unsigned>(c.led.percent),
            static_cast<unsigned>(c.led.idle_percent));
     // **The gate, and the un-careful half of it is shouted** (§10.18). Every
@@ -1839,12 +1548,16 @@ int CmdKeys(int argc, char **argv) {
         printf("            it started. after that it is pinned and nobody else can answer.\n");
         const int64_t when = registration::RegisteredTs();
         if (when > 0) {
+            // **UTC, and it says so.** This is the handler's own clock as it
+            // stamped the reply; there is no clock on this board to render it
+            // through (§10.13), so nothing here could turn it into local time
+            // even if there were somewhere to show one.
             char stamp[32];
             const time_t seconds = static_cast<time_t>(when);
-            std::tm local = {};
-            localtime_r(&seconds, &local);
-            strftime(stamp, sizeof(stamp), "%Y-%m-%d %H:%M:%S", &local);
-            printf("registered %s\n", stamp);
+            std::tm utc = {};
+            gmtime_r(&seconds, &utc);
+            strftime(stamp, sizeof(stamp), "%Y-%m-%d %H:%M:%S", &utc);
+            printf("registered %s UTC\n", stamp);
         }
     } else {
         printf("registered no - 'register <token>' is what does it\n");
@@ -1861,8 +1574,10 @@ void PrintRegisterUsage() {
     printf("it is one-time: a token that has been used, or has expired, is refused.\n");
 }
 
-// §6, over USB, because the alternative is typing 50 characters of base64 on a
-// 2.16-inch touchscreen.
+// §6, over USB, and on this board there is no alternative to argue against: the
+// sibling firmware offered a keyboard on a touchscreen for it, and typing 50
+// characters of base64 that way was the reason this exists. Here there is neither
+// screen nor touch panel (§10.13), so the console is the only way in.
 int CmdRegister(int argc, char **argv) {
     if (argc != 2 || strcmp(argv[1], "help") == 0) {
         PrintRegisterUsage();
@@ -2394,7 +2109,7 @@ int CmdKey(int argc, char **argv) {
 // about how many callers there are.
 int CmdDevStatus(int argc, char **) {
     if (argc != 1) {
-        printf("usage: devstatus     the board, the light, the key, time and the network\n");
+        printf("usage: devstatus     the board, the light, the key and the network\n");
         return 1;
     }
 
@@ -2410,9 +2125,6 @@ int CmdDevStatus(int argc, char **) {
         // Then the approval loop, and the key that gates it.
         {"request", &CmdRequest},
         {"key", &CmdKey},
-        // `date` carries the clock **and** where its time came from, which is why
-        // there is no separate sync section.
-        {"date", &CmdDate},
         {"wifi", &CmdWifi},
         // And the bus after the network that carries it.
         {"nats", &CmdNats},
@@ -2445,7 +2157,7 @@ int CmdDevStatus(int argc, char **) {
 const esp_console_cmd_t kCommands[] = {
     {
         .command = "devstatus",
-        .help = "everything at once: the board, the light, the key, the time and the network",
+        .help = "everything at once: the board, the light, the key and the network",
         .hint = nullptr,
         .func = &CmdDevStatus,
         .argtable = nullptr,
@@ -2500,7 +2212,7 @@ const esp_console_cmd_t kCommands[] = {
     {
         .command = "config",
         .help = "the settings file: print it, set a field, reload / save / restore it",
-        .hint = "[reload|save|restore|set|zones] — 'config help' for the forms",
+        .hint = "[reload|save|restore|set] — 'config help' for the forms",
         .func = &CmdConfig,
         .argtable = nullptr,
         .func_w_context = nullptr,
@@ -2556,15 +2268,6 @@ const esp_console_cmd_t kCommands[] = {
         .help = "ask the terminal whether it does line editing, or force the answer",
         .hint = "[smart|dumb]",
         .func = &CmdTerm,
-        .argtable = nullptr,
-        .func_w_context = nullptr,
-        .context = nullptr,
-    },
-    {
-        .command = "date",
-        .help = "the system clock in UTC and local, set it, or sync it now",
-        .hint = "[sync|set [utc] <YYYY-MM-DD> <HH:MM:SS>]",
-        .func = &CmdDate,
         .argtable = nullptr,
         .func_w_context = nullptr,
         .context = nullptr,

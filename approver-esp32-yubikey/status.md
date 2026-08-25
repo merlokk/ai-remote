@@ -19,12 +19,11 @@ Three states, and the middle one is the one to watch:
 | SPIFFS + `config.json` | **runs** | mounts, parses, saves, reloads, restores |
 | Ed25519 identity (§10.6) | **runs** | derived at boot, self-test passes on this chip |
 | — its custody | **fallback** | the seed is in **unencrypted NVS**, not behind an eFuse. §10.6 has the table; §10.18 is what makes it a smaller problem here |
-| Console on UART0 (§10.7) | **runs** | all 17 commands answer |
+| Console on UART0 (§10.7) | **runs** | all 16 commands answer |
 | WS2812 on GPIO48 (§10.17) | **runs** | UART1 at 3.33 Mbaud, inverted; 0 write failures over thousands of frames |
 | The state ranking (§10.17) | **runs** | transitions observed for `booting → no-wifi → no-bus → not-registered → not-enrolled → pending` |
 | BOOT button | **partly** | it **reads** (`buttons` is correct). The press → verdict path is untested |
 | Wi-Fi (§10.9) | **runs** | joins, DHCP, reachability check |
-| Clock | **runs (SNTP only)** | there is no RTC on this board (§10.13); a power cut loses the time |
 | NATS (§10.5) | **runs** | connects, subscribes, publishes; reconnect re-subscribes |
 | Registration (§10.7) | **runs** | real token, real handler, reply verified, key pinned |
 | Request queue + TTL | **runs** | `request test` queues, lights, expires with no reply |
@@ -54,6 +53,7 @@ plugged into the OTG port.
 | | Why |
 |---|---|
 | **Any display at all** | there is no panel (§10.1), so there are no screens and nothing on them. The two watch-only subjects went with them: §9.7's `status` and §9.10's `activity` were subscribed here once, for a screen this device does not have, and `components/watcher`, both parsers and the `limits` command are deleted rather than kept switched off |
+| **A clock** | no RTC (no I²C bus for one) and no SNTP. `components/timesync`, `components/timezone`, the `date` command, `config zones` and the `time` section of `config.json` are deleted: §7's `ts` is echoed from the request, nothing else reads a wall-clock time, and there is nowhere to show one (§10.13) |
 | **A web configuration site** | the sibling board has one (§10.16). Not carried over: it is 2,600 lines and its whole purpose is a way in when there is no other, which on this board is what the CH343P bridge is. It would also be a second surface to keep away from a verdict (§10.10 rule 4) |
 | **OTA** | the partition table has two slots and nothing uses them |
 | **A user manual** | the sibling folder has one with photographs. This device has no screens to photograph and one light; when the key works, this is the document to write |

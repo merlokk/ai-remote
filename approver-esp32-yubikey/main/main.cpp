@@ -2,10 +2,10 @@
 // lives in `components/` and the logic goes on top of it, and what this file does
 // is **compose**, in an order that is written down rather than implied.
 //
-// What it composes: the filesystem, the settings on it, the identity, the zone,
-// the board — which on this device is one button and one LED — the console, the
-// radio, the clock's network half, the bus, the security key on the OTG port,
-// and the responder that ties them together. Every step below says why it is
+// What it composes: the filesystem, the settings on it, the identity, the board
+// — which on this device is one button and one LED — the console, the radio, the
+// bus, the security key on the OTG port, and the responder that ties them
+// together. Every step below says why it is
 // where it is; the one rule none of them breaks is that a failure here is a log
 // line and not a branch (§10.10: a device that cannot mount its storage should
 // still come up far enough to say so).
@@ -34,8 +34,6 @@
 #include "registrar.h"
 #include "responder.h"
 #include "storage.h"
-#include "timesync.h"
-#include "timezone.h"
 #include "wifi_manager.h"
 
 namespace {
@@ -125,7 +123,6 @@ void GatherState(indicator::Inputs *out) {
 void SettingsChanged() {
     led::SetBrightness(config::Get().led.percent, config::Get().led.idle_percent);
     wifimgr::Apply();
-    timesync::Apply();
     nats::Apply();
     // The light itself, so that a brightness change or a `requireKey` flip is
     // visible on the next frame rather than at the next state change.
@@ -224,10 +221,6 @@ extern "C" void app_main(void) {
     // flashed board is in.
     registration::Init();
 
-    // The zone before anything logs a time. Nothing here moves a stored value —
-    // `time_t` is UTC, and this only decides how it is read back.
-    tz::Apply(config::Get().time.posix);
-
     console::Init();
 
     // The radio (§10.9), after the settings it reads and after the console that can
@@ -237,20 +230,14 @@ extern "C" void app_main(void) {
     // Wi-Fi off should not pay them.
     wifimgr::Init();
 
-    // The clock's network half, which is why it is after the radio: it has nothing
-    // to do until there is an internet, and `wifimgr` is what tells it there is one.
-    //
-    // **No RTC argument, unlike the sibling board's call** — there is no
-    // battery-backed clock on this board at all (§10.13). `timesync.h` states what
-    // that costs, and the short form is: nothing, for approvals.
-    timesync::Init();
-
-    // And the bus (§10.3), for the same reason in the same place: it has nothing to
+    // And the bus (§10.3), after the radio for the same reason: it has nothing to
     // do until there is a client link with an address.
     //
-    // **Not the clock's question, though.** `timesync` waits for an internet; this
-    // waits for a *network*, because the server is on the LAN and a household router
-    // with its uplink down is a perfectly good place to approve a command.
+    // **It waits for a *network*, not for an internet**, because the server is on
+    // the LAN and a household router with its uplink down is a perfectly good place
+    // to approve a command. There is nothing else here that wants the internet:
+    // this device has no clock to sync (§10.13), which is the one subsystem on the
+    // sibling board that did.
     nats::Init();
 
     // **The security key on the OTG port** (§10.18). It brings up the USB Host

@@ -17,7 +17,7 @@ host_test\run.cmd            everything
 host_test\run.cmd led fido   only the suites whose name matches
 ```
 
-**366 tests, 0 failures** as of this writing. `working-with-code.md` has the one
+**327 tests, 0 failures** as of this writing. `working-with-code.md` has the one
 line that runs them and what it needs; `host_test/CMakeLists.txt` explains why
 this is a plain CMake project rather than `idf.py --preview set-target linux` (the
 short version: that target is offered by this install and does not work on a
@@ -25,9 +25,9 @@ Windows host).
 
 ### What is under test, and why each one is there
 
-Eighteen suites. Five are this board's own, twelve are shared with the sibling
-folder — where they are expected to stay identical — and one is what is left of a
-suite that folder still has in full.
+Sixteen suites. Five are this board's own, ten are shared with the sibling folder
+— where they are expected to stay identical — and one is what is left of a suite
+that folder still has in full.
 
 **This board's own:**
 
@@ -39,9 +39,9 @@ suite that folder still has in full.
 | `cbor` | every length in a CTAP2 response is a number the key chose. Also the writer: CTAP2 requires canonical CBOR, and a canonicity bug looks like a key that mysteriously will not talk to this device |
 | `ctap2` | that the requests are bytes a real key accepts — including **`up: true`, said out loud**, which is the single most important byte this firmware sends — and that a malformed answer never reaches the verifier |
 
-**Shared with the sibling board:** `buttons`, `config`, `timezone`,
-`request_card`, `wifi_policy`, `reachability`, `timesync`, `nats`, `signing`,
-`registration`, `approval`, `vectors`.
+**Shared with the sibling board:** `buttons`, `config`, `request_card`,
+`wifi_policy`, `reachability`, `nats`, `signing`, `registration`, `approval`,
+`vectors`.
 
 **And one that is a remainder:** `age_text`. That board's `limits` suite tests
 §9.7's parser and the screen above it, and its `activity` suite does the same for
@@ -49,6 +49,11 @@ suite that folder still has in full.
 neither subject. What survived the deletion is the duration formatter
 `cli/console.cpp` prints ages with, and `test_age_text.cpp` keeps its three bands
 pinned so two readouts cannot describe one instant two different ways.
+
+**And four suites that folder has and this one has nothing to point them at:**
+`timezone` and `timesync` went with the clock (no RTC, no SNTP — §10.13), and that
+board's `i2cbus` and its four chip suites were never here at all. A suite is not
+kept as a placeholder for hardware that is absent.
 
 Three of the shared suites changed here and the diffs are worth knowing:
 
@@ -118,7 +123,6 @@ that did not say so would be a list nobody could act on.
 | the console | every command answers on UART0 through the CH343P bridge at 115200 |
 | Wi-Fi | joins, gets a DHCP lease, and the reachability check agrees |
 | the bus | connects to the real NATS server, subscribes to `approvals.*` in the `approvers` queue group, and `Server max_payload: 65536` comes back |
-| SNTP | the clock is set from `pool.ntp.org` — which on a board with no RTC is the only way it is ever right |
 | **registration** | a real `register <token>` against the real handler, verified reply, key pinned, `registration.json` written, and the responder went onto `approvals.*` |
 | **the queue and the gate's failure path** | `request test 25`: queued, the LED went white and fast, the gate waited, nobody plugged a key in, and it expired with **no reply** and `gate said 1 asked, 0 approved, 0 button-denied, 1 nothing` |
 | **the not-enrolled blocker** | with nothing enrolled the device refuses to subscribe and says so, which is §10.10 rule 5 |

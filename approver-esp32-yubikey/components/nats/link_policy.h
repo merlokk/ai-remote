@@ -47,8 +47,8 @@ inline constexpr uint32_t kNever = 0xFFFFFFFFu;
 
 struct LinkSettings {
     // There is an address to connect to **and** nobody has said "off". One
-    // switch rather than two fields that can disagree — the call `Wifi::active`
-    // makes, and the one §10.8.2 makes about an empty SNTP server.
+    // switch rather than two fields that can disagree — the same call
+    // `Wifi::active` makes.
     bool enabled = false;
 
     // The first wait after a refusal, and the ceiling it grows to. Not in

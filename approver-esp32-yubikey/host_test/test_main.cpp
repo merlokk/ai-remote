@@ -15,13 +15,15 @@
 // scrolling past a hundred lines of PASS to find the one that matters is how a
 // suite stops being run.
 //
-// **Eleven of the sibling board's suites are missing and five are new.** Gone
+// **Thirteen of the sibling board's suites are missing and five are new.** Gone
 // with the hardware: the navigator, the clock face, the settings menu, the Wi-Fi
 // screen, the touch calibration, the idle policy, the I²C bus and the four chips
-// on it, and the three web ones — and gone with the two documents this device
-// does not watch, the limits suite and the activity one. New: the LED's
-// arithmetic, the state ranking, CTAPHID framing, CBOR, and CTAP2. What is left
-// in the middle is shared with that board and is expected to stay identical.
+// on it, and the three web ones. Gone with the two documents this device does not
+// watch: the limits suite and the activity one. And gone with the clock — there is
+// no RTC here and no SNTP either (§10.13) — the timezone suite and the sync-policy
+// one. New: the LED's arithmetic, the state ranking, CTAPHID framing, CBOR, and
+// CTAP2. What is left in the middle is shared with that board and is expected to
+// stay identical.
 
 #include <cstring>
 
@@ -31,10 +33,8 @@
 void RegisterRequestCardTests(void);
 void RegisterConfigTests(void);
 void RegisterButtonsTests(void);
-void RegisterTimezoneTests(void);
 void RegisterWifiPolicyTests(void);
 void RegisterReachabilityTests(void);
-void RegisterTimesyncTests(void);
 void RegisterNatsTests(void);
 void RegisterSigningTests(void);
 void RegisterRegistrationTests(void);
@@ -88,15 +88,13 @@ int main(int argc, char **argv) {
     if (Wanted("cbor") || Wanted("fido")) RegisterCborTests();
     if (Wanted("ctap2") || Wanted("fido") || Wanted("key")) RegisterCtap2Tests();
 
-    // The settings, the zone, and the queue a request waits in.
+    // The settings and the queue a request waits in.
     if (Wanted("config")) RegisterConfigTests();
-    if (Wanted("timezone")) RegisterTimezoneTests();
     if (Wanted("request") || Wanted("card")) RegisterRequestCardTests();
 
     // The network and the bus.
     if (Wanted("wifi")) RegisterWifiPolicyTests();
     if (Wanted("wifi") || Wanted("reach")) RegisterReachabilityTests();
-    if (Wanted("timesync") || Wanted("sync")) RegisterTimesyncTests();
     if (Wanted("nats") || Wanted("bus")) RegisterNatsTests();
 
     // §7's own bytes.
