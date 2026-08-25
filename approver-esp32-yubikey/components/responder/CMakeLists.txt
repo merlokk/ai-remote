@@ -11,5 +11,5 @@
 # light what happened, and the light never tells this component anything.
 idf_component_register(SRCS "responder.cpp"
                     INCLUDE_DIRS "."
-                    REQUIRES protocol crypto registration nats fido ui watcher indicator config
+                    REQUIRES protocol crypto registration nats fido ui indicator config
                              boards buttons esp_timer mbedtls)

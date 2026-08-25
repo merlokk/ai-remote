@@ -1,6 +1,6 @@
 idf_component_register(SRCS "main.cpp"
                     INCLUDE_DIRS "."
-                    REQUIRES boards storage config crypto registration responder watcher timezone
+                    REQUIRES boards storage config crypto registration responder timezone
                              timesync cli led indicator fido wifimgr nats app_update esp_app_format
                              esp_timer)
 

@@ -15,12 +15,13 @@
 // scrolling past a hundred lines of PASS to find the one that matters is how a
 // suite stops being run.
 //
-// **Nine of the sibling board's suites are missing and five are new.** Gone with
-// the hardware: the navigator, the clock face, the settings menu, the Wi-Fi
+// **Eleven of the sibling board's suites are missing and five are new.** Gone
+// with the hardware: the navigator, the clock face, the settings menu, the Wi-Fi
 // screen, the touch calibration, the idle policy, the I²C bus and the four chips
-// on it, and the three web ones. New: the LED's arithmetic, the state ranking,
-// CTAPHID framing, CBOR, and CTAP2. What is left in the middle is shared with
-// that board and is expected to stay identical.
+// on it, and the three web ones — and gone with the two documents this device
+// does not watch, the limits suite and the activity one. New: the LED's
+// arithmetic, the state ranking, CTAPHID framing, CBOR, and CTAP2. What is left
+// in the middle is shared with that board and is expected to stay identical.
 
 #include <cstring>
 
@@ -38,8 +39,7 @@ void RegisterNatsTests(void);
 void RegisterSigningTests(void);
 void RegisterRegistrationTests(void);
 void RegisterApprovalTests(void);
-void RegisterLimitsTests(void);
-void RegisterActivityTests(void);
+void RegisterAgeTextTests(void);
 void RegisterVectorTests(void);
 
 // This board's own.
@@ -99,12 +99,13 @@ int main(int argc, char **argv) {
     if (Wanted("timesync") || Wanted("sync")) RegisterTimesyncTests();
     if (Wanted("nats") || Wanted("bus")) RegisterNatsTests();
 
-    // §7's own bytes, and the two watch-only documents.
+    // §7's own bytes.
     if (Wanted("signing") || Wanted("protocol")) RegisterSigningTests();
     if (Wanted("registration") || Wanted("protocol")) RegisterRegistrationTests();
     if (Wanted("approval") || Wanted("protocol")) RegisterApprovalTests();
-    if (Wanted("limits") || Wanted("status")) RegisterLimitsTests();
-    if (Wanted("activity") || Wanted("limits") || Wanted("doing")) RegisterActivityTests();
+
+    // And the one formatter left over from the screens (`ui/age_text.h`).
+    if (Wanted("age") || Wanted("duration")) RegisterAgeTextTests();
 
     // Tier 2: the cross-language parity vectors.
     if (Wanted("vectors") || Wanted("parity") || Wanted("protocol")) RegisterVectorTests();

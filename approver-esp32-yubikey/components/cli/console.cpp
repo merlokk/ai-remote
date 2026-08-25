@@ -8,11 +8,14 @@
 // hardware this board does not have cut out of it, and two commands added.**
 // Gone: `imu`, `power`, `poweroff`, `display`, `audio`, `play`, `touch`,
 // `screen`, `clock`, `screenshot` and `web` — eleven commands and about 1,400
-// lines, every one of them about a chip or a panel that is not here. Added:
-// `led` (§10.17) and `key` with its two verbs (§10.18). Everything in between —
-// `status`, `date`, `config`, `wifi`, `nats`, `keys`, `register`, `forget`,
-// `limits`, `ls`, `cat`, `term`, `reboot` — is unchanged on purpose, so that an
-// operator who knows one of these two devices knows the other.
+// lines, every one of them about a chip or a panel that is not here. Gone with
+// them: `limits`, which was a readout of §9.7's and §9.10's documents — this
+// device has no display and does not watch what a Claude Code session is
+// spending or doing, so there is nothing to read out. Added: `led` (§10.17) and
+// `key` with its two verbs (§10.18). Everything in between — `status`, `date`,
+// `config`, `wifi`, `nats`, `keys`, `register`, `forget`, `ls`, `cat`, `term`,
+// `reboot` — is unchanged on purpose, so that an operator who knows one of these
+// two devices knows the other.
 //
 // `commands.md` in this folder is the list of what you can type. Design
 // documents describe why; that one describes what.
@@ -54,9 +57,9 @@
 #include "registrar.h"
 #include "registration.h"
 #include "responder.h"
-#include "watcher.h"
 #include "mbedtls/base64.h"
 #include "nats_link.h"
+#include "age_text.h"
 #include "request_card.h"
 #include "storage.h"
 #include "timesync.h"
@@ -134,10 +137,10 @@ storage::Entry entries[kMaxListed];
 // A duration a person reads at a glance. The internet check prints plain
 // seconds because its numbers *are* seconds; the clock's are hours, and
 // "21600 s ago" is a conversion nobody should have to do in their head.
-// **The three bands live in `ui::AgeText` now**, and this calls it rather than
-// keeping a second copy: the limits screen puts the same age on the glass, and
-// two implementations of "how long ago" is how a console and a panel come to
-// describe one instant two different ways. It is also the half that is
+// **The three bands live in `ui::AgeText`**, and this calls it rather than
+// keeping a second copy: three commands here print an age, and two
+// implementations of "how long ago" is how one readout and the next come to
+// describe the same instant two different ways. It is also the half that is
 // host-tested — nothing in this file is.
 void PrintDuration(uint32_t ms) {
     char text[ui::kAgeTextSize];
@@ -1919,106 +1922,6 @@ int CmdForget(int argc, char **argv) {
     return 0;
 }
 
-// `limits` (CLAUDE.md §9.7, §9.10) — what the last `status` document said and
-// what the session is doing.
-//
-// **A readout of a readout**, which is the whole of the watcher's job: nothing
-// here can be acted on and nothing here reaches a responder. On the sibling board
-// this printed what was on a screen as well; here the console *is* the screen, so
-// what it prints is the documents themselves.
-int CmdLimits(int argc, char **) {
-    if (argc != 1) {
-        printf("usage: limits        the last status and activity documents\n");
-        return 1;
-    }
-
-    const watcher::Status wire = watcher::Get();
-    if (!wire.ready) {
-        printf("watching   the status watcher did not start\n");
-        return 1;
-    }
-
-    // Two subjects on one connection (§9.7, §9.10), and each says whether it is
-    // being watched: "the numbers are here and the activity is not" is a state,
-    // not a rounding error.
-    printf("watching   %s%s\n", wire.subscribed ? "status" : watcher::BlockerText(wire.blocked_by),
-           wire.activity_subscribed ? " + activity" : "");
-    printf("documents  %" PRIu32 " arrived, %" PRIu32 " unreadable\n", wire.received, wire.refused);
-    printf("activity   %" PRIu32 " arrived, %" PRIu32 " unreadable\n", wire.activity_received,
-           wire.activity_refused);
-
-    bool has_activity = false;
-    const ui::Activity doing = watcher::Activity(&has_activity);
-
-    // What the session is doing (§9.10), printed **before** the early return
-    // below: this document can arrive with no `status` document behind it, and a
-    // readout that hid it in that case would be hiding the only thing there is.
-    if (has_activity) {
-        printf("doing      %s, %s, ", ui::ActivityEventText(doing.event),
-               ui::ActivityStateText(doing.state));
-        PrintDuration(wire.activity_age_ms);
-        printf(" ago\n");
-        if (doing.tool[0] != 0) {
-            printf("tool       %s%s%s\n", doing.agent[0] != 0 ? doing.agent : "",
-                   doing.agent[0] != 0 ? " > " : "", doing.tool);
-        }
-        if (doing.summary[0] != 0) {
-            printf("summary    %s\n", doing.summary);
-        }
-    } else {
-        printf("doing      nothing has arrived on the activity subject yet\n");
-    }
-
-    bool has_limits = false;
-    const ui::Limits doc = watcher::Limits(&has_limits);
-    if (!has_limits) {
-        printf("status     nothing yet\n");
-        return 0;
-    }
-
-    printf("last       ");
-    PrintDuration(wire.limits_age_ms);
-    printf(" ago\n");
-    printf("model      %s%s%s\n", doc.model[0] != 0 ? doc.model : "unknown",
-           doc.effort[0] != 0 ? ", effort " : "", doc.effort);
-    printf("session    %s\n", doc.cwd[0] != 0 ? doc.cwd : "unknown");
-
-    struct Row {
-        const char *label;
-        const ui::Gauge *gauge;
-        bool window;
-    };
-    const Row rows[] = {
-        {"5h ", &doc.five_hour, true},
-        {"7d ", &doc.seven_day, true},
-        {"ctx", &doc.context, false},
-    };
-    for (const Row &row : rows) {
-        if (!row.gauge->present) {
-            // §9.7 omits a whole section for an API key rather than a
-            // subscription, and "absent" is not "empty".
-            printf("%s        not published\n", row.label);
-            continue;
-        }
-        const ui::Level level = row.window ? ui::WindowLevel(row.gauge->used_percent)
-                                           : ui::ContextLevel(row.gauge->used_percent);
-        const char *colour = level == ui::Level::kGreen    ? "green"
-                             : level == ui::Level::kYellow ? "yellow"
-                                                           : "red";
-        if (row.gauge->resets_at != 0) {
-            printf("%s        %u%% spent (%s), resets in %s\n", row.label,
-                   static_cast<unsigned>(row.gauge->used_percent), colour,
-                   row.gauge->resets_in_text[0] != 0 ? row.gauge->resets_in_text : "?");
-        } else {
-            // The context window resets when the session does, not on a clock.
-            printf("%s        %u%% spent (%s)\n", row.label,
-                   static_cast<unsigned>(row.gauge->used_percent), colour);
-        }
-    }
-    return 0;
-}
-
-
 int CmdTerm(int argc, char **argv) {
     if (argc > 2) {
         printf("usage: term          ask the terminal again, and follow its answer\n");
@@ -2517,8 +2420,6 @@ int CmdDevStatus(int argc, char **) {
         // to: a socket that is open and a key that cannot sign are the same
         // silence from the other end.
         {"keys", &CmdKeys},
-        // And the readout that is only a readout (§9.7).
-        {"limits", &CmdLimits},
     };
 
     bool first = true;
@@ -2646,15 +2547,6 @@ const esp_console_cmd_t kCommands[] = {
         .help = "delete registration.json; the signing key is untouched",
         .hint = "now",
         .func = &CmdForget,
-        .argtable = nullptr,
-        .func_w_context = nullptr,
-        .context = nullptr,
-    },
-    {
-        .command = "limits",
-        .help = "the last status and activity documents off the bus (§9.7, §9.10)",
-        .hint = nullptr,
-        .func = &CmdLimits,
         .argtable = nullptr,
         .func_w_context = nullptr,
         .context = nullptr,

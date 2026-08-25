@@ -17,9 +17,9 @@
 // **Polled, not interrupt-driven, and no task of its own.** Nothing in this
 // firmware needs a press faster than a poll delivers it, and an ISR plus a queue
 // would be machinery with no consumer — the same argument §10.14.3 makes about
-// the I²C fake. The owner polls (the LVGL task, at frame rate, when there is
-// one) and gets edges back. When something needs a callback, it arrives with the
-// thing that needs it.
+// the I²C fake. The owner polls — on this board the responder's gate task, every
+// `kPollIntervalMs` — and gets edges back. When something needs a callback, it
+// arrives with the thing that needs it.
 //
 // **The pins are arguments, not an include of `board.h`** (§10.14.2): this layer
 // knows about contacts, not about which board they are soldered to.

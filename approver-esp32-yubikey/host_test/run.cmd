@@ -7,9 +7,9 @@ rem `idf.py --preview set-target linux`: that target is offered by this install
 rem and does not work on a Windows host.
 rem
 rem The three tools it reaches for are already on this machine for other
-rem reasons - MSVC because the LVGL preview of section 10.12.1 compiles
-rem snippets with it, CMake and Ninja because ESP-IDF ships them. Nothing new
-rem is installed in order to run a test.
+rem reasons - MSVC because the sibling board's screen previews compile with it,
+rem CMake and Ninja because ESP-IDF ships them. Nothing new is installed in
+rem order to run a test.
 rem
 rem Kept ASCII and CRLF on purpose: cmd.exe parses a UTF-8 em dash as a command.
 

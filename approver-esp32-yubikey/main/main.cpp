@@ -36,7 +36,6 @@
 #include "storage.h"
 #include "timesync.h"
 #include "timezone.h"
-#include "watcher.h"
 #include "wifi_manager.h"
 
 namespace {
@@ -275,10 +274,6 @@ extern "C" void app_main(void) {
     // **The same function is what a reload calls**, so a `config reload` typed on
     // the console and a restore re-apply one list rather than two that drift.
     config::OnChanged(SettingsChanged);
-
-    // The `status` watcher first, so the responder's very first tick already has
-    // something to maintain. It opens nothing and starts no task (§9.7).
-    watcher::Init();
 
     // **Last.** It subscribes to nothing yet — it wants a key, a registration and a
     // bus first, and `request` on the console says which of the three is missing.

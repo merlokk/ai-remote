@@ -88,8 +88,8 @@ CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
 CONFIG_LIBSODIUM_USE_MBEDTLS_SHA=y
 
 # --- FreeRTOS ----------------------------------------------------------------
-# A 1 kHz tick. The sibling board sets this for LVGL's sake and there is no LVGL
-# here; it is kept because two things on this board are timed in tens of
+# A 1 kHz tick, and on this board it is not the graphics library's ask that pays
+# for it: it is kept because two things here are timed in tens of
 # milliseconds — the button debounce (`buttons::kPollIntervalMs`, 10 ms) and the
 # LED's blink phases (200 ms at the fastest) — and at the framework's default
 # 100 Hz a 10 ms delay is a 10 ms *quantum*, which turns a debounce poll into a

@@ -3,9 +3,11 @@
 ## `Cargo.lock` follow for the other halves of this repository.
 ##
 ## **This list is the sibling board's minus four and plus one.** Gone with the
-## panel: LVGL, `esp_lvgl_port`, the SH8601 panel driver and the CST9217 touch
-## driver — four components and one transitive one (`esp_lcd_touch`), which is
-## most of why this firmware is a third of that one's size. Added: the USB Host
+## panel: the graphics library, its ESP-IDF port, the SH8601 panel driver and the
+## CST9217 touch driver — four components and one transitive one
+## (`esp_lcd_touch`), which is most of why this firmware is a third of that one's
+## size. There is nothing on this board to draw on and nothing to draw, so none of
+## them is a dependency that was postponed. Added: the USB Host
 ## Library, which is the only thing on this list root §1 has not already signed
 ## off for the other board, and the reason is argued at its own entry below.
 dependencies:

@@ -31,6 +31,14 @@ that, and they are the whole reason this folder exists next to the other one:
 Both halves, or nothing. That is what a second factor is, and it is what the
 single button on the sibling board does not have.
 
+**And nothing here shows anything.** There is no panel, so there is also no
+`approvals` card, no clock face, and — the one that is easy to assume is still
+here because the subjects exist — **no readout of what a Claude Code session is
+spending or doing**: §9.7's `status` and §9.10's `activity` are watched by the
+sibling board and by [`approver-web/`](../approver-web/CLAUDE.md), and this device
+does not subscribe to either. It has one output, and its whole vocabulary is
+§10.17's fourteen states.
+
 ## The documents
 
 These docs are section **10** of the project docs, the same section number the
@@ -65,11 +73,10 @@ status summary below, whose long form is [`status.md`](status.md).
 
 **The device is real and the loop is closed up to the key.** It boots, mounts its
 filesystem, derives an Ed25519 identity and self-tests it, joins Wi-Fi, connects
-to the NATS server on the LAN, syncs its clock, watches §9.7's `status` and
-§9.10's `activity`, registers with the handler over §6, and takes its place on
-`approvals.*` in the `approvers` queue group. A request put on it appears as a
-white flashing light, waits for a fingertip, expires with **no reply** if none
-comes, and the counters say which of those happened. All of that has been done on
+to the NATS server on the LAN, syncs its clock, registers with the handler over
+§6, and takes its place on `approvals.*` in the `approvers` queue group. A
+request put on it appears as a white flashing light, waits for a fingertip,
+expires with **no reply** if none comes, and the counters say which of those happened. All of that has been done on
 the board on this desk, against the real handler and the real NATS server.
 
 **What has not been done on hardware is the key itself.** No FIDO authenticator

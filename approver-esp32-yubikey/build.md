@@ -20,7 +20,13 @@ repository.
 **Gone with the panel**: `lvgl/lvgl`, `espressif/esp_lvgl_port`,
 `espressif/esp_lcd_sh8601` and `waveshare/esp_lcd_touch_cst9217` — four
 components and one transitive one (`espressif/esp_lcd_touch`). That is most of
-why this firmware is 1.31 MB where the sibling's is closer to 2.
+why this firmware is 1.30 MB where the sibling's is closer to 2.
+
+**And no graphics library is coming back.** There is nothing on this board that
+LVGL could draw on (§10.1) and nothing this firmware has to say that one WS2812
+cannot (§10.17), so LVGL is not a dependency that was postponed — it is one this
+design has no place for. The line above is the record of its removal, not a note
+about a gap.
 
 ### The one new dependency
 
@@ -40,7 +46,7 @@ why this firmware is 1.31 MB where the sibling's is closer to 2.
   host-tests (§10.18.3). Taking the class driver would add a dependency in order
   to *not* use most of it. **One new component instead of two.**
 
-It costs **35,322 bytes** of the image (`idf.py size-components`), of which 890
+It costs **35,506 bytes** of the image (`idf.py size-components`), of which 890
 are IRAM.
 
 ### The transitive one nobody signed off in advance
@@ -109,7 +115,7 @@ be 64 KB aligned and an off-by-one there is a silent reflash away from confusing
 Measured on this build, `idf.py size` and `idf.py size-components`:
 
 ```
-Total image size: 1,309,451 bytes
+Total image size: 1,303,363 bytes
 Smallest app partition: 2,621,440 bytes — 50% free
 Bootloader: 21,056 bytes — 36% free
 ```
@@ -120,24 +126,24 @@ The largest archives, and none of them is a surprise:
 |---------|-------|------|
 | `libnet80211.a` | 150,645 | the Wi-Fi MAC |
 | `libespressif__libsodium.a` | 135,955 | Ed25519 |
-| `libesp_stdio.a` | 112,665 | mostly `.rodata` — `printf` and its tables |
-| `libtfpsacrypto.a` | 111,161 | mbedTLS/PSA, linked for `esp-tls` and used by §10.18 |
-| `liblwip.a` | 109,883 | TCP/IP |
+| `libesp_stdio.a` | 111,765 | mostly `.rodata` — `printf` and its tables |
+| `libtfpsacrypto.a` | 111,149 | mbedTLS/PSA, linked for `esp-tls` and used by §10.18 |
+| `liblwip.a` | 109,891 | TCP/IP |
 
 And this project's own, which is the interesting half:
 
 | Archive | Bytes | of which `.bss` |
 |---------|-------|-----------------|
 | `libresponder.a` | 50,772 | **36,142** — four 2.3 KB requests, two pending decisions, two task stacks |
-| `libespressif__usb.a` | 35,322 | 17 |
-| `libnats.a` | 33,016 | 10,496 |
-| `libfido.a` | 27,838 | **12,420** — the 2 KB CTAPHID buffer, a 512-byte request buffer, the enrolment |
-| `libcli.a` | 23,151 | 5,248 |
-| `libconfig.a` | 9,358 | 5,230 |
-| `libprotocol.a` | 8,699 | 0 |
-| `libled.a` | 5,357 | 2,800 — one task stack |
+| `libespressif__usb.a` | 35,506 | 17 |
+| `libnats.a` | 32,780 | 10,496 |
+| `libfido.a` | 27,834 | **12,420** — the 2 KB CTAPHID buffer, a 512-byte request buffer, the enrolment |
+| `libcli.a` | 22,387 | 5,248 |
+| `libconfig.a` | 9,382 | 5,230 |
+| `libprotocol.a` | 6,624 | 0 |
+| `libled.a` | 5,349 | 2,800 — one task stack |
 | `libindicator.a` | 4,901 | 3,192 — one task stack |
-| `libui.a` | 1,672 | 0 |
+| `libui.a` | 1,486 | 0 |
 | `libbuttons.a` | 869 | 0 |
 | `libboards.a` | 512 | 102 |
 
@@ -149,6 +155,14 @@ CTAPHID reassembly buffer capped at 2 KB rather than the protocol's 7,609.
 
 `libboards.a` at 512 bytes is the whole of this board's hardware layer, which is
 the clearest single number for what §10.13's list of absences bought.
+
+**And there is no `libwatcher.a` in that table because there is no such archive.**
+§9.7's and §9.10's parsers, the two view classes over them and the `limits`
+command that printed them are deleted rather than switched off: a device with no
+display was carrying two subscriptions, two parsers and a readout for a screen
+that does not exist. It took `libprotocol.a` from 8,699 bytes to 6,624, `libui.a`
+from 1,672 to 1,486, `libcli.a` from 23,151 to 22,387, and about 6 KB off the
+image.
 
 ### Flashing
 

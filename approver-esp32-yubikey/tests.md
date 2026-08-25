@@ -17,7 +17,7 @@ host_test\run.cmd            everything
 host_test\run.cmd led fido   only the suites whose name matches
 ```
 
-**406 tests, 0 failures** as of this writing. `working-with-code.md` has the one
+**366 tests, 0 failures** as of this writing. `working-with-code.md` has the one
 line that runs them and what it needs; `host_test/CMakeLists.txt` explains why
 this is a plain CMake project rather than `idf.py --preview set-target linux` (the
 short version: that target is offered by this install and does not work on a
@@ -25,8 +25,9 @@ Windows host).
 
 ### What is under test, and why each one is there
 
-Nineteen suites. Five are this board's own and the rest are shared with the
-sibling folder, where they are expected to stay identical.
+Eighteen suites. Five are this board's own, twelve are shared with the sibling
+folder — where they are expected to stay identical — and one is what is left of a
+suite that folder still has in full.
 
 **This board's own:**
 
@@ -40,9 +41,16 @@ sibling folder, where they are expected to stay identical.
 
 **Shared with the sibling board:** `buttons`, `config`, `timezone`,
 `request_card`, `wifi_policy`, `reachability`, `timesync`, `nats`, `signing`,
-`registration`, `approval`, `limits`, `activity`, `vectors`.
+`registration`, `approval`, `vectors`.
 
-Three of those changed here and the diffs are worth knowing:
+**And one that is a remainder:** `age_text`. That board's `limits` suite tests
+§9.7's parser and the screen above it, and its `activity` suite does the same for
+§9.10 — neither exists here, because this device has no display and watches
+neither subject. What survived the deletion is the duration formatter
+`cli/console.cpp` prints ages with, and `test_age_text.cpp` keeps its three bands
+pinned so two readouts cannot describe one instant two different ways.
+
+Three of the shared suites changed here and the diffs are worth knowing:
 
 * **`config`** lost seven web tests and gained three about the gate — that
   `requireKey` defaults to **true** when the section is absent, that it moves only
@@ -109,7 +117,7 @@ that did not say so would be a list nobody could act on.
 | the key self-test | `crypto: self-test passed` on every boot, on this chip |
 | the console | every command answers on UART0 through the CH343P bridge at 115200 |
 | Wi-Fi | joins, gets a DHCP lease, and the reachability check agrees |
-| the bus | connects to the real NATS server, subscribes to `status` and `activity`, and `Server max_payload: 65536` comes back |
+| the bus | connects to the real NATS server, subscribes to `approvals.*` in the `approvers` queue group, and `Server max_payload: 65536` comes back |
 | SNTP | the clock is set from `pool.ntp.org` — which on a board with no RTC is the only way it is ever right |
 | **registration** | a real `register <token>` against the real handler, verified reply, key pinned, `registration.json` written, and the responder went onto `approvals.*` |
 | **the queue and the gate's failure path** | `request test 25`: queued, the LED went white and fast, the gate waited, nobody plugged a key in, and it expired with **no reply** and `gate said 1 asked, 0 approved, 0 button-denied, 1 nothing` |

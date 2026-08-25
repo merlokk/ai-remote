@@ -1,6 +1,6 @@
 # The console — every command, and what it does
 
-Eighteen commands on UART0, through the CH343P bridge (the socket marked **UART**,
+Seventeen commands on UART0, through the CH343P bridge (the socket marked **UART**,
 not the one marked **OTG** — §10.1). `COM6` on this machine.
 
 Design documents describe *why*; this one describes what you can type.
@@ -21,8 +21,8 @@ every `set` says so.
 ### `devstatus`
 Every readout below, in one go, in the order in which one of them being wrong
 stops the next from working: `status`, `buttons`, `led`, `request`, `key`,
-`date`, `wifi`, `nats`, `keys`, `limits`. It exists so there is one thing to paste
-into a bug report.
+`date`, `wifi`, `nats`, `keys`. It exists so there is one thing to paste into a
+bug report.
 
 ### `status`
 ```
@@ -243,11 +243,6 @@ they subscribe to feeds the responder, and nothing they publish is signed.
 
 ## The rest
 
-### `limits`
-The last `status` (§9.7) and `activity` (§9.10) documents off the bus, with how
-long ago each arrived. A readout of a readout — nothing here can be acted on and
-nothing here reaches a responder.
-
 ### `date` · `date sync` · `date set [utc] <YYYY-MM-DD> <HH:MM:SS>`
 The system clock in UTC and through the configured zone. **A set survives until
 the next reboot**: this board has no RTC (§10.13), and `date` says
@@ -268,3 +263,6 @@ until the board is reset. If it happens: send `\x1b[24;80R`, then `term dumb`.
 `poweroff` — nothing to switch off (§10.13). `screen`, `display`, `touch`,
 `screenshot`, `clock` — no panel. `imu`, `power`, `audio`, `play` — no such chips.
 `web` — no server, and §10.10 rule 4 is why there is unlikely to be one.
+`limits` — it printed §9.7's and §9.10's documents for a screen this device does
+not have, and the two subscriptions behind it are gone with it: nothing here
+watches what a Claude Code session is spending or doing.

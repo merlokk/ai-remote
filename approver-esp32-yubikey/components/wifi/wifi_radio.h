@@ -153,8 +153,8 @@ class Radio {
     // has been used and switched off, and 119,256 with a client running. So
     // the releasable part is ~41 KB and the permanent part ~10 KB.
     //
-    // 41 KB is worth this much machinery on a part with 512 KB, no PSRAM
-    // (§10.1) and LVGL already holding a 64 KB pool — and 26 on/off cycles
+    // 41 KB is worth this much machinery on a part with 512 KB of internal RAM
+    // (§10.1) — and 26 on/off cycles
     // measured on the board return it every time, drifting a few hundred bytes
     // in *both* directions, which is the allocator rather than a leak.
     esp_err_t Init();

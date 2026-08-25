@@ -18,14 +18,17 @@ policy, the `debsahu/espidf-nats` client and the wrapper over it. Same subjects,
 same queue group, same 64 KB ceiling, same reconnect-invalidates-subscriptions
 behaviour.
 
-**One difference in what sits on top of it**: `components/watcher` no longer
-pushes what it reads at a screen, because there is no screen. It keeps the last
-good `status` and `activity` document and hands them out to whoever asks — the
-console pulls where the sibling pushed. The component got *smaller* for it, and
-the property §9.7 cares about is unchanged: it subscribes with no queue group,
-because a broadcast current value is meant to reach every subscriber.
+**One difference, and it is a subtraction: this device subscribes to one subject,
+not three.** The sibling board also watches §9.7's `status` and §9.10's
+`activity` — the two broadcast current values a Claude Code session publishes —
+because it has a screen to put them on. There is no screen here and no readout
+either, so `components/watcher`, both parsers and the `limits` command are gone
+rather than reduced: a subscription whose only purpose was a display is dead
+weight on a device with no display, and it was taking deliveries off the bus task
+to update a struct nobody read.
 
-`limits` on the console is where those two documents surface.
+What is left on `approvals.*` is unchanged, and that is the point — the subject
+this device exists for was never one of the two.
 
 ## 10.6 The key
 

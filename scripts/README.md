@@ -364,7 +364,7 @@ component. `run.cmd` resolves both and says which one it could not find.
 
 The same thing for the **other** ESP32 firmware — tier 1 of
 [`approver-esp32-yubikey/tests.md`](../approver-esp32-yubikey/tests.md) §10.11,
-the board with a security key on its OTG port instead of a screen. 406 tests,
+the board with a security key on its OTG port instead of a screen. 366 tests,
 including the five suites that folder has and its sibling does not: the LED's
 encoding, the state ranking above it, and the three layers of CTAPHID / CBOR /
 CTAP2.

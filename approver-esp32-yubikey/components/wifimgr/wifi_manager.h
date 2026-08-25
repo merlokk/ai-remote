@@ -117,10 +117,10 @@ Snapshot Get();
 // **A hook, so that this manager can be the clock for something without knowing
 // what it is.** The configuration web server has to come up when there is a
 // network and go down when there is not, and it has nothing at all to do in
-// between — which is `components/watcher`'s argument for having no task of its
-// own, arriving a second time. This task already polls the radio five times a
-// second; lending that tick out costs a function pointer, and a task of its own
-// would have cost 2.5 KB of permanent RAM.
+// between — the same argument anything that only has to notice a state change
+// makes for having no task of its own. This task already polls the radio five
+// times a second; lending that tick out costs a function pointer, and a task of
+// its own would have cost 2.5 KB of permanent RAM.
 //
 // The dependency runs one way, like `screens::OnDecision`: `wifimgr` holds a
 // pointer and never learns what is on the other end of it.

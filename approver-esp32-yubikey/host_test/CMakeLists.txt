@@ -124,8 +124,7 @@ add_executable(host_test
     test_signing.cpp
     test_registration.cpp
     test_approval.cpp
-    test_limits.cpp
-    test_activity.cpp
+    test_age_text.cpp
 
     # Tier 2: the vectors `approver/protocol.py` and `lib/crypto.py` generated,
     # run against the assemblers that have to reproduce them. The header comes
@@ -153,8 +152,7 @@ add_executable(host_test
     ../components/fido/ctap2.cpp
 
     ../components/ui/request_card.cpp
-    ../components/ui/limits_view.cpp
-    ../components/ui/activity_view.cpp
+    ../components/ui/age_text.cpp
     ../components/config/config.cpp
     # The atomic write of §10.15, which has no ESP-IDF in it and so is the
     # sequence that ships rather than a model of one in `fakes/`.
@@ -179,8 +177,6 @@ add_executable(host_test
     ../components/protocol/signing.cpp
     ../components/protocol/registration.cpp
     ../components/protocol/approval.cpp
-    ../components/protocol/status.cpp
-    ../components/protocol/activity.cpp
 
     # cJSON, the real one, out of the managed component `idf.py build` fetched.
     "${CJSON_DIR}/cJSON.c"

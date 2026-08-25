@@ -55,11 +55,14 @@
 //     first probe of this library panicked inside libsodium with a stack
 //     protection fault. `kSignStackBytes` below is that number plus honest
 //     headroom, and it is what any task that calls `Sign` has to be sized
-//     against. §10.8.1 already forbids this running in an LVGL callback; this is
-//     the second reason.
+//     against. Nothing on this board has a callback shallow enough to be tempted
+//     — there is no graphics library and no display task (§10.1) — but the number
+//     is the constraint either way, and this is the second reason it is written
+//     down.
 //   * **`Ready()` is not a formality.** A device with no eFuse key burned, or one
-//     whose self-test failed, must not subscribe and must say so on the screen
-//     (§10.6, §10.8.2). Every failure here ends in silence rather than in a
+//     whose self-test failed, must not subscribe and must say so — on this board
+//     with the light (§10.6, §10.17). Every failure here ends in silence rather
+//     than in a
 //     signature nobody can verify, which is §10.10's rule.
 //   * **`Init` runs before the radio and needs nothing from it.** Ed25519
 //     signing is deterministic, so signing consumes no entropy — the RNG caveat
