@@ -61,7 +61,8 @@ Three tiers, and the first one is where nearly everything belongs:
    Unity, which ESP-IDF vendors as a submodule, and cJSON, which the
    `espressif/cjson` managed component vendors — so both are cloned at the
    versions this project builds against (ESP-IDF v6.0.2 ships Unity 2.6.0;
-   `espressif/cjson` 1.7.18 vendors upstream cJSON 1.7.19). Identical files, which
+   `espressif/cjson` 1.7.19~2 — what `dependencies.lock` resolves the manifest's
+   `^1.7.18` to — vendors upstream cJSON 1.7.19). Identical files, which
    is what makes the job honest without the toolchain `idf.py build` would need;
    `CJSON_DIR` became overridable for it, next to the `IDF_PATH` that already was.
    The job runs on **Windows**, because the `else()` branch of that
@@ -72,7 +73,7 @@ Three tiers, and the first one is where nearly everything belongs:
    of §6 and §7's wire format, four of the five chips on the I²C bus, the
    settings file, the buttons, the zone table, the speaker, the Wi-Fi policy,
    the internet check, the clock's sync schedule, the bus link and the panel's
-   idle timer** — 724 tests, and the last row of the table is tier 2 living in
+   idle timer** — 727 tests, and the last row of the table is tier 2 living in
    the same binary:
 
    | Subject | What is pinned |
@@ -135,6 +136,19 @@ Three tiers, and the first one is where nearly everything belongs:
    Four more needed no mutation, because they failed on the real code the
    first time they ran: §10.14.3 has two, §10.8.2 the third, and §10.8.1 the
    fourth.
+
+   **And the blind spot mutation-checking cannot see: a test that is never
+   run.** Three of `test_pmic.cpp`'s — the rail-voltage guard in both
+   directions and the charge currents this battery needs — were written,
+   compiled and never registered, because `RegisterPmicTests()` was missing
+   three `RUN_TEST` lines. They had never executed since the commit that added
+   them, and nothing said so: the suite was green, `RUN_TEST` counted 724, and
+   only counting the *definitions* (727) showed the gap. They pass, which is
+   the unlucky outcome — a failing one would have announced itself the day it
+   was wired up. The cheap check is `grep -c RUN_TEST` against `grep -c '^void
+   test_'` per file; the honest version is that a Unity runner with hand-written
+   registration has this hole by construction, and this is the one document that
+   should say so.
 
    **The Wi-Fi screen added twenty, all caught, and one of them had to be aimed
    somewhere else before it was a mutation at all.** The nineteen that went

@@ -19,8 +19,16 @@
 #     are the four this file runs. `scripts\web-approval.cmd` is the local one.
 #
 # So a green run means: the Python suite, the Rust suite and its formatter, the
-# Node suite and its type-check, and the ESP32 host tier — 448 + 59 + 38 + 688
-# assertions' worth, with the hardware-dependent ones skipping as designed.
+# Node suite and its type-check, and the ESP32 host tier — with the
+# hardware-dependent ones skipping as designed.
+#
+# **Deliberately without the four test counts that used to be written here.**
+# They drifted — the Python one was written for a run that had the `yubikey`
+# extra installed, and this job's `uv sync --frozen` does not install it, so the
+# number was wrong by the 161 tests that then skip. `tasks.md` §1 names that
+# shape of rot ("a count written as a number"); the four job logs are the
+# authority, and `tasks.md`'s own green table is the place a snapshot of them
+# belongs, because that file is read as a snapshot.
 #
 # **The actions are on their `node24` majors** (`checkout@v7`, `setup-node@v7`).
 # The `v4` of each still works and warns: they declare `node20`, the runners have
@@ -89,8 +97,9 @@ jobs:
         run: uv run pytest -q
 
   # The status line. `cargo fmt --check` is here because it is one of the four
-  # commands `tasks.md` §2.12 listed, and because a formatter is the one check
-  # that can never be a false positive.
+  # commands `tasks.md` asked for a way in to (that item is done, and its number
+  # is one of the gaps that file's opening explains), and because a formatter is
+  # the one check that can never be a false positive.
   rust:
     name: rust — cargo test
     runs-on: ubuntu-latest
@@ -150,8 +159,10 @@ jobs:
       - name: npm run build
         run: npm run build
 
-  # The ESP32 host tier (§10.11) — 688 tests that need no board, and the one job
-  # that is not on Linux.
+  # The ESP32 host tier (§10.11) — the tests that need no board, and the one job
+  # that is not on Linux. It is the largest of the four by a wide margin; the
+  # count lives in `tasks.md`'s green table rather than here, for the reason the
+  # header gives.
   #
   # **Windows because that is where this suite is known to build.** Its
   # `CMakeLists.txt` has a non-MSVC branch, and it has never been run: MSVC gets
@@ -164,7 +175,8 @@ jobs:
   # the repository — Unity, which ESP-IDF vendors as a submodule, and cJSON,
   # which the `espressif/cjson` managed component vendors — so both are cloned at
   # the versions this project builds against: ESP-IDF v6.0.2 ships Unity 2.6.0,
-  # and `espressif/cjson` 1.7.18 vendors upstream cJSON 1.7.19. Identical files,
+  # and `espressif/cjson` 1.7.19~2 — what `dependencies.lock` resolves the
+  # manifest's `^1.7.18` to — vendors upstream cJSON 1.7.19. Identical files,
   # not stand-ins, which is the whole reason this is honest without the 2 GB of
   # toolchain that `idf.py build` would need.
   esp32-host:

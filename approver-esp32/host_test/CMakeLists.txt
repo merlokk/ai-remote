@@ -57,7 +57,8 @@ set(UNITY_DIR "${IDF_PATH}/components/unity/unity/src")
 #
 # Overridable for the same reason `IDF_PATH` above is: a machine that has not run
 # `idf.py build` can still point this at the same sources. That is what CI does —
-# `espressif/cjson` 1.7.18 vendors upstream cJSON 1.7.19, so a clone of that tag
+# `espressif/cjson` 1.7.19~2 (what `dependencies.lock` resolves the manifest's
+# `^1.7.18` to) vendors upstream cJSON 1.7.19, so a clone of that tag
 # is the identical file rather than a stand-in (`.github/workflows/tests.yml`).
 if(NOT DEFINED CJSON_DIR)
     set(CJSON_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../managed_components/espressif__cjson/cJSON")

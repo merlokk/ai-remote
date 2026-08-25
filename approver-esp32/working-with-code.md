@@ -739,11 +739,14 @@ answer instead of the board. Who is actually on the bus, without raising a card:
 (Invoke-RestMethod http://127.0.0.1:8222/connz?subs=1).connections |
     Select-Object ip, lang, version, subscriptions_list
 # ip           lang   version subscriptions_list
-# 172.20.0.1   espidf 1.4.0   {approvals.*, status}
+# 172.20.0.1   espidf 1.4.0   {approvals.*, status, activity}
 ```
 
 `lang: espidf` is the board — and `name` being empty is §10.5's recorded
-limitation, not a fault.
+limitation, not a fault. **Three subjects, and all three are expected**: the one
+it answers on (`responder.cpp`) and the two it only watches (`watcher.cpp` —
+§9.7's numbers and §9.10's activity line). Two of them is this readout taken
+before the activity subject existed, not a device that failed to subscribe.
 
 ## The device's key (§10.6)
 

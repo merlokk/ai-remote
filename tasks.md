@@ -7,9 +7,14 @@ when it is done, not ticked off, because the reason it was done belongs in the
 document that owns the subject and the history belongs in git.
 
 **So the numbering has gaps, and they are not a mistake to tidy up.** Other files
-cite these numbers (`web.md` names §2.5, `protocol.md` names §2.7), so a number
+cite these numbers (`web.md` names §2.5 twice, `protocol.md` names §2.7), so a number
 belongs to the item that was given it — renumbering after a deletion would silently
-repoint every citation. Three gaps so far: **§2.9**, the clock screen's two unbuilt
+repoint every citation.
+
+**And those citations name this file, deliberately.** These numbers are *not* part
+of the global scheme of root §2 — where §2 is the repository map itself — so a bare
+`§2.5` in another document reads as a subsection of that map. They are written
+`tasks.md §2.5`, which is the rule root §2 now states next to this file. Three gaps so far: **§2.9**, the clock screen's two unbuilt
 promises, struck from §10.8.2 rather than built; **§2.10**, the two shipped config
 files disagreeing about the access point's key, which they no longer do; and
 **§2.12**, three smaller loose ends — a runner for the parity vectors, a way into
@@ -26,12 +31,12 @@ never confused with a broken build:
 
 | Tier | Command | Result |
 |------|---------|--------|
-| Python | `.venv\Scripts\python.exe -m pytest -q` | **453 passed, 40 skipped** (no NATS, no YubiKey, no board, no browser) |
+| Python | `.venv\Scripts\python.exe -m pytest -q` | **453 passed, 40 skipped** — **with NATS up and the `yubikey` extra installed**; no YubiKey, no board, no browser. Both halves of that are load-bearing and the row used to say "no NATS", which the numbers contradict: with the broker down the same suite is **425 passed, 68 skipped**, the 28 being exactly the `requires_nats` tier, and without the extra the three `fido2` files do not collect at all (161 tests). Which is why CI's own numbers are lower than this row and are not written down anywhere — see `.github/workflows/tests.yml` |
 | Rust | `cargo test -q` (in `statusline/`) | **59 passed** across four binaries |
 | Rust format | `cargo fmt --check` | clean |
 | Node | `npm test` (in `approver-web/`) | **38 passed** |
 | Browser tier | `scripts\web-approval.cmd` | **16 passed** in ~35s (needs NATS and `agent-browser`) |
-| Host tier (ESP32) | `scripts\esp32-host-tests.cmd` | **724 passed, 0 failures** — run rather than counted, which is the honest form of this row: the 688 it held before was a `RUN_TEST` grep, and §10.16's gate plus §10.9's AP assertion added 27 tests on top of what that grep saw |
+| Host tier (ESP32) | `scripts\esp32-host-tests.cmd` | **727 passed, 0 failures** — run rather than counted, which is the honest form of this row: the 688 it held before was a `RUN_TEST` grep, and §10.16's gate plus §10.9's AP assertion added 27 tests on top of what that grep saw. The last three arrived by being *found*: `test_pmic.cpp` defined them and `RegisterPmicTests()` never called `RUN_TEST` on them, so they had never run since the commit that wrote them — 727 definitions against 724 registrations, invisible in a green suite |
 | Parity vectors (ESP32) | `scripts\make-vectors.cmd --check` | up to date |
 | Markdown links | every relative link in every tracked `.md` | all resolve |
 

@@ -89,7 +89,7 @@ Two things follow, and the second is the one that costs something:
   be overridden by a subclass; and 1.4.0 is still the newest version on the
   registry, with no name option in it. That leaves an upstream patch, a vendored
   fork of 7,228 lines — which would also make the frame parser this repository's
-  to maintain, and §2.7 wants it attacked rather than owned — or a trick: the
+  to maintain, and `tasks.md` §2.7 wants it attacked rather than owned — or a trick: the
   `lang` macro is expanded straight into the `CONNECT` JSON, so a value carrying
   a quote and a comma would inject a real `name` field. **All three were weighed
   and declined**, at the repository owner's decision: the trick would put a

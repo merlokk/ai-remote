@@ -282,7 +282,7 @@ base64, which is not encryption — anyone who can see the packets can read it, 
 §10.3 already says who that is on this LAN. What it buys is real and bounded: the
 site is no longer open to whoever finds the address, and a device on a network its
 owner half-trusts now has something better than a switch. TLS stays the real fix,
-in §2.5's company. The console says the same sentence when the credential is set,
+in `tasks.md` §2.5's company. The console says the same sentence when the credential is set,
 once, where somebody is looking.
 
 **What the board said**, over the LAN, with the device at `192.168.11.134` and the
@@ -697,6 +697,6 @@ HTTP cannot fix. Nothing in the code decides this today: `web auto` is about the
 
 So what a device on a network its owner does not trust has, in order of strength:
 the interface it is not on, then a password, then `web.write`. Only the last two
-exist, and TLS on the bus and on this port (§2.5) is what would make the middle one
+exist, and TLS on the bus and on this port (`tasks.md` §2.5) is what would make the middle one
 more than a speed bump.
 

@@ -91,7 +91,7 @@ it exists so the flow can be tested and developed without hardware in the loop
 | Component | Role                                                                                                                                                                           |
 |-----------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `approver/hook.py` | Claude Code `PermissionRequest` hook. Sends the request, verifies the signed reply against the allowlist, prints the decision. Fail-safe.                                      |
-| `approver/responder_yubikey.py` | **The primary responder.** The human side with the key on a **YubiKey**: no private key on disk, every decision costs a touch. Needs the `yubikey` v5.8 extra.                 |
+| `approver/responder_yubikey.py` | **The primary responder.** The human side with the key on a **YubiKey**: no private key on disk, every decision costs a touch. Needs the `yubikey` extra, and a key on firmware 5.8.0+. |
 | `approver/responder.py` | The software stand-in for the same role (key on disk, Ed25519/P-256) — for tests, the e2e scripts, and hardware-free development.                                              |
 | `approver/registration_handler.py` | Owns the allowlist (`handler-config.json`). Mints one-time tokens and registers responder public keys. Signs every reply with its own Ed25519 key, which each approver pins.  |
 | `approver/protocol.py` | Shared wire-format: canonical JSON, hashes, and the exact "signing bytes" both sides assemble identically — for approvals (§7) and for registration replies (§6).              |

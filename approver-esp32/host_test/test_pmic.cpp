@@ -710,6 +710,9 @@ void RegisterPmicTests(void) {
 
     RUN_TEST(test_pmic_init_silences_the_ts_pin);
     RUN_TEST(test_pmic_init_turns_on_the_adc_channels_and_off_the_ts_one);
+    RUN_TEST(test_pmic_leaves_a_rail_alone_when_it_is_already_at_its_voltage);
+    RUN_TEST(test_pmic_init_writes_a_rail_that_is_at_the_wrong_voltage);
+    RUN_TEST(test_pmic_init_programs_this_batterys_charge_currents);
     RUN_TEST(test_pmic_init_is_one_uninterrupted_sequence);
 
     RUN_TEST(test_pmic_read_decodes_the_status_bits);

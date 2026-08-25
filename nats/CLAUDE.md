@@ -15,7 +15,7 @@ This file owns sections **3** and **4**. The numbering is global — see
 code (`tests/conftest.py`, `statusline/src/nats.rs`) and from other folder docs,
 so they keep their numbers wherever the text lives.
 
-## 3. Infrastructure (`nats/docker-compose.yml`)
+## 3. Infrastructure (`nats/docker-compose.yml` + `nats/nats-server.conf`)
 
 Bring up: `cd nats && docker compose up -d`
 
@@ -27,13 +27,21 @@ Bring up: `cd nats && docker compose up -d`
 
 JetStream data lives on the named volume `nats_data` (mounted at `/data`, server started with `--store_dir=/data`), so streams survive `docker compose down`; `docker compose down -v` wipes them.
 
-**The server runs with `--max_payload=65536`, and that is a fail-safe for a
-device rather than a preference.** The default is 1 MB; the ESP32 responder
-([`approver-esp32/protocol.md`](../approver-esp32/protocol.md) §10.5) drops its socket on any
-message whose receive buffer its client library cannot allocate, which starts at
-128 KB — so on the default, anyone on this LAN could publish 1 MB to `approvals.*`
-in a loop and keep the responder reconnecting forever, with a real permission
-request never delivered. Refusing the publisher is the right end to fail at.
+**There is a second file here, and one setting is the whole reason for it.**
+`nats/nats-server.conf` is mounted read-only into the server and passed with
+`-c`; it carries exactly one key, `max_payload: 64KB`. It exists because
+`nats-server` has **no `--max_payload` flag** — unlike `-js`, `--store_dir`,
+`-m` and `--name`, which `docker-compose.yml` still passes on the command line.
+`-c` and flags combine and flags win, so nothing else moved into the file, and
+anything that *can* be a flag stays one.
+
+**64 KB is a fail-safe for a device rather than a preference.** The default is
+1 MB; the ESP32 responder ([`approver-esp32/protocol.md`](../approver-esp32/protocol.md)
+§10.5) drops its socket on any message whose receive buffer its client library
+cannot allocate, which starts at 128 KB — so on the default, anyone on this LAN
+could publish 1 MB to `approvals.*` in a loop and keep the responder reconnecting
+forever, with a real permission request never delivered. Refusing the publisher is
+the right end to fail at.
 
 The cost is on the other side, and is worth knowing before it surprises somebody:
 `hook.py` puts the whole `tool_input` on the wire, so **a `Write` of more than

@@ -66,7 +66,7 @@ is not writable in this sandbox.
 | `test_responder_yubikey.py` | `approver/responder_yubikey.py` (§8.7), same fakes | `fido2` |
 | `test_yubikey_integration.py` | the real device (§8.6) — three tiers | a YubiKey |
 | `test_esp32_vectors.py` | the **Python half** of §10.11 tier 2: the committed parity vectors are still what today's `protocol.py` and `lib/crypto.py` produce | — |
-| `test_esp32_web_pages.py` | the six pages of §10.16 as they ship: no inline `<script>`, `app.js` loaded exactly once, every `data-page` handler present, every id it asks for on the page, every link between pages resolving | — |
+| `test_esp32_web_pages.py` | every page of §10.16 as it ships — seven of them now that §10.16 has a `401.html`, and the test globs the directory rather than naming them, so an eighth is covered the day it ships: no inline `<script>`, `app.js` loaded exactly once, every `data-page` handler present, every id it asks for on the page, every link between pages resolving | — |
 | `test_esp32_device.py` | §10.11 tier 3 — the ESP32 responder answering for real, and every tamper on the reply it signed | the board, and a press |
 | `test_web_browser.py` | the browser tier of `approver-web` — a browser-held non-extractable key registering, signing a reply the hook trusts, surviving a full browser restart, and coexisting with a second browser under a second `key_id` | `agent-browser`, node, NATS |
 
@@ -103,7 +103,7 @@ C++ side cannot check about itself**:
   so the C++ suite can say what a URL may *reach* and never whether what it
   reaches works. It exists because `wifi.html` once shipped with a truncated
   inline script that swallowed the shared `<script>` tag after it, and the only
-  symptom was a page that did not look like the other five.
+  symptom was a page that did not look like the others.
 
 All three keep the invariant at the top of this file: with no board and no env
 var set, they skip or pass on their own.

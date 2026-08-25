@@ -79,11 +79,20 @@ first managed dependency and therefore the first `dependencies.lock`, and it is
 one more entry on the version ledger of §10.12 — on v5.5.3 the line would not
 exist.
 
-**And one host-side tool joined, which is not a dependency of anything.**
-`ffmpeg` converts the sounds to the uncompressed WAV the firmware plays
-(§10.8.1); it runs on this machine, nothing links against it, and the command
-is in [`working-with-code.md`](working-with-code.md). The firmware deliberately
-has **no decoder** — the argument is in `components/audio/speaker.h`.
+**And four host-side tools, none of which is a dependency of anything.** They
+run on the development machine, nothing links against them, and none is on root
+§1's list — collected here so that file can point at this paragraph instead of
+repeating it:
+
+| Tool | What it makes | Where |
+|---|---|---|
+| `ffmpeg` | the boot and alert sounds as the uncompressed WAV the firmware plays (§10.8.1). The firmware deliberately has **no decoder** — the argument is in `components/audio/speaker.h` | [`working-with-code.md`](working-with-code.md) has the command |
+| `lvgl-mcp-server` | a screen rendered with no board attached | §10.12.1, registered in the repository's `.mcp.json` |
+| `System.Drawing`, from Windows PowerShell 5.1 | the boot splash, rasterised. Chosen because it is in the box on this platform, unlike every Python route to a font engine | §10.8's splash, `tools/make-splash.ps1` |
+| **Unity** | the host test suite (§10.11) — taken out of the ESP-IDF checkout rather than vendored, and cloned at its own version in CI, which has no ESP-IDF | [`tests.md`](tests.md) |
+
+The MSVC that builds those tests is the one already installed for the LVGL
+preview, so the host tier adds nothing either.
 
 New dependencies, all four approved:
 
@@ -147,14 +156,20 @@ Two things it did cost, both measured rather than assumed:
   *also* an in-tree `libsodium`; on the installed v6.0.2 the in-tree copy is
   gone and the registry one is the only one. Same library, same sign-off, new
   delivery — and one more line on the version ledger of §10.12.
-- **134,225 bytes when something references it, and nothing does yet.** With the
-  §10.6 call surface linked — `sodium_init`, `crypto_sign_seed_keypair`,
-  `crypto_sign_detached`, `crypto_sign_verify_detached` — `idf.py
-  size-components` puts `libespressif__libsodium.a` at 134,225 bytes (133,022 of
-  flash, 1,203 of DIRAM) and the app at 1,780,864 against the 2.5 MB slot. With
-  the probe removed it has no line at all, exactly like the WebSocket client:
-  built, never linked, and the app back at 1,646,640. So the number above is
-  what §10.6 will spend, banked now rather than discovered then.
+- **134,225 bytes when something references it — and something does now.** This
+  number was taken with a *probe* linking the §10.6 call surface —
+  `sodium_init`, `crypto_sign_seed_keypair`, `crypto_sign_detached`,
+  `crypto_sign_verify_detached` — before that section existed: `idf.py
+  size-components` put `libespressif__libsodium.a` at 134,225 bytes (133,022 of
+  flash, 1,203 of DIRAM) and the app at 1,780,864 against the 2.5 MB slot, and
+  with the probe removed it had no line at all, exactly like the WebSocket
+  client: built, never linked, app back at 1,646,640.
+
+  **It is kept because the prediction held.** `components/crypto/device_key.cpp`
+  includes `sodium.h` for real now, and §10.12 measures **134,901** bytes
+  (133,694 of flash, 1,207 of DIRAM) — 676 more than the probe, which is what
+  the real call surface costs over the four-symbol stub. Banked before it was
+  spent, and within 0.5 % when the bill came.
 
 The Kconfig that goes with it is `CONFIG_LIBSODIUM_USE_MBEDTLS_SHA`, and §10.6
 is where the argument for checking it lives; `sdkconfig.defaults` carries the

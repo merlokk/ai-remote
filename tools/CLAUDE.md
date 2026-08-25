@@ -53,38 +53,7 @@ they look like this.
 
 A launcher for `tools/test_request.py`: one permission request, one printed answer, with the hook's own verdict on it. Every option is forwarded, so `--help` there is authoritative. Deliberately thin — cmd cannot speak NATS, and `python -c "..."` mangles quotes here (the note in `yubikey-arkg.cmd`). It resolves the venv interpreter by path so it works from any console, needs **no elevation** (no FIDO device involved), and adds a one-line hint on failure: exit `1` says check that a responder and NATS are up, exit `3` says a responder answered but its key is not in this `--config`'s allowlist. CRLF and block-free, same reason as the other scripts.
 
-```bat
-scripts\test-request.cmd                                  REM the default echo command
-scripts\test-request.cmd --command "rm -rf build"
-scripts\test-request.cmd --timeout 120 --json             REM machine-readable
-scripts\test-request.cmd --dry-run --command "rm -rf b"   REM show the request, send nothing
-```
-
-A run against a responder that is registered and answering looks like this — the `sha256:` line is the one to compare with what `responder_yubikey.py serve` printed on the operator's console:
-
-```
--> approvals.test-request-4d7c7083  (Bash)
-   waiting up to 60s for a responder
-  behavior  : allow
-  reason    : ''
-  key_id    : approver-web
-  input sha : b3eba939fcc8249aa7fe19229471bac68ae4b27571039768f72d2d6eb9726edb
-  signature : sha256:f03ef72d0c874e7f3efb8171e286fc4c4fd6c85999b4e7cd65d5bbdf8a0f1aef (72 bytes)
-  verdict   : TRUSTED - Claude Code would allow this
-```
-
-**`--input` quoting is the opposite in the two shells** — verified, not guessed; each shell's working form is the other's argparse error, because PowerShell will not pass the escaped-double-quote form to a native process and cmd.exe does not treat single quotes as quoting at all:
-
-```powershell
-# PowerShell
-scripts\test-request.cmd --tool Write --input '{"file_path": "x.txt"}'
-```
-```bat
-REM cmd.exe
-scripts\test-request.cmd --tool Write --input "{\"file_path\": \"x.txt\"}"
-```
-
-When in doubt add `--dry-run`: it prints the request that would go out (including the parsed `tool_input` and its `input_sha256`) and touches neither NATS nor an operator, which makes it the fastest way to tell a quoting problem from a responder problem.
+**The examples, the option table, a real run's output and the `--input` quoting trap live in [`scripts/README.md`](../scripts/README.md)** — this section used to carry a second copy of all four, in a file whose own heading two lines up says how-to-run belongs there. One of them is worth naming even here, because it is a design decision rather than usage: `--input` needs *opposite* quoting in PowerShell and `cmd.exe`, each shell's working form being the other's argparse error, and that is why the script forwards arguments untouched instead of trying to normalise them.
 
 ### `scripts/yubikey-arkg.cmd`
 
