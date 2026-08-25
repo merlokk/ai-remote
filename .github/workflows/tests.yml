@@ -19,8 +19,13 @@
 #     are the four this file runs. `scripts\web-approval.cmd` is the local one.
 #
 # So a green run means: the Python suite, the Rust suite and its formatter, the
-# Node suite and its type-check, and the ESP32 host tier — with the
+# Node suite and its type-check, and **both** ESP32 host tiers — with the
 # hardware-dependent ones skipping as designed.
+#
+# The two firmwares share one job rather than having one each: the MSVC setup
+# above them took three attempts to get right on a moving runner image, and a
+# second job would be a second copy of it to keep in step. The builds
+# themselves are three lines apiece.
 #
 # **Deliberately without the four test counts that used to be written here.**
 # They drifted — the Python one was written for a run that had the `yubikey`
@@ -180,7 +185,7 @@ jobs:
   # not stand-ins, which is the whole reason this is honest without the 2 GB of
   # toolchain that `idf.py build` would need.
   esp32-host:
-    name: esp32 — host tier
+    name: esp32 — host tier (both boards)
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
@@ -242,3 +247,19 @@ jobs:
 
           # Unity exits with the number of failures, so this line is the assertion.
           & "$env:RUNNER_TEMP/build/host_test.exe"
+
+          # **And the second board, in the same job rather than a second one.**
+          # Everything above this line — vswhere, vcvarsall, the generator choice,
+          # the two clones — is setup that took three attempts to get right on a
+          # moving runner image, and a second job would be a second copy of it to
+          # keep in step. The build itself is three lines.
+          #
+          # `VECTORS_DIR` is not passed: it defaults to
+          # `approver-esp32/host_test/vectors`, which a checkout has, and that is
+          # the point — there is one copy of the parity vectors in this repository
+          # and both firmwares read it (approver-esp32-yubikey/tests.md §10.11).
+          Write-Host "== approver-esp32-yubikey =="
+          cmake -S approver-esp32-yubikey/host_test -B "$env:RUNNER_TEMP/build-yk" -G $generator `
+            -DIDF_PATH="$env:RUNNER_TEMP/idf" -DCJSON_DIR="$env:RUNNER_TEMP/cjson"
+          cmake --build "$env:RUNNER_TEMP/build-yk"
+          & "$env:RUNNER_TEMP/build-yk/host_test.exe"

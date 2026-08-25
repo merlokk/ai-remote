@@ -1,0 +1,5 @@
+YD-ESP32-S3
+https://mischianti.org/vcc-gnd-studio-yd-esp32-s3-devkitc-1-clone-high-resolution-pinout-and-specs/
+https://github.com/vcc-gnd/YD-ESP32-S3
+
+

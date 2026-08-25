@@ -1,0 +1,60 @@
+{
+    "wifi": {
+        "active": false,
+        "mode": "client",
+        "rounds": 2,
+        "apWindowSeconds": 120,
+        "ap": {
+            "ssid": "approver-yubikey",
+            "password": "approver-yubikey-ap",
+            "channel": 6
+        },
+        "networks": [
+            {
+                "ssid": "YOUR_SSID",
+                "password": "CHANGEME",
+                "ip": {
+                    "static": false,
+                    "address": "192.168.1.43",
+                    "netmask": "255.255.255.0",
+                    "gateway": "192.168.1.1",
+                    "dns1": "192.168.1.1",
+                    "dns2": ""
+                }
+            },
+            {
+                "ssid": "YOUR_SSID2",
+                "password": "CHANGEME"
+            }
+        ]
+    },
+    "internet": {
+        "check": true,
+        "intervalSeconds": 60,
+        "timeoutMs": 2000,
+        "failures": 2,
+        "targets": [
+            "8.8.8.8",
+            "1.1.1.1",
+            "9.9.9.9"
+        ]
+    },
+    "nats": {
+        "url": "nats://192.168.11.70:4222"
+    },
+    "time": {
+        "zone": "Europe/Kyiv",
+        "posix": "EET-2EEST,M3.5.0/3,M10.5.0/4",
+        "sntp": "pool.ntp.org",
+        "syncHours": 6
+    },
+    "led": {
+        "brightness": 50,
+        "idleBrightness": 8
+    },
+    "approval": {
+        "requireKey": true,
+        "touchTimeoutSeconds": 30,
+        "denyButton": true
+    }
+}

@@ -1,0 +1,83 @@
+## Managed dependencies (CLAUDE.md §10.4). Versions are pinned here and locked in
+## `dependencies.lock`, which is committed — the same rule `uv.lock` and
+## `Cargo.lock` follow for the other halves of this repository.
+##
+## **This list is the sibling board's minus four and plus one.** Gone with the
+## panel: LVGL, `esp_lvgl_port`, the SH8601 panel driver and the CST9217 touch
+## driver — four components and one transitive one (`esp_lcd_touch`), which is
+## most of why this firmware is a third of that one's size. Added: the USB Host
+## Library, which is the only thing on this list root §1 has not already signed
+## off for the other board, and the reason is argued at its own entry below.
+dependencies:
+  idf:
+    version: ">=5.5"
+
+  ## cJSON, for `config.json` (§10.15), `fido.json` (§10.18) and the wire format
+  ## of §7.
+  ##
+  ## It is on this list for a reason worth recording: §10.4 approved cJSON as an
+  ## **in-tree** component, and in ESP-IDF v6 it is not one — it was moved out of
+  ## the framework and onto the component registry. So the library is unchanged
+  ## and already signed off; only its delivery is new.
+  espressif/cjson: "^1.7.18"
+
+  ## --- The bus (§10.3, §10.4, §10.5) --------------------------------------
+  ## The NATS client, approved by name and version in §10.4: header-only C++,
+  ## MIT, and the two things that were checked before it was chosen are both
+  ## still true of 1.4.0 — `subscribe` takes a queue group, so §6's `approvers`
+  ## group is expressible, and the message type carries `reply`, which is the
+  ## subject §7 answers into.
+  ##
+  ## **It brings `espressif/esp_websocket_client`, and that is a transitive
+  ## component root §1 asks about.** Its own manifest requires it
+  ## unconditionally, even though its CMakeLists is written to build without one;
+  ## there is no way to decline it from here. Nothing in this firmware reaches the
+  ## WebSocket transport — `nats_bus.h` is the whole call surface and it has no
+  ## way to name one — so what it costs is a download and whatever the linker
+  ## cannot garbage-collect.
+  debsahu/espidf-nats: "^1.4.0"
+
+  ## --- The signature (§10.4, §10.6) ---------------------------------------
+  ## Ed25519, and it is here because mbedTLS cannot do it: there is no EdDSA in
+  ## mbedTLS at all, and §6's server key is Ed25519 by fixed protocol
+  ## (`protocol.SERVER_KEY_TYPE`), so *verifying* the registration reply is not a
+  ## choice this firmware gets to make.
+  ##
+  ## Note what it is **not** used for on this board: the P-256 signature a
+  ## security key produces is verified with **mbedTLS**, which is already linked
+  ## for `esp-tls` and does have ECDSA. Two curves, two libraries, and each is the
+  ## one that can do its half — §10.18 has that table.
+  ##
+  ## **Not in-tree here, and that is cJSON's story a second time.** §10.4 approved
+  ## it as "Espressif publishes it as a managed component", which on ESP-IDF v5.5.x
+  ## is *also* an in-tree `libsodium`; on the v6.0.2 installed here the in-tree
+  ## copy is gone and the registry one is the only one.
+  ##
+  ## It brings **nothing transitive**: its manifest depends on `idf >=4.2` and on
+  ## no component at all.
+  espressif/libsodium: "^1.0.22"
+
+  ## --- The cable (§10.4, §10.18.3) ----------------------------------------
+  ## **The USB Host Library, and it is the one new dependency this board adds.**
+  ## Root §1 requires sign-off for anything outside the approved list; this entry
+  ## is the argument, and the repository owner asked for the feature it exists for
+  ## ("the connected key gives the ability to sign the approval"), so what is owed
+  ## here is the record rather than the permission.
+  ##
+  ## Three things about it:
+  ##
+  ##   * **it is ESP-IDF's own, and it used to be in the tree.** On v5.5.x this is
+  ##     `components/usb` inside the framework — the third component on this list
+  ##     with that history, after cJSON and libsodium. On the v6.0.2 installed here
+  ##     the in-tree copy is gone and the registry one is the only one. It is
+  ##     Espressif's code either way, versioned with the framework;
+  ##   * **it brings nothing transitive.** Its manifest names `idf` and nothing
+  ##     else, which is the opposite of what the NATS client above does;
+  ##   * **the HID class driver is deliberately NOT taken.** `espressif/usb_host_hid`
+  ##     exists and would be the obvious second entry, and it is the wrong tool: a
+  ##     FIDO key is not a boot-protocol keyboard, CTAPHID is its own framing on
+  ##     top of two raw interrupt endpoints, and that framing is ~200 lines this
+  ##     firmware owns and tests on the host (`ctaphid_frames.h`). Taking the class
+  ##     driver would add a dependency in order to *not* use most of it. One new
+  ##     component instead of two.
+  espressif/usb: "^1.5.0"

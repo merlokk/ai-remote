@@ -1,0 +1,18 @@
+# 16 MB of flash (CLAUDE.md §10.1), laid out for two OTA slots and a large
+# storage area. Offsets are written out rather than left to the generator: the
+# app partitions have to be 64 KB aligned, and an off-by-one there is a silent
+# reflash away from confusing.
+#
+# 0x000000  bootloader (not in this table)
+# 0x008000  this table
+# ...
+# 0x1000000 end of flash
+#
+# Name,     Type, SubType,  Offset,    Size,      Flags
+nvs,        data, nvs,      0x9000,    0x6000,
+phy_init,   data, phy,      0xf000,    0x1000,
+nvs_keys,   data, nvs_keys, 0x10000,   0x1000,    encrypted
+otadata,    data, ota,      0x11000,   0x2000,
+ota_0,      app,  ota_0,    0x20000,   0x280000,
+ota_1,      app,  ota_1,    0x2a0000,  0x280000,
+storage,    data, spiffs,   0x520000,  0xae0000,

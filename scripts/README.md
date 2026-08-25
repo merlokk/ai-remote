@@ -20,6 +20,7 @@ the two that wrap `tools/`.
 | [`yubikey-approval.cmd`](#yubikey-approvalcmd) | the whole approval loop with the key on a YubiKey | yes, apart from the touches | **YubiKey** (2 touches) | **yes** |
 | [`esp32-approval.cmd`](#esp32-approvalcmd) | the whole approval loop against the ESP32 on the desk | yes, apart from the presses | **the board** (1 press, 1 deliberate non-press) | no |
 | [`esp32-host-tests.cmd`](#esp32-host-testscmd) | the ESP32 tests that need no board | yes | no | no |
+| [`esp32yk-host-tests.cmd`](#esp32yk-host-testscmd) | the same, for the ESP32-S3 + security key firmware | yes | no | no |
 | [`make-vectors.cmd`](#make-vectorscmd) | regenerate the cross-language parity vectors | `--check` is | no | no |
 
 ## Before you start
@@ -30,7 +31,7 @@ the two that wrap `tools/`.
 cd nats && docker compose up -d && cd ..
 ```
 
-Two of the nine need neither: `esp32-host-tests.cmd` compiles C++ and talks to
+Three of the ten need neither: the two `*-host-tests.cmd` compile C++ and talk to
 nothing, and `make-vectors.cmd` needs only the venv.
 
 **`uv sync` must have been run**, and that is the whole requirement for six of
@@ -359,11 +360,46 @@ component. `run.cmd` resolves both and says which one it could not find.
 
 **Exit codes:** `0` every test passed, `1` a test failed or the build did.
 
+## `esp32yk-host-tests.cmd`
+
+The same thing for the **other** ESP32 firmware — tier 1 of
+[`approver-esp32-yubikey/tests.md`](../approver-esp32-yubikey/tests.md) §10.11,
+the board with a security key on its OTG port instead of a screen. 406 tests,
+including the five suites that folder has and its sibling does not: the LED's
+encoding, the state ranking above it, and the three layers of CTAPHID / CBOR /
+CTAP2.
+
+```bat
+scripts\esp32yk-host-tests.cmd                REM all of it
+scripts\esp32yk-host-tests.cmd led indicator  REM the light and its ranking
+scripts\esp32yk-host-tests.cmd fido           REM ctaphid + cbor + ctap2
+```
+
+**Two launchers rather than one with a board argument**, and that is a decision
+rather than a copy-paste: a pre-commit check that has to be told which half of the
+repository it is checking is a check that gets run on one half.
+
+**No NATS, no board, no security key, no Python.** Same three tools as its twin,
+plus one thing its twin does not need — the parity vectors, which live in
+`approver-esp32\host_test\vectors\` and are **read from there rather than
+copied**. There is one copy of that header in the repository on purpose; that
+folder's §10.11 says why, and the short version is that two committed copies of a
+protocol fact are two files that must never differ with nothing to notice if they
+do.
+
+**Exit codes:** `0` every test passed, `1` a test failed or the build did.
+
 ## `make-vectors.cmd`
 
 Regenerates tier 2 of §10.11 — the parity vectors the firmware's host tests
 compare against, produced by `approver/protocol.py` and `lib/crypto.py`
-themselves rather than typed out of a design document:
+themselves rather than typed out of a design document.
+
+**It writes into `approver-esp32/` and that is where both firmwares read from.**
+`approver-esp32-yubikey/` keeps no copy of `parity_vectors.h` and no copy of the
+generator: the header pins a *protocol* fact, identical for both devices by
+definition, and the generator resolves its output path from the repository root —
+so a second copy of it would have silently regenerated the first board's files.
 
 ```
 approver-esp32\host_test\vectors\parity_vectors.h      §7's decision bytes, §6's reply bytes
