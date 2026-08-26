@@ -95,6 +95,7 @@ refused every one of them in three milliseconds among them. They are listed unde
 | **A re-enrolment, to see `STALE`** | the binding of §10.18.1 is checked at every boot and has only ever agreed. Producing a disagreement costs an enrolment and then a fresh token |
 | **An allow from Claude Code itself** | every request so far came from `tools/test_request.py`, which sends the bytes `hook.py` sends. What has not happened is the request arriving from a live session's `PermissionRequest` |
 | **`scripts/esp32yk-approval.cmd`** | the end-to-end script. Everything it would drive now works by hand |
+| **Waiting out a `CHANNEL_BUSY` key in firmware** | a reset taken while the key is waiting for a fingertip leaves it holding a transaction for a channel that no longer exists, and everything after that gets `0x06`. It is **not permanent** — measured at about **34 s** from when the stale request started (busy at 8.4 s into a run, free at 42.9 s) — and unplugging the key is instant, so the device says both. A retry loop in `Exchange` was written, recovered correctly, and **rebooted the board about one run in two**, ~1.3 s after the first `0x06`; it is reverted. The suspect is this file's documented weakness — `ReadPacket` re-submits a transfer that may still be in flight — and that is what has to be fixed before the retry comes back |
 
 ## Not built at all
 

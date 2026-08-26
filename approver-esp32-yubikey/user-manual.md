@@ -223,7 +223,7 @@ once, in the order in which one being wrong stops the next from working.
 | **cyan, slow** | enrolled, and the socket is empty — or the key is in the *other* socket |
 | **magenta** | not registered, or registered for a key you have since re-enrolled. `request` says which; the fix for both is a fresh token |
 | **white for ages, then nothing** | the key was never touched. Nothing was published, which is the safe outcome |
-| **the key's contact never lights** | the board never got as far as asking it. `key` shows whether anything is plugged in; `channel busy` in the log means the key is still holding a transaction from before a reset — unplug it and plug it back in |
+| **the key's contact never lights** | the board never got as far as asking it. `key` shows whether anything is plugged in. `channel busy` in the log means the key is still holding a transaction from before a reset — it clears itself in about half a minute, and unplugging the key clears it at once |
 | **red, flashing fast** | a fault. `led` names it in words and `status` has the detail |
 | **nothing happens at all, light green** | the request went to another responder. Several can share the queue, and each request reaches exactly one of them |
 

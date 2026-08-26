@@ -582,9 +582,26 @@ esp_err_t Transact(uint32_t cid, uint8_t command, const uint8_t *request, size_t
             // it is instant. Two runs were spent chasing this as a firmware bug
             // because the log said the key was unreachable.
             if (code == ctaphid::kErrChannelBusy) {
+                // **Measured, so the advice can be specific.** The key holds one
+                // transaction at a time across every channel, and the way it ends up
+                // holding a dead one is a reset taken while a request was waiting for
+                // a fingertip: the channel that asked died with the previous boot, so
+                // there is nothing left to send `CTAPHID_CANCEL` to.
+                //
+                // It is not permanent. The stale transaction is a user-presence wait
+                // and it expires — **about 34 seconds from when it started**, timed on
+                // this key (busy at 8.4 s into a run, free at 42.9 s). So both cures
+                // work and one is instant.
+                //
+                // Waiting it out in firmware was tried and is **not** here: a retry
+                // loop in `Exchange` recovered correctly and also rebooted the board
+                // about one time in two, ~1.3 s in. The likely cause is this file's
+                // own known weakness — `ReadPacket` re-submits a transfer that may
+                // still be in flight — and until that is sorted out, a device that
+                // says what to do beats a device that restarts. `status.md` lists it.
                 ESP_LOGW(TAG, "the key is mid-transaction on another channel - it was probably "
-                              "left waiting by a reset. unplug it and plug it back in, or wait "
-                              "for its own timeout");
+                              "left waiting by a reset. unplug it and plug it back in, or leave "
+                              "it about 30 s to expire on its own");
             }
             *fault = Fault::kKeyError;
             return ESP_FAIL;
