@@ -1,6 +1,10 @@
 #include "request_card.h"
 
 namespace ui {
+
+uint32_t EffectiveTtlMs(const Request &request) {
+    return request.ttl_ms != 0 ? request.ttl_ms : RequestCard::kDefaultTtlMs;
+}
 namespace {
 
 // `strnlen` without `<cstring>`, so this file keeps the include list its header
@@ -72,8 +76,7 @@ bool RequestCard::Arrived(const Request &request, uint32_t now_ms) {
 
     Slot &slot = queue_[count_];
     slot.request = request;
-    const uint32_t ttl = request.ttl_ms != 0 ? request.ttl_ms : kDefaultTtlMs;
-    slot.deadline_ms = now_ms + ttl;
+    slot.deadline_ms = now_ms + EffectiveTtlMs(request);
     ++count_;
 
     if (count_ == 1) {

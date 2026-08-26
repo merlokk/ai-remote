@@ -74,6 +74,18 @@ esp_err_t Init();
 // rejects (§10.10 rule 5).
 bool Registered();
 
+// **Says at boot whether the registration still names the key this device signs
+// as** — the §10.18.1 binding, out loud, once.
+//
+// Separate from `Init` because `Init` cannot answer it: it runs before
+// `fido::Init()` (which is after the bus on purpose, see `main.cpp`), so the
+// enrolled key is not loaded yet and the comparison would call every registration
+// stale. `main` calls this once the key is up. Silent when there is nothing to
+// report, and silent when there is no enrolment to compare against — the light and
+// `request` cover that case, and this line is about the one an operator would
+// otherwise not notice.
+void ReportKeyBinding();
+
 // Whether there is a registration file at all, whatever key it names. The console
 // uses the difference to say "stale" rather than "none", which are two different
 // things to do about.

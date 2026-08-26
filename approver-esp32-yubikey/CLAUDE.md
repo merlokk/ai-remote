@@ -110,10 +110,16 @@ against the **derived** public key — is the equality this whole design rests o
 Nothing on the host side could have checked it: it says the key this chip derived
 is one the authenticator can reconstruct the private half of.
 
-**What has never happened is a verdict on the wire.** No request has gone
-`request → touch → signed reply → hook`, because this device is not registered
-with anybody at the moment. That is the last unrun thing, and it needs a token
-rather than a design.
+**And the loop is closed.** A real request has gone
+`request → white light → touch → signed reply → hook`, and `hook.verify_reply` —
+the verifier Claude Code itself would use — called the reply **`TRUSTED`**. This
+device is a working responder, indistinguishable from the other four to everything
+that checks one, and the signature it answered with was made inside a security key
+while somebody was touching it.
+
+The only step left is cosmetic by comparison: the request arriving from a live
+Claude Code session's `PermissionRequest` rather than from the probe that sends the
+same bytes.
 
 Because of that the device is, right now, in the state its own light calls
 `not-registered` — magenta — and **it is deliberately not on `approvals.*` while

@@ -98,9 +98,9 @@ signing key derived from that authenticator.
 challenge: it came back, all five checks passed, and the verdict verified against
 the derived public key — the one equality nothing on the host side could check.
 
-**What has never happened is a verdict on the wire.** The device is registered with
-nobody at the moment and deliberately stays off `approvals.*` rather than taking
-requests it cannot answer, so no request has yet gone all the way to `hook.py`.
+**And the loop is closed.** A real request went out on the bus, the light went
+white, a fingertip on the key made the signature, and `hook.verify_reply` — the
+verifier Claude Code would use — called the reply **`TRUSTED`**.
 
 [`status.md`](status.md) is row by row and is the file to trust.
 

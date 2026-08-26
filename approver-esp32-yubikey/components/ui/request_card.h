@@ -238,4 +238,16 @@ class RequestCard {
     uint16_t ignored_ = 0;
 };
 
+// **The TTL a request actually gets.** A zero `ttl_ms` means *the default*, not
+// *already expired*: §7's request carries no timeout — the hook keeps its own, and
+// `protocol::ParseApprovalRequest` says so where it leaves the field at zero — so
+// every real request off the wire arrives with one.
+//
+// It is a function rather than a rule each caller applies because the callers
+// disagreed. The queue substituted the default; the gate took `ttl_ms` raw, which
+// gave it a deadline of *now* on every real request and made it refuse without
+// asking the key at all. `request test` always names a TTL, so the only path that
+// mattered was the only one never exercised.
+uint32_t EffectiveTtlMs(const Request &request);
+
 }  // namespace ui

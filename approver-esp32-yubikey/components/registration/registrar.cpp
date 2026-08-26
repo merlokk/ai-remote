@@ -206,14 +206,13 @@ esp_err_t Init() {
     if (Load(&loaded)) {
         g_record = loaded;
         ESP_LOGI(TAG, "registered as %s, handler key %s", g_record.key_id, g_record.server_key);
-        // The check that costs nothing here and everything later: the registration
-        // names a public key, and the enrolment has to still produce it.
-        if (!Registered()) {
-            ESP_LOGW(TAG,
-                     "the registration is for another key (%s) - this device has enrolled since. "
-                     "Run `register <token>` with a fresh token.",
-                     g_record.pubkey);
-        }
+        // **The staleness check is not made here**, and that is the whole point of
+        // `ReportKeyBinding` existing. It needs the enrolment, and `fido::Init()`
+        // runs after this — after the bus, for the heap reason `main.cpp` gives — so
+        // asking `Registered()` at this moment compares against an empty key and
+        // calls *every* registration stale. It did, on the first boot after a good
+        // registration, and the line it printed sends an operator to spend a
+        // one-time token on a registration that is fine.
     } else if (storage::Exists(kPath)) {
         // The file is there and is not one. Said out loud rather than treated as
         // "not registered", because those need different things from an operator.
@@ -239,6 +238,19 @@ bool Registered() {
     }
     const char *current = fido::PublicKeyBase64();
     return current[0] != 0 && std::strcmp(current, g_record.pubkey) == 0;
+}
+
+void ReportKeyBinding() {
+    if (!g_record.present || !fido::Enrolled()) {
+        return;
+    }
+    if (Registered()) {
+        return;
+    }
+    ESP_LOGW(TAG,
+             "the registration is for another key (%s) - this device signs as %s now. "
+             "Run `register <token>` with a fresh token.",
+             g_record.pubkey, fido::PublicKeyBase64());
 }
 
 // Was there a registration at all, whatever it names. The console needs the

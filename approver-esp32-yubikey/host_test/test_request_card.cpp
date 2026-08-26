@@ -413,9 +413,48 @@ void test_an_arriving_request_outranks_a_receipt(void) {
     TEST_ASSERT_TRUE(card.Press(Verdict::kAllow, at + 100 + RequestCard::kPressGuardMs, &answered));
 }
 
+// --- the TTL a request actually gets --------------------------------------
+//
+// **A zero means "the default", not "already expired"** — §7's request carries no
+// timeout, so `protocol::ParseApprovalRequest` leaves `ttl_ms` at zero on every
+// real request that ever arrives. Every consumer has to agree about that, and one
+// did not: the gate took `ttl_ms` raw, gave itself a deadline of *now*, and refused
+// without ever asking the key. `request test` always set a TTL, so the only path
+// that mattered was the only one never exercised.
+
+void test_a_request_with_no_ttl_gets_the_default(void) {
+    Request r = Sane();
+    r.ttl_ms = 0;
+    TEST_ASSERT_EQUAL_UINT32(RequestCard::kDefaultTtlMs, ui::EffectiveTtlMs(r));
+}
+
+void test_a_request_that_names_its_ttl_keeps_it(void) {
+    Request r = Sane();
+    r.ttl_ms = 25000;
+    TEST_ASSERT_EQUAL_UINT32(25000, ui::EffectiveTtlMs(r));
+}
+
+void test_the_queue_expires_a_ttl_less_request_on_the_effective_one(void) {
+    // The behaviour that was already right, pinned to the same function now that
+    // there is one — so the queue and the gate cannot drift apart again.
+    RequestCard card;
+    Request r = Sane();
+    r.ttl_ms = 0;
+    TEST_ASSERT_TRUE(card.Arrived(r, 1000));
+    TEST_ASSERT_EQUAL_UINT8(1, card.Pending());
+
+    card.Tick(1000 + ui::EffectiveTtlMs(r) - 1);
+    TEST_ASSERT_EQUAL_UINT8(1, card.Pending());
+    card.Tick(1000 + ui::EffectiveTtlMs(r));
+    TEST_ASSERT_EQUAL_UINT8(0, card.Pending());
+}
+
 }  // namespace
 
 void RegisterRequestCardTests(void) {
+    RUN_TEST(test_a_request_with_no_ttl_gets_the_default);
+    RUN_TEST(test_a_request_that_names_its_ttl_keeps_it);
+    RUN_TEST(test_the_queue_expires_a_ttl_less_request_on_the_effective_one);
     RUN_TEST(test_nothing_pending_is_nothing_on_screen);
     RUN_TEST(test_a_request_becomes_the_card);
     RUN_TEST(test_a_tool_input_that_does_not_fit_is_refused_not_shown);

@@ -368,12 +368,19 @@ bool RunGate(const ui::Request &request) {
 
     GateWatch watch;
     watch.connects = bus.connects;
-    watch.deadline_ms = NowMs() + request.ttl_ms;
+    // **`ui::EffectiveTtlMs`, not `request.ttl_ms`.** A request off the wire has no
+    // TTL of its own — §7 does not carry the hook's timeout — so the raw field is
+    // zero on every real request, and using it gave this gate a deadline of *now*:
+    // it returned `kTimeout` in three milliseconds without ever asking the key,
+    // while `request test` (which always names a TTL) worked. Same function as the
+    // queue's, so the two cannot drift apart again.
+    const uint32_t ttl_ms = ui::EffectiveTtlMs(request);
+    watch.deadline_ms = NowMs() + ttl_ms;
     {
         // The operator's own ceiling, when it is the shorter of the two. Its whole
         // job is to stop asking before the hook has given up (§10.18).
         const uint32_t configured = settings.approval.touch_timeout_seconds * 1000u;
-        if (configured != 0 && configured < request.ttl_ms) {
+        if (configured != 0 && configured < ttl_ms) {
             watch.deadline_ms = NowMs() + configured;
         }
     }

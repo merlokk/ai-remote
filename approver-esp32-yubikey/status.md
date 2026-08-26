@@ -32,7 +32,9 @@ Three states, and the middle one is the one to watch:
 | The gate's failure paths (§10.18) | **runs** | no key → waits → expires → **no reply**, and no spin |
 | The not-enrolled blocker | **runs** | refuses to subscribe, and says why |
 | The enrolment→registration ordering | **runs** | with nothing enrolled the light says `not-enrolled`, not `not-registered` — the enrolment is the lower rung because `register` refuses without one (§10.17) |
-| Signing + publishing a verdict | **written** | and it is no longer the sibling board's code: the signature comes out of the key and this device only base64s it and publishes. **Nothing has ever got past the gate here**, so it has never run |
+| Signing + publishing a verdict | **runs** | a real `allow` was signed inside the key and published into the hook's inbox, and `hook.verify_reply` called it `TRUSTED`. The gate's stack low-water on that path is **1280 B of 8192** — the tightest number on this device, and now measured rather than guessed |
+| The gate's deadline on a **real** request | **fixed here** | it used `request.ttl_ms` raw, and §7 does not carry the hook's timeout — so every real request got a deadline of *now* and was refused in 3 ms without the key being asked, while `request test` (which always names a TTL) worked. `ui::EffectiveTtlMs` is now the one place that decides, used by the queue and the gate alike |
+| The boot report of a stale registration | **fixed here** | `registration::Init()` runs before `fido::Init()` — which is after the bus on purpose — so the check compared against an empty key and called every registration stale. It printed that on the first boot after a good registration, which is an instruction to spend a one-time token for nothing. It is now `registration::ReportKeyBinding()`, called from `main` once the key is up |
 | A signed **deny** (§10.18.5) | **written** | the button chooses it and the key has to sign it — a second touch. Never run, and the "walk away after the tap" path (no reply) is the one to check first |
 
 ## The key (§10.18)
@@ -50,9 +52,16 @@ design rests on, and the thing nothing on the host side could have checked for i
 Two DER signatures of different lengths (70 and 71 bytes) both parsed, so PSA's
 DER→raw conversion has been exercised on real variable-length output.
 
-**What has still never happened is a verdict on the wire.** Everything above is the
-key working; nothing has yet gone `request → touch → signed reply → hook`. That
-needs a registration, which this device does not currently have.
+**And the loop is closed.** On **2026-08-26** a real request went
+`request → white light → touch → signed reply → hook`, and
+`hook.verify_reply` — the hook's own verifier, the one Claude Code would act on —
+called it **`TRUSTED`**. 71 bytes of ECDSA over §7's own signing bytes, made inside
+the security key while somebody was touching it, accepted by the same code path
+that judges the four other responders.
+
+Getting there took two bugs that only this test could have found, and both are in
+the table below: a gate that refused every real request in three milliseconds, and
+a boot line that called a good registration stale.
 
 | Piece | State | Note |
 |-------|-------|------|

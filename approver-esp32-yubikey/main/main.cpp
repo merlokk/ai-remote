@@ -247,6 +247,12 @@ extern "C" void app_main(void) {
         ESP_LOGE(TAG, "the key gate is not available: %s", esp_err_to_name(fido_err));
     }
 
+    // **Now that there is an enrolled key to compare against** (§10.18.1). This is
+    // deliberately not inside `registration::Init()`, which runs long before the
+    // enrolment is loaded and would call every registration stale — it did, and the
+    // line it printed was an instruction to spend a one-time token for nothing.
+    registration::ReportKeyBinding();
+
     // Settings applied to the tasks holding copies of them. `main` is where the
     // hook is registered for the same reason the gatherer is: it is the one file
     // that may depend on everything.
