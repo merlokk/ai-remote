@@ -4,12 +4,18 @@
 maps. This is the fastest-moving file here and the only honest answer to "what
 actually works".
 
-Three states, and the middle one is the one to watch:
+States, and `written` is the one to watch:
 
 * **runs** — done on the board on this desk, and observed
+* **partly** — some of it observed and the rest not, with the row saying which
 * **written** — compiled, host-tested where it can be, **never run against the
   real thing**
 * **design** — a document and no code
+
+**As of 2026-08-26 the tables below are almost entirely `runs`**, which they were
+not that morning: the whole of §10.18 was `written` and no security key had ever
+been plugged in. What is left is at the bottom, under **Owed, and known**, and the
+largest item there is a *removal*.
 
 ## The device
 
@@ -19,27 +25,22 @@ Three states, and the middle one is the one to watch:
 | SPIFFS + `config.json` | **runs** | mounts, parses, saves, reloads, restores |
 | Ed25519 identity (§10.6) | **runs**, and **signs nothing** | derived at boot, self-test passes. Since §10.18 the verdict is signed by the security key; what libsodium is still for is verifying §6's *reply* |
 | — its custody | **moot, and owed** | the seed is still in unencrypted NVS and no longer protects anything. Deleting the identity is owed work (below) |
-| ARKG derivation (§10.18.2) | **written** | `components/arkg`, 3,921 bytes. The five pure steps are host-tested against numbers Python produced; **the two curve steps have never run on this chip** — `key selftest` is the command and nobody has typed it |
+| ARKG derivation (§10.18.2) | **runs** | `components/arkg`, 3,921 bytes. The five pure steps are host-tested against numbers Python produced, and the two curve steps agree with Python **on this chip** — `key selftest`, 661–670 ms |
 | Console on UART0 (§10.7) | **runs** | all 16 commands answer |
 | WS2812 on GPIO48 (§10.17) | **runs** | UART1 at 3.33 Mbaud, inverted; 0 write failures over thousands of frames |
 | `pending` ending with the gate (§10.17) | **runs** | the light stops asking when the gate does, not when the request expires — those are 30 s apart, and the difference was half a minute of white asking for a fingertip with nowhere to put it |
 | The touch prompt (§10.17) | **runs** | blue and fast while `key enrol` / `key test` wait for a fingertip, and gone the moment the key answers rather than waited out |
-| The state ranking (§10.17) | **runs** | transitions observed for `booting → no-wifi → no-bus → not-enrolled → not-registered → pending` |
-| BOOT button | **partly** | it **reads** (`buttons` is correct). The press → verdict path is untested |
+| The state ranking (§10.17) | **runs** | transitions observed for `booting → no-wifi → watching → ready → pending → deny-pending → signing → ready`, and `not-enrolled → not-registered` on a fresh device |
+| BOOT button | **runs** | a tap becomes a signed `deny` on the wire. `buttons watch` measures real presses at **70–180 ms**, which is why the sampling had to change — see the bugs below |
 | Wi-Fi (§10.9) | **runs** | joins, DHCP, reachability check |
 | NATS (§10.5) | **runs** | connects, subscribes, publishes; reconnect re-subscribes |
-| Registration (§10.7) | **ran once, and there is none now** | a real token, real handler, verified reply, key pinned — but it registered an **Ed25519** key, from before §10.18 moved the signer. `registration.json` is no longer on the device (it says so at boot), so the state is `registered no` rather than `STALE`, and the device stays off `approvals.*` until a fresh token registers the **enrolled** key (§10.18.1) |
+| Registration (§10.7) | **runs** | a real token, real handler, verified reply, handler key pinned and compared by eye — and it registers the **enrolled** key, so `handler-config.json` holds the same `p256` point the device prints as `signs as`. Took 1.12 s and survives a reflash |
 | Request queue + TTL | **runs** | `request test` queues, lights, expires with no reply |
-| The gate's failure paths (§10.18) | **runs** | no key → waits → expires → **no reply**, and no spin |
+| The gate's failure paths (§10.18) | **runs** | no key → waits → expires → **no reply**, and no spin. Nobody touching → the key's own refusal → no reply. A tap and then nothing → no reply, counted as `nothing` and never as a deny (§10.10 rule 2) |
 | The not-enrolled blocker | **runs** | refuses to subscribe, and says why |
 | The enrolment→registration ordering | **runs** | with nothing enrolled the light says `not-enrolled`, not `not-registered` — the enrolment is the lower rung because `register` refuses without one (§10.17) |
-| Signing + publishing a verdict | **runs** | a real `allow` was signed inside the key and published into the hook's inbox, and `hook.verify_reply` called it `TRUSTED`. The gate's stack was the tightest number on this device and is now measured rather than guessed: the peak is **6,928 bytes**, seen twice (1280 free of 8192, then 5360 free of 12288, agreeing to within 16 bytes). `kGateStackBytes` is 12288 because 15 % headroom on the one path that must not fail is not enough |
-| The gate's deadline on a **real** request | **fixed here** | it used `request.ttl_ms` raw, and §7 does not carry the hook's timeout — so every real request got a deadline of *now* and was refused in 3 ms without the key being asked, while `request test` (which always names a TTL) worked. `ui::EffectiveTtlMs` is now the one place that decides, used by the queue and the gate alike |
-| The boot report of a stale registration | **fixed here** | `registration::Init()` runs before `fido::Init()` — which is after the bus on purpose — so the check compared against an empty key and called every registration stale. It printed that on the first boot after a good registration, which is an instruction to spend a one-time token for nothing. It is now `registration::ReportKeyBinding()`, called from `main` once the key is up |
-| A signed **deny** (§10.18.5) | **runs** | a real request denied on BOOT, signed inside the key on a second touch, published, and `hook.verify_reply` called it `TRUSTED — Claude Code would deny this` (72 bytes). Device side: `1 button-denied, 0 nothing`, `1 replied (0 allow, 1 deny)`. **It took three bugs** — see below. The "walk away after the tap" path is checked too: the tap alone publishes nothing and counts as `nothing`, not as a deny |
-| The deny button being *seen* | **fixed here** | `Debounce` promotes a level that held across two polls, and the gate polled from a hook the key wakes every 100–300 ms — so BOOT had to be held most of a second, and an ordinary tap vanished between two samples. `buttons` now owns a 10 ms poller and latches the press until the gate collects it |
-| The light after a tap | **fixed here** | there was none: the tap changed nothing an operator could see, and the next thing they do is touch the key, which signs an `allow`. `deny-pending` is red and it now lasts as long as the wait (4.9 s on the run above) |
-| The cancelled request's reply | **fixed here** | a key told `CTAPHID_CANCEL` still answers the request it abandoned, with `0x2D`. Nobody drained it, so the deny's `getAssertion` read the *allow's* reply as its own and died in 14 ms. The deny path had never worked once |
+| Signing + publishing a verdict | **runs** | a real `allow` was signed inside the key and published into the hook's inbox, and `hook.verify_reply` called it `TRUSTED`. The gate's stack was the tightest number here and is now measured rather than guessed: the peak is **6,928 bytes**, seen twice (1280 free of 8192, then 5360 free of 12288, agreeing to within 16). `kGateStackBytes` is 12288 — 15 % headroom on the one path that must not fail is not enough, and it has to come from internal RAM because a task stack may not live in PSRAM (§10.13) |
+| A signed **deny** (§10.18.5) | **runs** | a real request denied on BOOT, signed inside the key on a second touch, published, and `hook.verify_reply` called it `TRUSTED — Claude Code would deny this` (72 bytes). Device side: `1 button-denied`, `1 replied (0 allow, 1 deny)`. It took three bugs, all below |
 
 ## The key (§10.18)
 
@@ -63,9 +64,9 @@ called it **`TRUSTED`**. 71 bytes of ECDSA over §7's own signing bytes, made in
 the security key while somebody was touching it, accepted by the same code path
 that judges the four other responders.
 
-Getting there took two bugs that only this test could have found, and both are in
-the table below: a gate that refused every real request in three milliseconds, and
-a boot line that called a good registration stale.
+Getting there took bugs that only a real request could have found — a gate that
+refused every one of them in three milliseconds among them. They are listed under
+**What running it found**, below.
 
 | Piece | State | Note |
 |-------|-------|------|
@@ -83,15 +84,17 @@ a boot line that called a good registration stale.
 | `key selftest` | **runs** | on the chip, against Python's vector, in **661–670 ms** |
 | `fido.json` (format 2) | **runs** | written by a real enrolment, and re-read at the next boot into the same `signs as` — including across an `app-flash` |
 | PSA ECDSA verification | **runs** | the DER→raw conversion, against real signatures of 70 **and** 71 bytes — the variable length that made it the part most likely to be wrong first |
-| The registration↔enrolment binding | **partly** | the boot comparison runs. The **stale** path has not been seen, because there is no `registration.json` on the device to be stale |
+| The registration↔enrolment binding | **partly** | the boot comparison runs against a real registration and stays quiet, which is the right answer. The **stale** path — a registration naming a key that is no longer enrolled — has still never been produced, because that needs a re-enrolment |
 
 ## Owed, and known
 
 | | Why it is owed |
 |---|---|
-| **`key selftest` on the board** | it needs nothing at all and would move the ARKG derivation from "written" to "runs on this chip". Until it is typed, the two curve operations in `arkg_psa.cpp` are unrun code |
-| **Deleting the Ed25519 identity** | since §10.18 it signs nothing, and what is left of `components/crypto` — `Verify` for §6's reply, and base64 — needs no seed. Removing it takes the last private key off this board's flash, along with `keys forget now`, one blocker in the responder that can never fire, and a `device_key` input to the light |
-| **A `previewSign` capability check at enrolment** | `key info` reads the extension list and nothing refuses an enrolment on a key that lacks `previewSign`. Today that fails one step later, with a message naming the likely cause — which is honest but is a round trip and a touch too late |
+| **Deleting the Ed25519 identity** | since §10.18 it signs nothing, and what is left of `components/crypto` — `Verify` for §6's reply, and base64 — needs no seed. Removing it takes the last private key off this board's flash, along with `keys forget now`, one blocker in the responder that can never fire, and a `device_key` input to the light. **The largest open item here** |
+| **A key that does not advertise `previewSign`** | the refusal is written and `key info` prints the line, but the key on this desk advertises it, so only the readout has been seen. Needs a second, ordinary key |
+| **A re-enrolment, to see `STALE`** | the binding of §10.18.1 is checked at every boot and has only ever agreed. Producing a disagreement costs an enrolment and then a fresh token |
+| **An allow from Claude Code itself** | every request so far came from `tools/test_request.py`, which sends the bytes `hook.py` sends. What has not happened is the request arriving from a live session's `PermissionRequest` |
+| **`scripts/esp32yk-approval.cmd`** | the end-to-end script. Everything it would drive now works by hand |
 
 ## Not built at all
 
@@ -101,8 +104,7 @@ a boot line that called a good registration stale.
 | **A clock** | no RTC (no I²C bus for one) and no SNTP: §7's `ts` is echoed from the request, nothing else here reads a wall-clock time, and there is nowhere to show one (§10.13) |
 | **A web configuration site** | the way in on this board is the CH343P bridge and the console on it, which is a socket rather than a network service. A second surface would be one more thing to keep away from a verdict (§10.10 rule 4) |
 | **OTA** | the partition table has two slots and nothing uses them |
-| **A user manual** | one document for whoever is *holding* the device rather than changing it: the light, the two gestures, and first-time setup. When the key works, this is the document to write |
-| **`scripts/esp32yk-approval.cmd`** | the end-to-end script. [`tests.md`](tests.md) lists it as owed — `scripts/esp32yk-host-tests.cmd` exists and covers tier 1 |
+| **A user manual** | one document for whoever is *holding* the device rather than changing it: the light, the two gestures, and first-time setup. It was waiting on the key working, and the key works — so this is now simply owed, and the sibling board's `user-manual.md` is the shape to copy |
 
 ## Known differences from the committed tree
 
@@ -111,10 +113,92 @@ a boot line that called a good registration stale.
 | **The device's `config.init.json` is older than the repository's** | a full `idf.py flash` would fix it and would cost the registration, the Wi-Fi passphrase and the enrolment (`build.md`). It only matters on a restore |
 | **The device's `config.json` holds a real Wi-Fi passphrase** | the committed one holds `YOUR_SSID` / `CHANGEME` placeholders, and §10.15's rule is that a passphrase is a secret from the moment it is typed. Nothing in this repository carries it |
 
-## Two bugs this device found in itself
+## What running it found
 
-Recorded because both were found by running the thing rather than by reading it,
-and both are the kind that a test could not have caught first.
+**Every defect on this page was found by running the device, and none of them could
+have been found any other way.** The host tier has no light, no clock, no finger and
+no key; the vector tier has no time in it at all. That is the argument for tier 3
+written as evidence rather than as a claim, and it is why this section is the longest
+one here.
+
+### Closing the loop: the allow
+
+**The gate refused every real request in three milliseconds.** §7 does not carry the
+hook's timeout — `ParseApprovalRequest` leaves `ttl_ms` at zero and says so — and the
+queue knew that, substituting its default. The gate did not: it took the field raw,
+computed a deadline of *now*, and returned `kTimeout` without ever asking the key.
+From the desk it looked perfect, because the queue's own TTL kept the light on for
+the full minute; `key` giving `gate 0 asked` is what gave it away. `ui::EffectiveTtlMs`
+is the one place that decides now. **`request test` always names a TTL**, which is
+why every test ever run on this device took the one path a real request never takes.
+
+**A good registration was reported stale at boot.** `registration::Init()` runs
+before `fido::Init()` — which is after the bus on purpose — so the §10.18.1
+comparison ran against an empty enrolled key and called every registration stale. It
+printed that on the first boot after a *correct* registration, which is an
+instruction to spend a one-time token for nothing. Now
+`registration::ReportKeyBinding()`, called from `main` once the key is loaded.
+
+### Closing the loop: the deny
+
+Three, and the deny path had never once worked.
+
+**The tap could not be seen.** `Debounce` promotes a level that has held *across* two
+polls, and the gate polls from a hook the key wakes every 100–300 ms — it spends the
+whole of a request blocked inside a USB read. Real presses measure 70–180 ms, so they
+were invisible by construction. `buttons` owns a 10 ms poller now and latches the
+press until the gate collects it. Polling faster from inside the USB read was tried
+first and is not available: `ReadPacket` re-submits an in-flight transfer, which
+becomes `the key could not be reached` sixty milliseconds in.
+
+**Nothing changed when the button was pressed.** The light went on flashing white,
+and the next thing an operator does is touch the key — which signs an `allow`. Twice
+that is exactly what happened, and both times it looked like a broken button.
+`deny-pending` is a state now (§10.17).
+
+**The cancelled request's reply poisoned the next one.** A key told `CTAPHID_CANCEL`
+still answers the request it abandoned, with `0x2D`. Nobody drained it, so the deny's
+`getAssertion` read the *allow's* reply as its own: fourteen milliseconds,
+`Gate::kCancelled`, and a red light that existed for seventeen. And the first drain
+was too easily satisfied — a `CTAPHID_KEEPALIVE` is a complete message, so it could
+swallow one, report success and leave the reply where it was. It skips them now.
+
+### Lights and readouts that said the wrong thing
+
+None of these stopped a verdict. All of them sent somebody the wrong way.
+
+* **`pending` outlasted the gate by thirty seconds.** The gate's ceiling is 30 s and
+  the request's TTL is a minute, and in between the light went on asking for a
+  fingertip that no longer had anywhere to go. Found by watching the board: the key
+  stopped blinking and the white kept going;
+* **the ranking sent operators to spend a token they could not use** — `registered`
+  was checked before `fido_enrolled`, while `register` refuses without an enrolment;
+* **`keys` printed the sibling board's `key_id`**, from a string literal, in the one
+  command an operator reads to find out what the device is;
+* **`status`'s `heap` counted the PSRAM**, so it read as eight and a half megabytes
+  and said nothing about the memory that is actually scarce — the memory task stacks
+  come out of, and the memory that decided `kGateStackBytes` an hour later;
+* **a failure said `ok`.** A key that refuses leaves the transport at `Fault::kNone`,
+  whose name is "ok", so the line reporting the failure began with that word and the
+  CTAP status holding the cause read like an aside. `CTAP 0x27` — what a key answers
+  when nobody touched it — cost two attempts to read correctly;
+* **`CHANNEL_BUSY` read as "the key could not be reached"**, and two runs went into
+  chasing a firmware bug. Reflash the board while a request waits for a fingertip and
+  the key holds a transaction for a channel with nobody on it; unplugging it is the
+  fix, and the log says so now.
+
+### And one the documents had already promised
+
+**The `previewSign` capability check existed only in a comment.** `ctap2.h` stated
+that a key not advertising it "cannot be enrolled on this device at all, and
+`key info` is where that gets reported" — while `Info` held no extension list,
+`ParseInfo` never read key 2, and `ParseInfo` had no host tests at all. Found by an
+enrolment failing for a reason the readout could have named in advance.
+
+## Two bugs from before this all worked
+
+Recorded because both were found the same way, and because the fixes are load-bearing
+in what runs today.
 
 **1. The LED did not come up.** `uart_driver_install` refuses a receive buffer at
 or below the 128-byte hardware FIFO, and the first version passed zero — nothing

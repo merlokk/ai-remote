@@ -14,11 +14,15 @@ repoint every citation.
 **And those citations name this file, deliberately.** These numbers are *not* part
 of the global scheme of root §2 — where §2 is the repository map itself — so a bare
 `§2.5` in another document reads as a subsection of that map. They are written
-`tasks.md §2.5`, which is the rule root §2 now states next to this file. Three gaps so far: **§2.9**, the clock screen's two unbuilt
+`tasks.md §2.5`, which is the rule root §2 now states next to this file. Four gaps so far: **§2.9**, the clock screen's two unbuilt
 promises, struck from §10.8.2 rather than built; **§2.10**, the two shipped config
-files disagreeing about the access point's key, which they no longer do; and
+files disagreeing about the access point's key, which they no longer do;
 **§2.12**, three smaller loose ends — a runner for the parity vectors, a way into
-the ESP32 host suite from `scripts/`, and a screenshot no document referenced.
+the ESP32 host suite from `scripts/`, and a screenshot no document referenced; and
+**§2.14**, the ESP32-S3 never having spoken to a security key — which it has now,
+on **2026-08-26**: enumerated, enrolled, and answering real requests with
+signatures `hook.verify_reply` calls trusted, allow and deny alike
+(`approver-esp32-yubikey/status.md` is row by row).
 
 Two things this file is **not**: a list of decisions (those live in the section
 that owns them), and a second `approver-esp32/status.md` (that file is row-by-row
@@ -38,7 +42,7 @@ never confused with a broken build:
 | Browser tier | `scripts\web-approval.cmd` | **16 passed** in ~35s (needs NATS and `agent-browser`) |
 | Host tier (ESP32) | `scripts\esp32-host-tests.cmd` | **727 passed, 0 failures** — run rather than counted, which is the honest form of this row: the 688 it held before was a `RUN_TEST` grep, and §10.16's gate plus §10.9's AP assertion added 27 tests on top of what that grep saw. The last three arrived by being *found*: `test_pmic.cpp` defined them and `RegisterPmicTests()` never called `RUN_TEST` on them, so they had never run since the commit that wrote them — 727 definitions against 724 registrations, invisible in a green suite |
 | Parity vectors (ESP32) | `scripts\make-vectors.cmd --check` | up to date |
-| Host tier (ESP32-S3 + key) | `scripts\esp32yk-host-tests.cmd` | **358 passed, 0 failures** |
+| Host tier (ESP32-S3 + key) | `scripts\esp32yk-host-tests.cmd` | **379 passed, 0 failures** — up 21 since this row was written, and every one of the 21 exists because tier 3 found a defect first: the `getInfo` extension list, the button latch, `deny-pending`, ending an LED override early, and `ui::EffectiveTtlMs` |
 | ARKG vectors (ESP32-S3) | `scripts\esp32yk-make-vectors.cmd --check` | up to date |
 | Markdown links | every relative link in every tracked `.md` | all resolve |
 
@@ -243,24 +247,10 @@ Small, and it is the tail of the change that made the security key the signer.
   board at all**.
 - Deliberately not done in the same change as the signer swap: that one had to be
   provable end to end, and deleting a working identity underneath it would have
-  made a failure ambiguous.
-
-### 2.14 The ESP32-S3 has never spoken to a security key (§10.18, §10.11 tier 3)
-
-The thing everything else there is waiting on, and it is hardware rather than code.
-
-- Written and never run against a real device: `previewSign` on both requests,
-  the seed key arriving in the unsigned extension outputs, the derivation's two
-  **curve** operations on this silicon, the five checks, and a signed deny.
-- **One row of that needs nothing**: `key selftest` runs the ECDH and the point
-  addition against a committed vector with nothing plugged into the OTG port. It
-  has not been typed on the board.
-- The key must be on firmware **5.8.0+ advertising `previewSign`** — the same
-  floor §8 states for `responder_yubikey.py`. A key without it enrols and then
-  fails one step later with a message naming the cause; refusing at `key info`
-  time is a smaller owed item that folder's `status.md` lists.
-- The registration currently on that board is **stale by construction**: it names
-  the old Ed25519 key. `key enrol` then a fresh token, in that order.
+  made a failure ambiguous. **That condition is now met** — the swap is proven both
+  ways, allow and deny, against `hook.verify_reply` (2026-08-26) — so nothing is
+  holding this back any more. With §2.14 gone this is the largest open item on that
+  board, and the only one whose product is a deletion.
 
 ### 2.11 Battery and sleep (§10.13)
 
