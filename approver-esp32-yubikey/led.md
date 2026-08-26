@@ -111,6 +111,20 @@ broken, and the reason is deadlines: a request has one and a fault does not. A
 device that showed a fault instead of a waiting request would be letting the
 request expire in order to say something the console could have said at any time.
 
+**A light that promises an action must be able to deliver it.** `pending` is
+dropped the moment the gate gives up on a request, not when the request finally
+expires — and those are two different times: the gate's ceiling is
+`approval.touchTimeout` (30 s by default) while the request's TTL is a minute. In
+between, the request is still on the queue by design (it expires there rather than
+being re-gated, which is what stops a spin — `responder.cpp`'s
+`g_abandoned_nonce`), and nothing will ever collect a touch for it. Saying "a
+request is waiting for you" through those thirty seconds was a light asking for a
+fingertip that no longer had anywhere to go. It was found by watching the board:
+the key stopped blinking and the white went on for another half a minute.
+
+The console still lists it under `pending`, because the queue really does hold it.
+That readout is about the queue; this is about the light.
+
 **No two states may look alike**, and a test enforces it
 (`test_indicator_no_two_states_look_alike_outside_the_yellow_stack`). With one
 emitter, two states sharing a colour *and* a rhythm is two states the operator

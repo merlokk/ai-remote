@@ -850,7 +850,20 @@ bool RequestPending() {
         return false;
     }
     Lock();
-    const bool pending = g_card.Front() != nullptr;
+    const ui::Request *front = g_card.Front();
+    // **Not one that has already been given up on.** An abandoned request stays on
+    // the queue and expires there deliberately (see `g_abandoned_nonce`, and the
+    // spin it exists to prevent) — but the *light* must not go on saying "a request
+    // is waiting for you" for the rest of its TTL, because no touch will be
+    // collected for it and no reply will ever be sent. Half a minute of white
+    // promising an action that cannot happen is the same fault as a tap that
+    // changed no colour at all (§10.17): the light has to be about what the device
+    // will actually do.
+    //
+    // The console still reports it under `pending`, because the queue really does
+    // hold it — that readout is about the queue and this is about the glass.
+    const bool pending =
+        front != nullptr && std::strcmp(front->nonce, g_abandoned_nonce) != 0;
     Unlock();
     return pending;
 }

@@ -22,6 +22,7 @@ Three states, and the middle one is the one to watch:
 | ARKG derivation (§10.18.2) | **written** | `components/arkg`, 3,921 bytes. The five pure steps are host-tested against numbers Python produced; **the two curve steps have never run on this chip** — `key selftest` is the command and nobody has typed it |
 | Console on UART0 (§10.7) | **runs** | all 16 commands answer |
 | WS2812 on GPIO48 (§10.17) | **runs** | UART1 at 3.33 Mbaud, inverted; 0 write failures over thousands of frames |
+| `pending` ending with the gate (§10.17) | **runs** | the light stops asking when the gate does, not when the request expires — those are 30 s apart, and the difference was half a minute of white asking for a fingertip with nowhere to put it |
 | The touch prompt (§10.17) | **runs** | blue and fast while `key enrol` / `key test` wait for a fingertip, and gone the moment the key answers rather than waited out |
 | The state ranking (§10.17) | **runs** | transitions observed for `booting → no-wifi → no-bus → not-enrolled → not-registered → pending` |
 | BOOT button | **partly** | it **reads** (`buttons` is correct). The press → verdict path is untested |
