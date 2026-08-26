@@ -5,7 +5,7 @@
 # what lets §10.11's host tier compile them with a bare C++ compiler and no
 # fake. If a dependency ever has to be added to this line for *their* sake
 # rather than the socket's, something with a header in it went into the wrong
-# file — the rule `wifimgr` and `timesync` state next door.
+# file — the same rule `wifimgr` states.
 #
 # `debsahu__espidf-nats` is the managed component of §10.4: header-only C++, so
 # it appears here and nowhere else in the build. `nats_bus.cpp` is the only

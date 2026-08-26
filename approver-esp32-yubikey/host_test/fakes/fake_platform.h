@@ -8,15 +8,10 @@
 // file that ships is the file under test. That is the whole property: no
 // `#ifdef _WIN32` in anything that goes on the board.
 //
-// **What this used to be, and why it is a fifth of the size.** On the sibling
-// board it modelled an I²C register device — a write of `{reg}` moving a cursor,
-// a write of `{reg, v, …}` storing from there — because that board has five chips
-// on one leased bus and the whole of §10.14.3 is about them being read under a
-// single lease. **This board has no I²C at all**: no PMIC, no RTC, no IMU, no
-// codec, no touch controller (§10.13). It also has no I²S, so the speaker's
-// capture buffer went with it. What is left is what this firmware's host tier
-// actually reaches: two GPIOs, a clock a test can move, a non-blocking mutex, and
-// the storage fake next door.
+// **It is small because this board is** (§10.13): no I²C bus and no chip on one,
+// no I²S, no display, no touch controller — so there is no peripheral here to
+// model but the ones this firmware's host tier actually reaches. Two GPIOs, a
+// clock a test can move, a non-blocking mutex, and the storage fake next door.
 
 #include <cstddef>
 #include <cstdint>

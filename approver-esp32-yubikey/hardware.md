@@ -53,7 +53,7 @@ the worst kind of wrong to debug.
 | Socket | What it is | What it does here |
 |--------|------------|-------------------|
 | **UART** | a CH343P USB-to-UART bridge on GPIO43/44 | flashing, the log, and the §10.7 console. This is `COM6` on this machine |
-| **OTG** | the S3's *native* USB peripheral, GPIO19/20 | a USB **host** for a security key (§10.18.3) |
+| **OTG** | the S3's *native* USB peripheral, GPIO19/20 | a USB **host** for a security key (§10.18.4) |
 
 This is the single reason this board was the right one for this design. The
 sibling board has one USB-C wired to the chip's own USB, so its console *has* to
@@ -84,12 +84,11 @@ code runs. It is not readable and never will be.
 **3. There is no I²C bus, and so no real-time clock, no PMIC, no IMU and no
 codec.**
 
-The sibling board has five chips on a leased I²C bus and this one has no bus at
-all — nor an I²S peripheral for a speaker, nor a panel, nor a touch controller.
-Most of why this firmware is a third of the size of that one is in that sentence,
-and none of these is a chip this firmware chooses not to talk to: they are not on
-the board. §10.13 has what each absence costs, and the short answer for the clock
-is that it costs nothing, because nothing here reads one.
+There is no I²C bus on this board, no I²S peripheral in use for a speaker, no
+panel and no touch controller. Most of why this firmware is small is in that
+sentence, and none of these is a chip this firmware chooses not to talk to: they
+are not on the board. §10.13 has what each absence costs, and the short answer for
+the clock is that it costs nothing, because nothing here reads one.
 
 ### The pin map
 
@@ -101,7 +100,7 @@ turn a collision into a build failure rather than a symptom.
 | GPIO0 | `BOOT` — the one button, and the download strap |
 | GPIO48 | the WS2812 RGB LED (§10.17) |
 | GPIO43 / GPIO44 | UART0 TX/RX, the CH343P bridge — the console |
-| GPIO19 / GPIO20 | the native USB, D− and D+ — the host port (§10.18.3) |
+| GPIO19 / GPIO20 | the native USB, D− and D+ — the host port (§10.18.4) |
 | GPIO35, 36, 37 | **not ours** — the octal PSRAM on this part |
 
 The three PSRAM pins are in the header for one reason: claiming one of them is
@@ -115,18 +114,16 @@ same file as every other pin.
 
 ## 10.13 The parts with no job
 
-The sibling folder's §10.13 is a list of chips this firmware chooses not to use.
-Here it is mostly a list of chips that **are not there**, and what their absence
-costs — which is the more useful list, because an absence has no console command
-to reveal it.
+A list of what is **not on this board**, and what each absence costs — which is
+the useful list, because an absence has no console command to reveal it.
 
 | Absent | What it would have done | What it costs, and what covers it |
 |--------|-------------------------|-----------------------------------|
-| **A real-time clock** (the sibling has a PCF85063) | keep the time across a power cut | **Nothing at all, and there is no clock here of any kind.** §7's `ts` is *echoed from the request*, never re-derived from this device's clock (`protocol/signing.h` states it), so a device that thinks it is 1970 still produces signatures that verify — and nothing else here reads a wall-clock time. So the chip's absence was not covered by SNTP: **SNTP is gone too**, and with it the zone table, the `date` command and the `tz` / `sntp` / `sync` settings. A time that is only right once a server has been asked, on a board with nowhere to show it, is machinery with no consumer; every duration this firmware measures is a monotonic one off `esp_timer`. The one wall-clock number it prints — when it registered — comes off the handler's own clock in the reply, and `keys` prints it as UTC and says so |
-| **A PMIC** (AXP2101) | battery charge state, rail voltages, a power button | This board is mains-powered over USB and has no battery. `poweroff` does not exist as a console command, because there is nothing to switch off |
-| **An IMU** (QMI8658) | orientation, which the sibling uses for an idle policy | There is no panel to dim, so there is nothing an orientation would decide. Nothing in this firmware has an idle policy at all — the light's resting brightness is a setting, not a decision |
-| **A codec and speaker** (ES8311) | a chirp on a new request | The LED is the whole notification (§10.17). A device with one emitter and no sound is quieter than the other one on purpose — this is a thing that sits next to a person working. There is no I²S peripheral in use either, so the audio path is absent rather than switched off |
-| **A panel and touch** (SH8601 + CST9217) | seven screens, and a keyboard to type a registration token on | §10.17 is the replacement, and it is not a smaller version of a screen — it is a different design, because one emitter cannot show two things and a screen can. The token is typed on the console instead (§10.7), which is the only way in and is a socket rather than a surface |
+| **A real-time clock** | keep the time across a power cut | **Nothing at all, and there is no clock here of any kind.** §7's `ts` is *echoed from the request*, never re-derived from this device's clock (`protocol/signing.h` states it), so a device that thinks it is 1970 still produces signatures that verify — and nothing else here reads a wall-clock time. There is no SNTP either: a time that is only right once a server has been asked, on a board with nowhere to show it, is machinery with no consumer, and every duration this firmware measures is a monotonic one off `esp_timer`. The one wall-clock number it prints — when it registered — comes off the handler's own clock in the reply, and `keys` prints it as UTC and says so |
+| **A PMIC** | battery charge state, rail voltages, a power button | This board is mains-powered over USB and has no battery. `poweroff` does not exist as a console command, because there is nothing to switch off |
+| **An accelerometer** | orientation, and an idle policy off it | Nothing in this firmware has an idle policy at all — the light's resting brightness is a setting, not a decision — and with no display there is nothing an orientation would decide |
+| **A codec and speaker** | a chirp on a new request | The LED is the whole notification (§10.17). A device with one emitter and no sound is quiet on purpose — this is a thing that sits next to a person working. There is no I²S peripheral in use either, so the audio path is absent rather than switched off |
+| **A display and touch** | somewhere to render a request, and a keyboard to type a registration token on | §10.17 is the whole interface, and it is not a reduced screen — it is a different design, because one emitter can show exactly one fact. The token is typed on the console instead (§10.7), which is a socket rather than a surface |
 
 And the two that *are* on the board and have no job:
 
@@ -139,6 +136,6 @@ And the two that *are* on the board and have no job:
 is worth a line even though this firmware allocates nothing (§10.14.1). The two
 are not in tension: everything this code owns is static, and what asks for heap is
 other people's — the Wi-Fi driver's TX buffers, lwIP's pools, the USB Host
-Library's transfer descriptors, cJSON while it parses. On the sibling board those
-competed for about 200 KB of internal RAM and its §10.16 has the post-mortem of
-what happened when they lost. Here there are eight megabytes behind them.
+Library's transfer descriptors, cJSON while it parses. On a board without PSRAM
+those compete for a couple of hundred kilobytes of internal RAM; here there are
+eight megabytes behind them.

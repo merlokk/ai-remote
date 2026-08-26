@@ -36,7 +36,6 @@ indicator::Inputs Working() {
     in.bus_connected = true;
     in.registered = true;
     in.subscribed = true;
-    in.fido_required = true;
     in.fido_enrolled = true;
     in.fido_present = true;
     in.request_pending = false;
@@ -181,15 +180,16 @@ void test_indicator_enrolment_outranks_presence(void) {
     TEST_ASSERT_TRUE(indicator::Decide(in) == indicator::State::kNotEnrolled);
 }
 
-void test_indicator_a_missing_key_only_matters_when_it_is_required(void) {
-    // With the gate open (§10.18's development mode) a device with no key is
-    // not stuck, and spending its life on a missing-key colour would be a light
-    // that means nothing.
+void test_indicator_a_missing_key_always_matters(void) {
+    // **There is no mode in which it does not** (§10.18): the private key lives in
+    // the authenticator, so a device with nothing enrolled cannot sign anything at
+    // all, and a light that called that state `ready` would be promising an answer
+    // this device cannot give. The switch that used to open this gate was deleted
+    // with the signing key it belonged to.
     indicator::Inputs in = Working();
     in.fido_present = false;
     in.fido_enrolled = false;
-    in.fido_required = false;
-    TEST_ASSERT_TRUE(indicator::Decide(in) == indicator::State::kReady);
+    TEST_ASSERT_TRUE(indicator::Decide(in) == indicator::State::kNotEnrolled);
 }
 
 void test_indicator_connected_but_not_subscribed_is_not_ready(void) {
@@ -272,7 +272,7 @@ void RegisterIndicatorTests(void) {
     RUN_TEST(test_indicator_signing_outranks_a_pending_request);
     RUN_TEST(test_indicator_not_enrolled_is_its_own_state);
     RUN_TEST(test_indicator_enrolment_outranks_presence);
-    RUN_TEST(test_indicator_a_missing_key_only_matters_when_it_is_required);
+    RUN_TEST(test_indicator_a_missing_key_always_matters);
     RUN_TEST(test_indicator_connected_but_not_subscribed_is_not_ready);
     RUN_TEST(test_indicator_the_restore_window_is_the_brightest_thing_there_is);
     RUN_TEST(test_indicator_every_state_has_a_name_and_a_sentence);

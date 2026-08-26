@@ -179,7 +179,12 @@ void test_the_request_carries_what_six_asks_for(void) {
 // §10.2 pins this device to one scheme, and the allowlist pins it again on the
 // verifying side. Nothing this device sends may choose an algorithm, so there is
 // no field to vary — the test is that it is there and says the one thing.
-void test_the_request_always_names_ed25519(void) {
+//
+// **And the one thing is `p256`** (§10.18): what this device registers is an
+// ARKG-derived P-256 key, and every verdict is signed inside the security key. A
+// device that announced `ed25519` here would have its replies verified against the
+// wrong scheme and rejected, one silent approval at a time.
+void test_the_request_always_names_p256(void) {
     RegistrationRequest request;
     request.token = "k.s";
     request.key_id = "k";
@@ -188,7 +193,8 @@ void test_the_request_always_names_ed25519(void) {
 
     char out[protocol::kRequestMax];
     TEST_ASSERT_NOT_EQUAL(0, protocol::BuildRegistrationRequest(request, out, sizeof out));
-    TEST_ASSERT_NOT_NULL(std::strstr(out, "\"key_type\":\"ed25519\""));
+    TEST_ASSERT_NOT_NULL(std::strstr(out, "\"key_type\":\"p256\""));
+    TEST_ASSERT_NULL(std::strstr(out, "ed25519"));
 }
 
 void test_a_request_that_cannot_be_built_writes_nothing(void) {
@@ -552,7 +558,7 @@ void RegisterRegistrationTests(void) {
     RUN_TEST(test_a_token_that_is_not_one_is_refused);
 
     RUN_TEST(test_the_request_carries_what_six_asks_for);
-    RUN_TEST(test_the_request_always_names_ed25519);
+    RUN_TEST(test_the_request_always_names_p256);
     RUN_TEST(test_a_request_that_cannot_be_built_writes_nothing);
 
     RUN_TEST(test_a_signed_acceptance_is_read);

@@ -99,7 +99,6 @@ void GatherState(indicator::Inputs *out) {
     out->request_pending = responder::RequestPending();
     out->signing = responder::Busy();
 
-    out->fido_required = config::Get().approval.require_key;
     out->fido_present = fido::Present();
     out->fido_enrolled = fido::Enrolled();
 
@@ -124,7 +123,7 @@ void SettingsChanged() {
     led::SetBrightness(config::Get().led.percent, config::Get().led.idle_percent);
     wifimgr::Apply();
     nats::Apply();
-    // The light itself, so that a brightness change or a `requireKey` flip is
+    // The light itself, so that a brightness change or a fresh enrolment is
     // visible on the next frame rather than at the next state change.
     indicator::Poke();
 }
@@ -193,12 +192,6 @@ extern "C" void app_main(void) {
     // The operator's brightness, before anything else has a chance to be seen at
     // the compiled-in default.
     led::SetBrightness(config::Get().led.percent, config::Get().led.idle_percent);
-
-    if (!config::Get().approval.require_key) {
-        // Said out loud, once, at boot. A device that can approve without a key
-        // must never be one somebody forgot they configured (§10.18).
-        ESP_LOGW(TAG, "approval.requireKey is FALSE - this device will approve on a button alone");
-    }
 
     // **The identity, and it is this early because everything above the bus has to
     // be able to ask about it** (§10.6). It depends on nothing — no filesystem, no

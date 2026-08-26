@@ -1,14 +1,12 @@
 # The console (CLAUDE.md §10.7). `console` is ESP-IDF's own REPL component;
 # everything after it is a thing this device has a readout for.
 #
-# **Eleven components are missing from this line compared with the sibling
-# board's**, and each of them is a chip or a surface that is not here: `pmic`,
-# `rtc`, `imu`, `audio`, `display`, `screens`, `i2cbus`, `web` — and so are
-# `watcher`, which read §9.7's and §9.10's documents for a screen this device does
-# not have, and `timesync` / `timezone`, which kept a clock this device cannot show
-# and nothing here reads. `ui` stays, because the request queue is still a `ui::`
-# type and so is the age formatter the readouts print. What replaced them is `led`,
-# `indicator` and `fido`: one light and one key.
+# **The list is short because this board is** (§10.13): there is no chip and no
+# surface here for a `pmic`, `rtc`, `imu`, `audio`, `display` or `i2cbus`
+# component to talk to, and no web server. What this device does have a readout
+# for is `led`, `indicator` and `fido` — one light and one key. `ui` is on the
+# line because the request queue is a `ui::` type and so is the age formatter the
+# readouts print.
 idf_component_register(SRCS "console.cpp"
                     INCLUDE_DIRS "."
                     REQUIRES console storage config crypto protocol registration responder

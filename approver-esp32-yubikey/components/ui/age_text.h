@@ -2,12 +2,9 @@
 
 // **How long ago, in the units a person reads**: `3 s`, `66 m`, `8h 05m`.
 //
-// This used to live in `limits_view.h`, next to the screen that put an age under
-// §9.7's numbers. That screen is gone with the panel and so is the watcher that
-// fed it — this device shows nothing and watches nothing — but the console still
-// prints ages: how long since the clock last synced, how long the bus has been
-// up, how long a request has left. So the function outlived its screen and this
-// is where it landed.
+// The console prints ages in several places — how long the bus has been up, how
+// long since the last state change, how long a request has left — and they all
+// come through here rather than each formatting their own.
 //
 // It stays in `ui` rather than moving into `components/cli` for the reason that
 // component's CMakeLists gives about the namespace: `ui` is the name §7's
@@ -16,7 +13,7 @@
 // §10.11's host tier compiles it with a bare C++ compiler and pins the bands.
 // `cli/console.cpp` calls this rather than keeping its own copy, which is the one
 // property worth protecting: one implementation of "how long ago", so a paste of
-// `date` and a paste of `nats` cannot describe the same instant two ways.
+// `led` and a paste of `nats` cannot describe the same instant two ways.
 //
 // **This file includes `<cstddef>` and `<cstdint>` and nothing else.**
 

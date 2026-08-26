@@ -147,7 +147,8 @@ help          esp_console's own listing
 status        is this the build I think it is, in the slot I think it is
 led           what the device thinks it is, and what the light is doing
 request       is it on approvals.*, and if not, which of the four things is missing
-key           what is on the OTG port
+key           what is on the OTG port, and the p256 key this device signs as
+key selftest  the ARKG derivation on this chip - needs nothing plugged in
 ```
 
 ## The tests
@@ -164,12 +165,19 @@ once (that is where cJSON comes from).
 
 [`tests.md`](tests.md) is what each tier pins.
 
-To regenerate the cross-language parity vectors:
+To regenerate the cross-language parity vectors — **two generators, and this
+folder's tests need both**:
 
 ```
-..\scripts\make-vectors.cmd
-..\scripts\make-vectors.cmd --check     # and this is what CI would run
+..\scripts\make-vectors.cmd                  # §7's decision bytes (lives next door)
+..\scripts\esp32yk-make-vectors.cmd          # the ARKG derivation (§10.18, lives here)
+..\scripts\make-vectors.cmd --check          # and these two are what CI would run
+..\scripts\esp32yk-make-vectors.cmd --check
 ```
+
+Neither needs a board or a key. The second one also writes
+`components/arkg/arkg_selftest_vector.h`, which ships **in the firmware** — so
+after running it, rebuild before believing `key selftest` on the device.
 
 ## Registering the device end to end
 
@@ -190,6 +198,22 @@ E:\projects\ai-remote\.venv\Scripts\python.exe `
 # 3. on the device console
 register approver-esp32-yubikey.<the secret it printed>
 ```
+
+**Since §10.18 there is a step 0, and it is not optional**: the key being
+registered is derived from a security key, so the device has nothing to register
+until one is enrolled. `register` refuses with a sentence saying so.
+
+```
+# 0. on the device console, with a security key in the OTG port
+key selftest        # needs no key: the derivation, on this chip, against Python
+key enrol           # one touch. prints the p256 key this device will sign as
+```
+
+And the ordering has a cost worth knowing before you pay it: **a re-enrolment
+invalidates the registration**, because the derived key is new. The device says
+`registered STALE` and stays off `approvals.*` until a fresh token is minted. The
+token is one-time, so an enrolment done *after* a registration costs a trip back
+to step 1.
 
 **A PowerShell background job will not do for step 2.** Each PowerShell invocation
 here is a fresh process, so `Start-Job` dies with it — which looks from the device

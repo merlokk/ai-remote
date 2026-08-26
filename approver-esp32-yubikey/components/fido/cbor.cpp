@@ -1,4 +1,4 @@
-// The CBOR subset of §10.18.2. Pure, bounded, and fed by a device on the other
+// The CBOR subset of §10.18.4. Pure, bounded, and fed by a device on the other
 // end of a cable — which is why every length is checked against what is actually
 // in the buffer rather than against what the encoding promised.
 

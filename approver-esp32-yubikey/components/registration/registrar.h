@@ -24,7 +24,7 @@
 //     verified `ok:true` and on nothing else, so a failed attempt cannot clobber
 //     a registration that works — the same ordering all three existing responders
 //     use.
-//   * **trust on first use, and the screen closes it.** With nothing pinned the
+//   * **trust on first use, and the console closes it.** With nothing pinned the
 //     handler's key is taken on trust and pinned for every registration
 //     afterwards; the console prints it so an operator can compare it, once, with
 //     what the handler printed at startup. With something pinned, a reply signed
@@ -67,7 +67,21 @@ inline constexpr uint32_t kReplyTimeoutMs = 10000;
 // announce.
 esp_err_t Init();
 
+// **True only when the handler knows the key this device holds now.** The record on
+// disk names a public key; on this device that key comes from the enrolment (§10.18),
+// so a `key enrol` invalidates the registration and this goes false — which is what
+// keeps the device off `approvals.*` instead of answering with signatures the hook
+// rejects (§10.10 rule 5).
 bool Registered();
+
+// Whether there is a registration file at all, whatever key it names. The console
+// uses the difference to say "stale" rather than "none", which are two different
+// things to do about.
+bool RegistrationPresent();
+
+// The public key the registration was made with, or "". What an operator compares
+// against `key` when the two have drifted apart.
+const char *RegisteredPublicKey();
 
 // Empty when not registered. The `key_id` is read back from the file rather than
 // assumed, so a file written by a differently-named build is visible instead of
@@ -88,8 +102,9 @@ int64_t RegisteredTs();
 // section numbers (§10.7), whether it worked or not. On success it names the
 // handler key so the operator can compare it.
 //
-// Needs a key of its own (§10.6) and a bus connection, and says which is missing
-// rather than failing vaguely: those are the two things somebody can act on.
+// Needs an **enrolment** (§10.18 — the key being registered is derived from a
+// security key, so `key enrol` comes first) and a bus connection, and says which is
+// missing rather than failing vaguely: those are the two things somebody can act on.
 esp_err_t Register(const char *token, char *detail, size_t detail_size);
 
 // Drops the registration and the pinned key. Nothing to forget is not a failure.

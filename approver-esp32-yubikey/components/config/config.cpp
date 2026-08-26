@@ -29,9 +29,9 @@ void Changed() {
     }
 }
 
-// What `KEY` decided at boot (§10.15). Kept because it has to be said twice —
-// once on the screen, once whenever the console is asked — and neither of those
-// exists yet at the moment the button is read.
+// What `BOOT` decided at boot (§10.15). Kept because it has to be said whenever
+// the console is asked, and the console does not exist yet at the moment the
+// button is read.
 RestoreOutcome boot_restore = RestoreOutcome::kNotRequested;
 
 // One buffer, used for reading and for printing. Playback has its own; these
@@ -62,7 +62,7 @@ void CopyBool(const cJSON *object, const char *name, bool *out) {
 }
 
 // Numbers arrive as doubles and are clamped here rather than where they are
-// used. A brightness of 130 from a hand-edited file must not reach the panel,
+// used. A brightness of 130 from a hand-edited file must not reach the emitter,
 // and a caller that has to re-check every field is a caller that will forget.
 void CopyNumber(const cJSON *object, const char *name, long min, long max, long *out) {
     const cJSON *item = cJSON_GetObjectItemCaseSensitive(object, name);
@@ -133,8 +133,8 @@ esp_err_t Parse(const char *json, Data *out) {
 
         // **A mode that is neither is left at the default rather than
         // guessed.** The two spellings are the whole vocabulary, and reading
-        // "AP " or "station" as one of them would be the same class of error
-        // as libc reading a misspelled zone as UTC (§10.8.2).
+        // "AP " or "station" as one of them would be a device on a network
+        // nobody asked for.
         const cJSON *mode = cJSON_GetObjectItemCaseSensitive(wifi, "mode");
         if (cJSON_IsString(mode) && mode->valuestring != nullptr) {
             if (strcmp(mode->valuestring, "ap") == 0) {
@@ -295,19 +295,13 @@ esp_err_t Parse(const char *json, Data *out) {
         out->led.idle_percent = static_cast<uint8_t>(value);
     }
 
-    // The gate of §10.18. **`requireKey` is the one field here that can make
-    // this device less careful**, so it is read the strict way: anything that is
-    // not a JSON boolean leaves the default alone rather than being coerced. A
-    // file that says `"requireKey": "false"` is a file with a mistake in it, and
-    // reading that string as `true`-because-non-empty — or as `false` because
-    // somebody meant it — are both worse than ignoring it.
+    // The gate of §10.18, read the strict way: anything that is not a JSON boolean
+    // leaves the default alone rather than being coerced. A file that says
+    // `"denyButton": "false"` is a file with a mistake in it, and reading that
+    // string as `true`-because-non-empty — or as `false` because somebody meant it
+    // — are both worse than ignoring it.
     const cJSON *approval = cJSON_GetObjectItemCaseSensitive(root, "approval");
     if (cJSON_IsObject(approval)) {
-        const cJSON *require_key = cJSON_GetObjectItemCaseSensitive(approval, "requireKey");
-        if (cJSON_IsBool(require_key)) {
-            out->approval.require_key = cJSON_IsTrue(require_key);
-        }
-
         const cJSON *deny_button = cJSON_GetObjectItemCaseSensitive(approval, "denyButton");
         if (cJSON_IsBool(deny_button)) {
             out->approval.deny_button = cJSON_IsTrue(deny_button);
@@ -409,7 +403,6 @@ esp_err_t Serialise(const Data &in, size_t *length) {
 
     cJSON *approval = cJSON_AddObjectToObject(root, "approval");
     if (approval != nullptr) {
-        cJSON_AddBoolToObject(approval, "requireKey", in.approval.require_key);
         cJSON_AddNumberToObject(approval, "touchTimeoutSeconds",
                                 in.approval.touch_timeout_seconds);
         cJSON_AddBoolToObject(approval, "denyButton", in.approval.deny_button);
@@ -548,7 +541,6 @@ void FillDefaults(Data *out) {
     // other default is silent: a firmware that ships with the gate open
     // approves things for anybody who can reach the button, and nothing about
     // the device looks different while it does.
-    out->approval.require_key = true;
     // Thirty seconds, and it is shorter than the hook's own timeout on purpose
     // (§10.18): a light still asking after the asker has stopped listening is a
     // light that means nothing.
@@ -634,9 +626,9 @@ RestoreOutcome RestoreAtBoot(bool key_held) {
         return boot_restore;
     }
 
-    // One log line at the time, because there is no panel this early (§10.15) —
-    // the screen says it again as soon as there is one.
-    ESP_LOGW(TAG, "KEY held at boot: putting %s back over %s", kDefaultsPath, kPath);
+    // One log line at the time (§10.15); the console says it again on request, for
+    // as long as the device is up.
+    ESP_LOGW(TAG, "BOOT held at boot: putting %s back over %s", kDefaultsPath, kPath);
 
     const esp_err_t err = Restore();
     if (err == ESP_OK) {
@@ -690,10 +682,10 @@ esp_err_t Init() {
 
     const esp_err_t err = Reload();
     if (err == ESP_OK) {
-        ESP_LOGI(TAG, "%s loaded: %u network(s), LED %u%%, key %s", kPath,
+        ESP_LOGI(TAG, "%s loaded: %u network(s), LED %u%%, touch timeout %us", kPath,
                  static_cast<unsigned>(data.wifi.network_count),
                  static_cast<unsigned>(data.led.percent),
-                 data.approval.require_key ? "required" : "NOT REQUIRED");
+                 static_cast<unsigned>(data.approval.touch_timeout_seconds));
         return ESP_OK;
     }
 

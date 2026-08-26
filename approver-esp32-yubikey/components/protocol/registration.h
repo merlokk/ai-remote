@@ -58,12 +58,27 @@ inline constexpr size_t kKeyIdMax = 47;
 // `<key_id>.<b64 of 32 bytes>` — 44 characters of base64, a dot, and the name.
 inline constexpr size_t kTokenMax = kKeyIdMax + 1 + 44;
 
-// Base64 of 32 bytes, with padding: 44 characters. Both the nonce and the two
-// keys are exactly this shape.
+// **The signature scheme this device registers under** (§10.2, §10.18). A constant
+// rather than a field: the allowlist pins the scheme on the verifying side, and a
+// device that could choose one could choose a weaker one.
+//
+// `p256` because the signer is the security key — an ARKG-derived P-256 key, and an
+// ECDSA signature the authenticator makes. The Ed25519 spelling this device used
+// before signed with a key that lived in its own flash, which is the property
+// §10.18 replaced.
+inline constexpr char kKeyType[] = "p256";
+
+// Base64 of 32 bytes, with padding: 44 characters. The nonce and the server key are
+// exactly this shape.
 inline constexpr size_t kB64_32Max = 44;
 
 // Base64 of 64 bytes: 88 characters.
 inline constexpr size_t kB64_64Max = 88;
+
+// And the public key's own bound: base64 of a 33-byte compressed point is 44
+// characters too. Its own constant because the two are the same number for
+// unrelated reasons, and one of them will move first.
+inline constexpr size_t kPubkeyMax = 44;
 
 // The handler's `error` is free text it chose. Bounded here rather than trusted
 // (§10.10) — what arrives on an open subject is attacker-shaped, and this string
@@ -77,9 +92,12 @@ struct RegistrationRequest {
     int64_t ts = 0;
     const char *token = nullptr;
     const char *key_id = nullptr;
-    const char *pubkey = nullptr;  // base64, 32 bytes
-    const char *nonce = nullptr;   // base64, 32 bytes
-    // `key_type` is not a field here: §10.2 pins this device to `ed25519` and the
+    // Base64 of the 33-byte compressed SEC1 point (§10.18) — 44 characters, which
+    // is the same width Ed25519's 32 bytes came to, by coincidence rather than by
+    // design.
+    const char *pubkey = nullptr;
+    const char *nonce = nullptr;  // base64, 32 bytes
+    // `key_type` is not a field here: §10.2 pins this device to `p256` and the
     // allowlist pins the scheme on the verifying side. Nothing the device sends
     // may choose an algorithm, so nothing here may vary it.
 };

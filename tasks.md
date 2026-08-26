@@ -38,6 +38,8 @@ never confused with a broken build:
 | Browser tier | `scripts\web-approval.cmd` | **16 passed** in ~35s (needs NATS and `agent-browser`) |
 | Host tier (ESP32) | `scripts\esp32-host-tests.cmd` | **727 passed, 0 failures** — run rather than counted, which is the honest form of this row: the 688 it held before was a `RUN_TEST` grep, and §10.16's gate plus §10.9's AP assertion added 27 tests on top of what that grep saw. The last three arrived by being *found*: `test_pmic.cpp` defined them and `RegisterPmicTests()` never called `RUN_TEST` on them, so they had never run since the commit that wrote them — 727 definitions against 724 registrations, invisible in a green suite |
 | Parity vectors (ESP32) | `scripts\make-vectors.cmd --check` | up to date |
+| Host tier (ESP32-S3 + key) | `scripts\esp32yk-host-tests.cmd` | **358 passed, 0 failures** |
+| ARKG vectors (ESP32-S3) | `scripts\esp32yk-make-vectors.cmd --check` | up to date |
 | Markdown links | every relative link in every tracked `.md` | all resolve |
 
 ---
@@ -62,8 +64,15 @@ found. Nothing here is a new proposal.
 
 ### 2.1 Key custody on the ESP32 shipped as its fallback (§10.6, §10.15, §10.12)
 
-The largest open item. Its cost is now stated correctly in the docs — what is
-unfinished is the operation itself.
+The largest open item **on the C6 board**. Its cost is now stated correctly in the
+docs — what is unfinished is the operation itself.
+
+**It no longer applies to `approver-esp32-yubikey/`.** That device stopped signing
+with a key of its own: the verdict is an ECDSA signature the security key makes,
+and the private half is reconstructed inside the authenticator rather than kept
+anywhere on the board (§10.18). Its §10.6 is now a table of what is *absent*. What
+is left there is §2.13 below — an Ed25519 identity that signs nothing and whose
+removal would take the last private key off that board's flash.
 
 - No eFuse key is burned, so the Ed25519 seed is **32 unencrypted bytes in NVS**
   (`approver` namespace) and `esptool read_flash` gives up the signing key.
@@ -217,6 +226,41 @@ What is open is therefore narrower and more concrete than "measure it":
   `--max_payload=65536` bounds the megabyte case; a ~15 KB publish is under that
   bound and drops this responder's socket just as effectively (§10.10's scenario,
   no malformed frame needed).
+
+### 2.13 The ESP32-S3's Ed25519 identity signs nothing and is still derived (§10.6, §10.18)
+
+Small, and it is the tail of the change that made the security key the signer.
+
+- `components/crypto` still generates a seed at first boot and keeps it in
+  **unencrypted NVS**, exactly as §2.1 describes for the other board — except that
+  on this one it now signs nothing at all.
+- What still needs libsodium there is `crypto::Verify`, for §6's reply (the server
+  key is Ed25519 by fixed protocol and mbedTLS has no EdDSA), plus base64. Neither
+  needs an identity: `Verify` is static and takes the key it is checking.
+- So the removal is: the seed, the eFuse route, `Sign`, `ProveKey`, `keys forget
+  now`, the `device_key` input to the light, and one `Blocker` in the responder
+  that can never fire. What it buys is that there is then **no private key on that
+  board at all**.
+- Deliberately not done in the same change as the signer swap: that one had to be
+  provable end to end, and deleting a working identity underneath it would have
+  made a failure ambiguous.
+
+### 2.14 The ESP32-S3 has never spoken to a security key (§10.18, §10.11 tier 3)
+
+The thing everything else there is waiting on, and it is hardware rather than code.
+
+- Written and never run against a real device: `previewSign` on both requests,
+  the seed key arriving in the unsigned extension outputs, the derivation's two
+  **curve** operations on this silicon, the five checks, and a signed deny.
+- **One row of that needs nothing**: `key selftest` runs the ECDH and the point
+  addition against a committed vector with nothing plugged into the OTG port. It
+  has not been typed on the board.
+- The key must be on firmware **5.8.0+ advertising `previewSign`** — the same
+  floor §8 states for `responder_yubikey.py`. A key without it enrols and then
+  fails one step later with a message naming the cause; refusing at `key info`
+  time is a smaller owed item that folder's `status.md` lists.
+- The registration currently on that board is **stale by construction**: it names
+  the old Ed25519 key. `key enrol` then a fresh token, in that order.
 
 ### 2.11 Battery and sleep (§10.13)
 

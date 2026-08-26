@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstring>
 
+#include "arkg.h"
 #include "cJSON.h"
 #include "cbor.h"
 #include "ctaphid_frames.h"
@@ -13,6 +14,7 @@
 #include "esp_log.h"
 #include "esp_random.h"
 #include "psa/crypto.h"
+#include "arkg_selftest_vector.h"
 #include "storage.h"
 
 namespace fido {
@@ -20,10 +22,27 @@ namespace {
 
 constexpr const char *TAG = "fido";
 
-// One request and one response buffer, static (§10.14.1). The largest request is
-// a `makeCredential` — a client data hash, two small maps and one algorithm — and
-// the largest response is a `getInfo`, which on a YubiKey 5 is around 400 bytes.
-constexpr size_t kRequestMax = 512;
+// One request and one response buffer, static (§10.14.1).
+//
+// **The largest request is the signing assertion, and it is sized from the
+// ceilings rather than from what a YubiKey happens to send.** `getAssertion` with
+// `previewSign` carries four variable things at once — the credential id in the
+// allow list, the generated key's handle, the 32-byte digest and COSE_Sign_Args:
+//
+//     256  kMaxCredentialIdSize    the allow list entry
+//     256  kMaxKeyHandleSize       previewSign's key handle
+//     192  kMaxSignArgsSize        COSE_Sign_Args, with ctx at its own ceiling
+//      32  the digest
+//    ~120  rpId, the maps, the keys, `up: true`
+//    ----
+//     856
+//
+// A real key's credential id is 64 bytes and its handle is similar, so this is
+// several times what any of them will use. Sizing it to *those* numbers would have
+// made an unusual key fail at the moment of an approval, with `kBadSignature` and
+// nothing naming the cause — the one place in this file where a tight buffer would
+// be indistinguishable from a broken key.
+constexpr size_t kRequestMax = 1152;
 constexpr size_t kResponseMax = ctaphid::kMaxMessage;
 
 uint8_t request_buffer[kRequestMax];
@@ -34,6 +53,17 @@ struct Runtime {
     bool ready = false;
     Enrolment enrolment;
     Stats stats;
+
+    // The derived public key in base64, built once at load and at enrolment. §6
+    // registers this string and `hook.verify_reply` looks it up; it is cached
+    // because `registrar` and the console both want it and neither should be
+    // encoding a key.
+    char public_key_b64[48] = {};
+
+    // Whether the stored derivation still reproduces the registered key. Checked
+    // once, at load — an answer that could change per call would be a device that
+    // is sometimes on `approvals.*` (§10.10 rule 5).
+    bool derivation_holds = false;
     // SHA-256 of `ctap2::kRelyingPartyId`, computed once at Init. Every assertion
     // is checked against it, so it is worth not recomputing per approval — and
     // worth having in one place rather than at the two call sites.
@@ -126,8 +156,50 @@ bool ParseDerSignature(const uint8_t *der, size_t length, uint8_t *out) {
     return offset == length;
 }
 
+// **The check, for both of the signatures this device cares about.** A DER ECDSA
+// signature over a 32-byte digest, under an uncompressed P-256 point.
+//
+// Two callers, and the difference between them is the whole of §10.18:
+//
+//   * `VerifyAssertion` below, with the credential's public key over
+//     `SHA-256(authData || clientDataHash)` — that one proves **a human touched
+//     this key for this request**;
+//   * `Sign`, with the *derived* public key over the request's own digest — that
+//     one is the verdict, and it is what §7 publishes.
+//
+// **The public key is imported for one verification and destroyed afterwards**,
+// rather than kept as a PSA key across the life of the device. It is a public key,
+// so nothing is being protected by that — what it buys is that there is no handle to
+// leak, no slot to run out of, and no state that can be stale after a `key enrol`
+// replaced the enrolment underneath it. Importing costs microseconds next to a
+// fingertip.
+bool VerifyP256(const uint8_t *point, const uint8_t *digest, const uint8_t *signature,
+                size_t signature_length) {
+    uint8_t raw_signature[64];
+    if (!ParseDerSignature(signature, signature_length, raw_signature)) {
+        return false;
+    }
+
+    psa_key_attributes_t attributes = PSA_KEY_ATTRIBUTES_INIT;
+    psa_set_key_type(&attributes, PSA_KEY_TYPE_ECC_PUBLIC_KEY(PSA_ECC_FAMILY_SECP_R1));
+    psa_set_key_bits(&attributes, 256);
+    psa_set_key_usage_flags(&attributes, PSA_KEY_USAGE_VERIFY_HASH);
+    psa_set_key_algorithm(&attributes, PSA_ALG_ECDSA(PSA_ALG_SHA_256));
+
+    mbedtls_svc_key_id_t key = MBEDTLS_SVC_KEY_ID_INIT;
+    if (psa_import_key(&attributes, point, ctap2::kP256PointSize, &key) != PSA_SUCCESS) {
+        return false;
+    }
+
+    const psa_status_t verified =
+        psa_verify_hash(key, PSA_ALG_ECDSA(PSA_ALG_SHA_256), digest, 32, raw_signature,
+                        sizeof(raw_signature));
+    psa_destroy_key(key);
+    return verified == PSA_SUCCESS;
+}
+
 // **The one function on this device that turns "a key answered" into "the key
-// answered".** Everything above it is plumbing; this is the check.
+// answered".** Everything around it is plumbing; this is the check.
 bool VerifyAssertion(const uint8_t *auth_data, size_t auth_data_length, const uint8_t *challenge,
                      const uint8_t *signature, size_t signature_length) {
     // What FIDO signs is `authData || clientDataHash`, concatenated raw and then
@@ -148,35 +220,36 @@ bool VerifyAssertion(const uint8_t *auth_data, size_t auth_data_length, const ui
             return false;
         }
     }
+    return VerifyP256(runtime.enrolment.public_key, digest, signature, signature_length);
+}
 
-    uint8_t raw_signature[64];
-    if (!ParseDerSignature(signature, signature_length, raw_signature)) {
+// Runs the derivation for an enrolment and fills `derived` — including the ARKG key
+// handle, **which the file does not store**. That is the reason this is a function
+// and not a load-time nicety: `kh` is what travels back to the authenticator, and
+// re-deriving it is the only way to have it. The file keeps the *inputs* and the
+// expected answer; everything else is recomputed.
+arkg::Status DeriveInto(Enrolment *enrolment) {
+    return arkg::Derive(arkg::PsaBackend(), enrolment->seed, enrolment->ikm,
+                        sizeof enrolment->ikm,
+                        reinterpret_cast<const uint8_t *>(enrolment->ctx),
+                        std::strlen(enrolment->ctx), &enrolment->derived);
+}
+
+// A base64 blob out of the JSON, into a fixed buffer, with the length pinned. Every
+// field in this file is one of these, and the exact-length check is what stops a
+// truncated key being loaded as a short one.
+bool ReadBlob(const cJSON *root, const char *name, uint8_t *out, size_t expected,
+              size_t *written = nullptr) {
+    const cJSON *item = cJSON_GetObjectItemCaseSensitive(root, name);
+    if (!cJSON_IsString(item) || item->valuestring == nullptr) {
         return false;
     }
-
-    // **The public key is imported for this one verification and destroyed
-    // afterwards**, rather than kept as a PSA key across the life of the device.
-    // It is a public key, so nothing is being protected by that — what it buys is
-    // that there is no handle to leak, no slot to run out of, and no state that
-    // can be stale after a `key enrol` replaces the enrolment underneath it.
-    // Importing costs microseconds next to a fingertip.
-    psa_key_attributes_t attributes = PSA_KEY_ATTRIBUTES_INIT;
-    psa_set_key_type(&attributes, PSA_KEY_TYPE_ECC_PUBLIC_KEY(PSA_ECC_FAMILY_SECP_R1));
-    psa_set_key_bits(&attributes, 256);
-    psa_set_key_usage_flags(&attributes, PSA_KEY_USAGE_VERIFY_HASH);
-    psa_set_key_algorithm(&attributes, PSA_ALG_ECDSA(PSA_ALG_SHA_256));
-
-    mbedtls_svc_key_id_t key = MBEDTLS_SVC_KEY_ID_INIT;
-    if (psa_import_key(&attributes, runtime.enrolment.public_key, ctap2::kP256PointSize, &key) !=
-        PSA_SUCCESS) {
-        return false;
+    const size_t decoded = crypto::Base64Decode(item->valuestring, out, expected);
+    if (written != nullptr) {
+        *written = decoded;
+        return decoded > 0;
     }
-
-    const psa_status_t verified = psa_verify_hash(key, PSA_ALG_ECDSA(PSA_ALG_SHA_256), digest,
-                                                  sizeof(digest), raw_signature,
-                                                  sizeof(raw_signature));
-    psa_destroy_key(key);
-    return verified == PSA_SUCCESS;
+    return decoded == expected;
 }
 
 esp_err_t Load() {
@@ -202,37 +275,53 @@ esp_err_t Load() {
     Enrolment loaded;
     bool good = true;
 
-    const cJSON *item = cJSON_GetObjectItemCaseSensitive(root, "credentialId");
-    if (cJSON_IsString(item) && item->valuestring != nullptr) {
-        loaded.credential_id_length = crypto::Base64Decode(item->valuestring, loaded.credential_id,
-                                                           sizeof(loaded.credential_id));
-        good = good && loaded.credential_id_length > 0;
+    // **The format version, first.** A v1 file is the pre-ARKG shape: a credential
+    // and no seed key, so there is no signing key in it at all. It is treated as no
+    // enrolment rather than migrated — there is nothing to migrate *from* (nothing
+    // ever wrote one on hardware), and a device that half-loaded one would be a
+    // device that cannot sign and does not know it.
+    const cJSON *item = cJSON_GetObjectItemCaseSensitive(root, "v");
+    if (!cJSON_IsNumber(item) || static_cast<int>(item->valuedouble) != kFormatVersion) {
+        cJSON_Delete(root);
+        ESP_LOGW(TAG, "%s is not format %d; this device is not enrolled", kPath, kFormatVersion);
+        return ESP_ERR_INVALID_VERSION;
+    }
+
+    // The credential half — what proves a human touched this key.
+    good = good && ReadBlob(root, "credentialId", loaded.credential_id,
+                            sizeof loaded.credential_id, &loaded.credential_id_length);
+    good = good && ReadBlob(root, "publicKey", loaded.public_key, sizeof loaded.public_key);
+    // The point has to be an uncompressed one or the verifier will not take it.
+    // Checked at load rather than at the first approval, so a corrupted file is a
+    // boot log line and not a refused verdict.
+    good = good && loaded.public_key[0] == 0x04;
+    good = good && ReadBlob(root, "userId", loaded.user_id, sizeof loaded.user_id);
+
+    // The signing half — what makes the verdict.
+    good = good && ReadBlob(root, "keyHandle", loaded.key_handle, sizeof loaded.key_handle,
+                            &loaded.key_handle_length);
+    good = good && ReadBlob(root, "seedBlinding", loaded.seed.blinding,
+                            sizeof loaded.seed.blinding);
+    good = good && ReadBlob(root, "seedKem", loaded.seed.kem, sizeof loaded.seed.kem);
+    good = good && ReadBlob(root, "ikm", loaded.ikm, sizeof loaded.ikm);
+
+    item = cJSON_GetObjectItemCaseSensitive(root, "ctx");
+    if (cJSON_IsString(item) && item->valuestring != nullptr &&
+        std::strlen(item->valuestring) <= arkg::kCtxMax) {
+        snprintf(loaded.ctx, sizeof loaded.ctx, "%s", item->valuestring);
     } else {
         good = false;
     }
 
-    item = cJSON_GetObjectItemCaseSensitive(root, "publicKey");
-    if (cJSON_IsString(item) && item->valuestring != nullptr) {
-        good = good && crypto::Base64Decode(item->valuestring, loaded.public_key,
-                                            sizeof(loaded.public_key)) ==
-                           ctap2::kP256PointSize;
-        // The point has to be an uncompressed one or the verifier will not take
-        // it. Checked at load rather than at the first approval, so that a
-        // corrupted file is a boot log line and not a refused verdict.
-        good = good && loaded.public_key[0] == 0x04;
-    } else {
-        good = false;
-    }
-
-    item = cJSON_GetObjectItemCaseSensitive(root, "userId");
-    if (cJSON_IsString(item) && item->valuestring != nullptr) {
-        good = good && crypto::Base64Decode(item->valuestring, loaded.user_id,
-                                            sizeof(loaded.user_id)) == ctap2::kUserIdSize;
-    }
+    // The answer this file claims. Kept **only** to be checked against a fresh
+    // derivation below: it is not trusted as the key, it is what the key has to
+    // agree with.
+    uint8_t claimed[arkg::kCompressedSize] = {};
+    good = good && ReadBlob(root, "derivedPublicKey", claimed, sizeof claimed);
 
     item = cJSON_GetObjectItemCaseSensitive(root, "aaguid");
     if (cJSON_IsString(item) && item->valuestring != nullptr) {
-        snprintf(loaded.aaguid, sizeof(loaded.aaguid), "%s", item->valuestring);
+        snprintf(loaded.aaguid, sizeof loaded.aaguid, "%s", item->valuestring);
     }
     item = cJSON_GetObjectItemCaseSensitive(root, "vendorId");
     if (cJSON_IsNumber(item)) {
@@ -249,42 +338,98 @@ esp_err_t Load() {
         return ESP_ERR_INVALID_ARG;
     }
 
+    // **And now the derivation, which is most of what loading means here.** It
+    // produces the ARKG key handle — the file does not store it — and the public
+    // key, and that key has to be the one the file says was registered. A mismatch
+    // means the file was edited or the derivation changed underneath it, and either
+    // way every signature this device could make would be rejected by the hook.
+    // Hence a refusal at boot rather than a discovery on the first request.
+    const arkg::Status status = DeriveInto(&loaded);
+    if (status != arkg::Status::kOk) {
+        ESP_LOGE(TAG, "the stored key would not re-derive (%s); this device is not enrolled",
+                 arkg::StatusName(status));
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (std::memcmp(loaded.derived.compressed, claimed, sizeof claimed) != 0) {
+        ESP_LOGE(TAG,
+                 "%s no longer derives the key it registered - a reply signed now would be "
+                 "rejected. Re-enrol, then re-register.",
+                 kPath);
+        return ESP_ERR_INVALID_STATE;
+    }
+
     loaded.present = true;
+    if (!crypto::Base64Encode(loaded.derived.compressed, sizeof loaded.derived.compressed,
+                              runtime.public_key_b64, sizeof runtime.public_key_b64)) {
+        runtime.public_key_b64[0] = 0;
+        return ESP_ERR_INVALID_SIZE;
+    }
     runtime.enrolment = loaded;
+    runtime.derivation_holds = true;
     return ESP_OK;
 }
 
 esp_err_t Save(const Enrolment &enrolment) {
+    // Base64 of the widest thing each field can hold, plus room for padding and a
+    // terminator.
     char credential_b64[ctap2::kMaxCredentialIdSize * 2 + 4];
     char public_b64[ctap2::kP256PointSize * 2 + 4];
     char user_b64[ctap2::kUserIdSize * 2 + 4];
+    char handle_b64[ctap2::kMaxKeyHandleSize * 2 + 4];
+    char blinding_b64[arkg::kPointSize * 2 + 4];
+    char kem_b64[arkg::kPointSize * 2 + 4];
+    char ikm_b64[sizeof enrolment.ikm * 2 + 4];
+    char derived_b64[arkg::kCompressedSize * 2 + 4];
 
     if (!crypto::Base64Encode(enrolment.credential_id, enrolment.credential_id_length,
-                              credential_b64, sizeof(credential_b64)) ||
+                              credential_b64, sizeof credential_b64) ||
         !crypto::Base64Encode(enrolment.public_key, ctap2::kP256PointSize, public_b64,
-                              sizeof(public_b64)) ||
-        !crypto::Base64Encode(enrolment.user_id, ctap2::kUserIdSize, user_b64,
-                              sizeof(user_b64))) {
+                              sizeof public_b64) ||
+        !crypto::Base64Encode(enrolment.user_id, ctap2::kUserIdSize, user_b64, sizeof user_b64) ||
+        !crypto::Base64Encode(enrolment.key_handle, enrolment.key_handle_length, handle_b64,
+                              sizeof handle_b64) ||
+        !crypto::Base64Encode(enrolment.seed.blinding, arkg::kPointSize, blinding_b64,
+                              sizeof blinding_b64) ||
+        !crypto::Base64Encode(enrolment.seed.kem, arkg::kPointSize, kem_b64, sizeof kem_b64) ||
+        !crypto::Base64Encode(enrolment.ikm, sizeof enrolment.ikm, ikm_b64, sizeof ikm_b64) ||
+        !crypto::Base64Encode(enrolment.derived.compressed, arkg::kCompressedSize, derived_b64,
+                              sizeof derived_b64)) {
         return ESP_ERR_INVALID_SIZE;
     }
 
-    // Hand-written rather than through cJSON, because there are five fields and
-    // none of them can contain a character that would need escaping — base64,
-    // hex and two integers. The one thing that has to be right is that the file
+    // Hand-written rather than through cJSON, because none of these fields can hold
+    // a character that would need escaping — base64, hex, a label this firmware
+    // chose, and two integers. The one thing that has to be right is that the file
     // is valid JSON, and a test asserts it round-trips.
-    const int written = snprintf(file_buffer, sizeof(file_buffer),
-                                 "{\n"
-                                 "    \"credentialId\": \"%s\",\n"
-                                 "    \"publicKey\": \"%s\",\n"
-                                 "    \"userId\": \"%s\",\n"
-                                 "    \"aaguid\": \"%s\",\n"
-                                 "    \"vendorId\": %u,\n"
-                                 "    \"productId\": %u\n"
-                                 "}\n",
-                                 credential_b64, public_b64, user_b64, enrolment.aaguid,
-                                 static_cast<unsigned>(enrolment.vendor_id),
-                                 static_cast<unsigned>(enrolment.product_id));
-    if (written <= 0 || static_cast<size_t>(written) >= sizeof(file_buffer)) {
+    //
+    // **`ikm` is in here and it is not a signing secret.** Anyone holding it plus
+    // the seed public key can derive this device's *public* key, which is already on
+    // the bus in every registration. What it cannot do is produce a signature — that
+    // needs the authenticator. What its leak costs is unlinkability: somebody could
+    // tell that two registrations were the same device. §10.6 is where that sits
+    // next to the rest of this device's custody story.
+    const int written =
+        snprintf(file_buffer, sizeof file_buffer,
+                 "{\n"
+                 "    \"v\": %d,\n"
+                 "    \"credentialId\": \"%s\",\n"
+                 "    \"publicKey\": \"%s\",\n"
+                 "    \"userId\": \"%s\",\n"
+                 "    \"keyHandle\": \"%s\",\n"
+                 "    \"seedBlinding\": \"%s\",\n"
+                 "    \"seedKem\": \"%s\",\n"
+                 "    \"ikm\": \"%s\",\n"
+                 "    \"ctx\": \"%s\",\n"
+                 "    \"derivedPublicKey\": \"%s\",\n"
+                 "    \"aaguid\": \"%s\",\n"
+                 "    \"vendorId\": %u,\n"
+                 "    \"productId\": %u\n"
+                 "}\n",
+                 kFormatVersion, credential_b64, public_b64, user_b64, handle_b64, blinding_b64,
+                 kem_b64, ikm_b64, enrolment.ctx, derived_b64, enrolment.aaguid,
+                 static_cast<unsigned>(enrolment.vendor_id),
+                 static_cast<unsigned>(enrolment.product_id));
+    if (written <= 0 || static_cast<size_t>(written) >= sizeof file_buffer) {
         return ESP_ERR_INVALID_SIZE;
     }
     return storage::WriteFileAtomically(kPath, kTempPath, file_buffer,
@@ -311,6 +456,8 @@ const char *GateName(Gate gate) {
             return "cancelled";
         case Gate::kBadSignature:
             return "bad-signature";
+        case Gate::kNoSignature:
+            return "no-signature";
         case Gate::kTransport:
             return "transport";
     }
@@ -335,6 +482,8 @@ const char *GateText(Gate gate) {
             return "the request went away before the key was touched";
         case Gate::kBadSignature:
             return "the key answered, and the answer did not verify";
+        case Gate::kNoSignature:
+            return "the key answered without signing anything - is previewSign supported?";
         case Gate::kTransport:
             return "the key could not be reached";
     }
@@ -361,6 +510,11 @@ esp_err_t Init() {
                  runtime.enrolment.vendor_id, runtime.enrolment.product_id,
                  runtime.enrolment.aaguid,
                  static_cast<unsigned>(runtime.enrolment.credential_id_length));
+        // **The key this device answers as** (§10.2). Printed at boot because it is
+        // what the handler's allowlist has to contain, and an operator comparing the
+        // two by eye is how a stale registration gets found in seconds instead of by
+        // watching approvals silently fail.
+        ESP_LOGI(TAG, "signing key (p256): %s", runtime.public_key_b64);
     } else if (loaded == ESP_ERR_NOT_FOUND) {
         ESP_LOGI(TAG, "no %s; this device has no key enrolled yet", kPath);
     }
@@ -379,9 +533,58 @@ esp_err_t Init() {
 
 bool Ready() { return runtime.ready; }
 
-bool Enrolled() { return runtime.enrolment.present; }
+// **Enrolled means "could sign"**, and that is why the derivation is part of it: a
+// file that loaded but no longer derives the registered key is not an enrolment this
+// device can answer requests with, and §10.10 rule 5 says it must not take them out
+// of the queue group at all.
+bool Enrolled() { return runtime.enrolment.present && runtime.derivation_holds; }
 
 const Enrolment &Current() { return runtime.enrolment; }
+
+const char *PublicKeyBase64() { return Enrolled() ? runtime.public_key_b64 : ""; }
+
+bool DerivationHolds() { return runtime.derivation_holds; }
+
+bool SelfTest(char *detail, size_t detail_size) {
+    // The two steps the host tier cannot reach: the ECDH inside the KEM and the
+    // point addition that blinds the key. Same seed key, same `ikm`, same `ctx` as
+    // `tools/make_arkg_vectors.py` used — and if the answer differs, no security key
+    // would ever have worked here.
+    arkg::SeedKey seed;
+    std::memcpy(seed.blinding, arkg::selftest::kBlindingPoint, sizeof seed.blinding);
+    std::memcpy(seed.kem, arkg::selftest::kKemPoint, sizeof seed.kem);
+
+    arkg::Derived derived;
+    const arkg::Status status = arkg::Derive(
+        arkg::PsaBackend(), seed, arkg::selftest::kIkm, sizeof arkg::selftest::kIkm,
+        reinterpret_cast<const uint8_t *>(arkg::selftest::kCtx),
+        std::strlen(arkg::selftest::kCtx), &derived);
+    if (status != arkg::Status::kOk) {
+        snprintf(detail, detail_size, "the derivation refused: %s", arkg::StatusName(status));
+        return false;
+    }
+
+    if (std::memcmp(derived.compressed, arkg::selftest::kDerivedCompressed,
+                    sizeof derived.compressed) != 0) {
+        char produced[48] = {};
+        crypto::Base64Encode(derived.compressed, sizeof derived.compressed, produced,
+                             sizeof produced);
+        snprintf(detail, detail_size, "wrong key: got %s, wanted %s", produced,
+                 arkg::selftest::kDerivedPublicKeyB64);
+        return false;
+    }
+    // The handle too. A device that derived the right public key with the wrong
+    // handle would fail on the first real approval and nowhere earlier.
+    if (std::memcmp(derived.key_handle, arkg::selftest::kKeyHandle,
+                    sizeof derived.key_handle) != 0) {
+        snprintf(detail, detail_size, "the public key matched and the key handle did not");
+        return false;
+    }
+
+    snprintf(detail, detail_size, "the curve agrees with Python: %s",
+             arkg::selftest::kDerivedPublicKeyB64);
+    return true;
+}
 
 bool Present() { return usb::Present(); }
 
@@ -418,16 +621,27 @@ esp_err_t Enrol(uint32_t timeout_ms, usb::Fault *fault, uint8_t *status) {
     Enrolment fresh;
     esp_fill_random(fresh.user_id, sizeof(fresh.user_id));
 
-    // **A random challenge, and it is not bound to anything.** Enrolment is not
-    // an approval: nothing is being authorised, so there is nothing for the hash
-    // to commit to. What matters is that it is unpredictable, so that a
-    // makeCredential response cannot be replayed from a capture.
+    // **The derivation entropy, and what it is and is not protecting.** `ikm` makes
+    // this device's key unique and unlinkable; it is *not* a signing secret — the
+    // private half is reconstructed inside the authenticator and nothing here can
+    // produce one. So the RNG caveat of §10.7 applies more gently than it does to a
+    // nonce: with the radio down this is a PRNG, and what a predictable value would
+    // cost is unlinkability rather than a forgeable verdict. Enrolment happens from
+    // the console on a device that is normally already on the network, so in
+    // practice the radio is up.
+    esp_fill_random(fresh.ikm, sizeof(fresh.ikm));
+    snprintf(fresh.ctx, sizeof(fresh.ctx), "%s", arkg::kDeviceCtx);
+
+    // **A random challenge, and it is not bound to anything.** Enrolment is not an
+    // approval: nothing is being authorised, so there is nothing for the hash to
+    // commit to. What matters is that it is unpredictable, so a `makeCredential`
+    // response cannot be replayed from a capture.
     uint8_t challenge[ctap2::kClientDataHashSize];
     esp_fill_random(challenge, sizeof(challenge));
 
     size_t request_length = 0;
-    if (!ctap2::BuildMakeCredential(challenge, fresh.user_id, request_buffer,
-                                    sizeof(request_buffer), &request_length)) {
+    if (!ctap2::BuildMakeCredentialArkg(challenge, fresh.user_id, request_buffer,
+                                        sizeof(request_buffer), &request_length)) {
         return ESP_ERR_INVALID_SIZE;
     }
 
@@ -440,6 +654,7 @@ esp_err_t Enrol(uint32_t timeout_ms, usb::Fault *fault, uint8_t *status) {
         return err;
     }
 
+    // --- the credential: what will prove presence -------------------------
     ctap2::Credential credential;
     if (!ctap2::ParseMakeCredential(response_buffer, response_length, &credential, status)) {
         return ESP_ERR_INVALID_RESPONSE;
@@ -455,12 +670,48 @@ esp_err_t Enrol(uint32_t timeout_ms, usb::Fault *fault, uint8_t *status) {
         ESP_LOGE(TAG, "the key returned a public key this device cannot verify against");
         return ESP_ERR_INVALID_RESPONSE;
     }
-
     std::memcpy(fresh.credential_id, credential.id, credential.id_length);
     fresh.credential_id_length = credential.id_length;
     if (credential.aaguid != nullptr) {
         HexEncode(credential.aaguid, 16, fresh.aaguid);
     }
+
+    // --- the generated key: what will make the verdict --------------------
+    //
+    // **A key that answered without generating one is not an enrolment.** It would
+    // leave this device with a credential it can assert with and nothing to sign
+    // with, which is exactly the state that looks like it worked. The most likely
+    // cause is a key without `previewSign`, so the message says that rather than
+    // reporting a parse failure.
+    ctap2::GeneratedKey generated;
+    if (!ctap2::ParseGeneratedKey(response_buffer, response_length, &generated, status)) {
+        ESP_LOGE(TAG,
+                 "this key made a credential and generated no signing key - it probably does "
+                 "not support previewSign (`key info` lists what it does)");
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+    if (generated.key_handle_length > sizeof(fresh.key_handle)) {
+        ESP_LOGE(TAG, "this key's generated key handle is %u bytes; the ceiling here is %u",
+                 static_cast<unsigned>(generated.key_handle_length),
+                 static_cast<unsigned>(sizeof(fresh.key_handle)));
+        return ESP_ERR_INVALID_SIZE;
+    }
+    if (!ctap2::ParseArkgSeedKey(generated.seed_cose_key, generated.seed_cose_key_length,
+                                 fresh.seed.blinding, fresh.seed.kem)) {
+        ESP_LOGE(TAG, "the generated key is not an ARKG-P256 seed key this firmware can read");
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+    std::memcpy(fresh.key_handle, generated.key_handle, generated.key_handle_length);
+    fresh.key_handle_length = generated.key_handle_length;
+
+    // --- and the derivation, here rather than at first use ----------------
+    const arkg::Status derived = DeriveInto(&fresh);
+    if (derived != arkg::Status::kOk) {
+        ESP_LOGE(TAG, "the derivation refused (%s); nothing was changed",
+                 arkg::StatusName(derived));
+        return ESP_FAIL;
+    }
+
     const usb::DeviceInfo device = usb::Device();
     fresh.vendor_id = device.vendor_id;
     fresh.product_id = device.product_id;
@@ -475,16 +726,30 @@ esp_err_t Enrol(uint32_t timeout_ms, usb::Fault *fault, uint8_t *status) {
                  esp_err_to_name(saved));
         return saved;
     }
+
+    char encoded[48] = {};
+    if (!crypto::Base64Encode(fresh.derived.compressed, sizeof(fresh.derived.compressed), encoded,
+                              sizeof(encoded))) {
+        return ESP_ERR_INVALID_SIZE;
+    }
     runtime.enrolment = fresh;
+    runtime.derivation_holds = true;
+    snprintf(runtime.public_key_b64, sizeof(runtime.public_key_b64), "%s", encoded);
     runtime.stats.enrolments++;
-    // Nothing to notify: the responder re-asks `WhyNot` on its own tick twice a
-    // second, so a `key enrol` puts this device on `approvals.*` within half a
-    // second of the touch. Written down because "why does this not tell anybody"
-    // is the obvious question, and the answer is that a poll already exists.
-    ESP_LOGI(TAG, "enrolled on %04x:%04x, credential %u bytes", fresh.vendor_id, fresh.product_id,
-             static_cast<unsigned>(fresh.credential_id_length));
+
+    ESP_LOGI(TAG, "enrolled on %04x:%04x, credential %u bytes, key handle %u bytes",
+             fresh.vendor_id, fresh.product_id,
+             static_cast<unsigned>(fresh.credential_id_length),
+             static_cast<unsigned>(fresh.key_handle_length));
+    // **The two lines an operator has to act on.** The key is new, so the allowlist
+    // entry naming the old one is worthless: this device cannot be verified until it
+    // registers again with a fresh token (§6, §10.18.1). Said loudly here because the
+    // alternative is a device that looks enrolled and is refused on every approval.
+    ESP_LOGI(TAG, "signing key (p256): %s", runtime.public_key_b64);
+    ESP_LOGW(TAG, "this is a NEW key - the registration is stale, run `register <token>` again");
     return ESP_OK;
 }
+
 
 esp_err_t Forget() {
     const esp_err_t err = storage::Remove(kPath);
@@ -492,13 +757,20 @@ esp_err_t Forget() {
         return err;
     }
     runtime.enrolment = Enrolment{};
+    runtime.derivation_holds = false;
+    runtime.public_key_b64[0] = 0;
     ESP_LOGW(TAG, "%s deleted; the credential is still on the key and cannot be removed from here",
              kPath);
+    // **And the registration is now naming a key nothing holds.** Forgetting the
+    // enrolment costs the ability to sign, so the allowlist entry is dead weight
+    // until this device enrols again and registers with a fresh token (§10.18.1).
+    ESP_LOGW(TAG, "this device can no longer sign anything - `key enrol`, then `register <token>`");
     return ESP_OK;
 }
 
-Gate RequireTouch(const uint8_t *challenge, uint32_t timeout_ms, usb::KeepAlive keep_alive,
-                  void *keep_alive_context, usb::Fault *fault, uint8_t *status) {
+Gate Sign(const uint8_t *digest, uint32_t timeout_ms, usb::KeepAlive keep_alive,
+          void *keep_alive_context, uint8_t *signature, size_t signature_capacity,
+          size_t *signature_length, usb::Fault *fault, uint8_t *status) {
     usb::Fault local_fault = usb::Fault::kNone;
     uint8_t local_status = 0;
     if (fault == nullptr) {
@@ -509,24 +781,47 @@ Gate RequireTouch(const uint8_t *challenge, uint32_t timeout_ms, usb::KeepAlive 
     }
     *fault = usb::Fault::kNone;
     *status = 0;
+    if (signature_length != nullptr) {
+        *signature_length = 0;
+    }
 
     runtime.stats.asked++;
 
-    if (challenge == nullptr) {
+    if (digest == nullptr || signature == nullptr || signature_length == nullptr ||
+        signature_capacity < ctap2::kMaxSignatureSize) {
         return Gate::kBadSignature;
     }
     if (!usb::Present()) {
         *fault = usb::Fault::kNoDevice;
         return Gate::kNoKey;
     }
-    if (!runtime.enrolment.present) {
+    if (!Enrolled()) {
         return Gate::kNotEnrolled;
     }
 
+    // COSE_Sign_Args, rebuilt per approval from the key handle the derivation
+    // produced and the label it was scoped to. Cheap, and one fewer blob in
+    // `fido.json` that could disagree with the rest of it.
+    uint8_t args[ctap2::kMaxSignArgsSize];
+    size_t args_length = 0;
+    if (!ctap2::BuildSignArgs(runtime.enrolment.derived.key_handle,
+                              sizeof(runtime.enrolment.derived.key_handle), runtime.enrolment.ctx,
+                              std::strlen(runtime.enrolment.ctx), args, sizeof(args),
+                              &args_length)) {
+        return Gate::kBadSignature;
+    }
+
+    // **The same digest twice, and that is the design.** As `clientDataHash` it
+    // makes the key's own signature commit to this request; as the extension's
+    // `tbs` it is what the verdict's signature is over. One touch, two signatures,
+    // one request — and neither can be lifted onto another one.
     size_t request_length = 0;
-    if (!ctap2::BuildGetAssertion(challenge, runtime.enrolment.credential_id,
-                                  runtime.enrolment.credential_id_length, request_buffer,
-                                  sizeof(request_buffer), &request_length)) {
+    if (!ctap2::BuildGetAssertionSign(digest, runtime.enrolment.credential_id,
+                                      runtime.enrolment.credential_id_length,
+                                      runtime.enrolment.key_handle,
+                                      runtime.enrolment.key_handle_length, digest, args,
+                                      args_length, request_buffer, sizeof(request_buffer),
+                                      &request_length)) {
         return Gate::kBadSignature;
     }
 
@@ -569,13 +864,13 @@ Gate RequireTouch(const uint8_t *challenge, uint32_t timeout_ms, usb::KeepAlive 
         return Gate::kBadSignature;
     }
 
-    // --- Four checks, and all four have to pass -----------------------------
+    // --- Five checks, and all five have to pass ----------------------------
     //
-    // Failing any of them lands on `kBadSignature`, which is deliberately the
-    // loudest outcome this function has. A key that answers with something that
-    // does not check out is either the wrong key, a bug in this firmware, or
-    // something between the two pretending to be a key — and none of those is a
-    // reason to sign anything.
+    // Failing any of them lands on `kBadSignature` — deliberately the loudest
+    // outcome this function has. A key that answers with something that does not
+    // check out is either the wrong key, a bug in this firmware, or something
+    // between the two pretending to be a key, and none of those is a reason to
+    // publish anything.
 
     ctap2::AuthData auth;
     if (!ctap2::ParseAuthData(assertion.auth_data, assertion.auth_data_length, &auth)) {
@@ -583,27 +878,29 @@ Gate RequireTouch(const uint8_t *challenge, uint32_t timeout_ms, usb::KeepAlive 
         return Gate::kBadSignature;
     }
 
-    // 1. The assertion is for *this* relying party. A key will not normally
-    //    answer for another one, but the hash is in the signed bytes and
-    //    checking it costs a memcmp.
+    // 1. The assertion is for *this* relying party. A key will not normally answer
+    //    for another one, but the hash is in the signed bytes and checking it costs
+    //    a memcmp.
     if (std::memcmp(auth.rp_id_hash, runtime.rp_id_hash, ctap2::kRpIdHashSize) != 0) {
         ESP_LOGE(TAG, "the assertion is for another relying party");
         runtime.stats.bad_signature++;
         return Gate::kBadSignature;
     }
 
-    // 2. **Somebody touched it.** This is the bit the whole design rests on: a
-    //    key that answered without user presence answered by itself, and an
-    //    approval nobody made is the one outcome §10.10 exists to prevent.
+    // 2. **Somebody touched it.** This is the bit the whole design rests on: a key
+    //    that answered without user presence answered by itself, and an approval
+    //    nobody made is the one outcome §10.10 exists to prevent. It survives the
+    //    extension — the signature the extension carries is worth nothing without
+    //    this flag inside the bytes the key signed.
     if ((auth.flags & ctap2::kFlagUserPresent) == 0) {
         ESP_LOGE(TAG, "the key answered without user presence");
         runtime.stats.bad_signature++;
         return Gate::kBadSignature;
     }
 
-    // 3. It is the credential this device enrolled — when the key bothered to
-    //    say which. With a one-entry allow list many keys omit the field, so an
-    //    absent descriptor is not a failure; a *different* one is.
+    // 3. It is the credential this device enrolled — when the key bothered to say
+    //    which. With a one-entry allow list many keys omit the field, so an absent
+    //    descriptor is not a failure; a *different* one is.
     if (assertion.credential_id != nullptr &&
         (assertion.credential_id_length != runtime.enrolment.credential_id_length ||
          std::memcmp(assertion.credential_id, runtime.enrolment.credential_id,
@@ -612,18 +909,45 @@ Gate RequireTouch(const uint8_t *challenge, uint32_t timeout_ms, usb::KeepAlive 
         return Gate::kWrongKey;
     }
 
-    // 4. And the signature over `authData || challenge`, against the public key
-    //    stored at enrolment. Everything above this line is shape; this is the
-    //    line that makes it evidence.
-    if (!VerifyAssertion(assertion.auth_data, assertion.auth_data_length, challenge,
+    // 4. The assertion's own signature, over `authData || digest`, against the
+    //    credential's public key. Everything above this line is shape; this line is
+    //    what makes the presence flag evidence rather than a claim.
+    if (!VerifyAssertion(assertion.auth_data, assertion.auth_data_length, digest,
                          assertion.signature, assertion.signature_length)) {
         ESP_LOGE(TAG, "the assertion did not verify against the enrolled public key");
         runtime.stats.bad_signature++;
         return Gate::kBadSignature;
     }
 
+    // 5. And the verdict's signature, which is the reason for all of the above.
+    //
+    //    Two ways this fails and they are different facts about the key: it can be
+    //    **absent**, which means the key ignored the extension (almost always a key
+    //    without `previewSign`, and `kNoSignature` says so), or it can be **there
+    //    and wrong**, which means the derived key this device registered is not the
+    //    one the authenticator reconstructed. The second is `kBadSignature`, and
+    //    catching it here rather than letting the hook catch it is the difference
+    //    between one loud log line and an approval that silently never lands.
+    const uint8_t *verdict = nullptr;
+    size_t verdict_length = 0;
+    if (!ctap2::ParseSignSignature(assertion.auth_data, assertion.auth_data_length, &verdict,
+                                   &verdict_length)) {
+        ESP_LOGE(TAG, "the key did not sign the verdict - previewSign missing from its answer");
+        return Gate::kNoSignature;
+    }
+    if (!VerifyP256(runtime.enrolment.derived.point, digest, verdict, verdict_length)) {
+        ESP_LOGE(TAG,
+                 "the key signed with a private key that does not match the registered public "
+                 "one - the hook would reject this reply, so it is not sent");
+        runtime.stats.bad_signature++;
+        return Gate::kBadSignature;
+    }
+
+    std::memcpy(signature, verdict, verdict_length);
+    *signature_length = verdict_length;
     runtime.stats.approved++;
     return Gate::kApproved;
 }
+
 
 }  // namespace fido

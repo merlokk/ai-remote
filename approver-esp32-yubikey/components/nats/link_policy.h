@@ -4,9 +4,9 @@
 // (CLAUDE.md §10.5, §10.9).
 //
 // The socket itself is next door in `nats_bus.h` and has no decisions in it;
-// this is the half that does, and it is the fifth file in this firmware whose
-// subject includes `<cstdint>` and nothing else (`ui/navigator.h`,
-// `wifi_policy.h`, `reachability.h`, `sync_policy.h`). That is what puts every
+// this is the half that does, and it is one of the files in this firmware whose
+// subject includes `<cstdint>` and nothing else (`wifi_policy.h`,
+// `reachability.h`, `request_card.h`). That is what puts every
 // rule below under Unity with no board and no fake (§10.11) — and the reason
 // to draw the line here rather than anywhere else is that the half which
 // cannot be tested that way is the half with nothing to decide.

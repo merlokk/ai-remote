@@ -9,9 +9,8 @@
 //
 // **It includes `<cstdint>` and `<cstddef>` and nothing else**, which puts the
 // whole of §7's most load-bearing arithmetic under Unity with no board and no
-// fake — the ninth subject in this firmware to manage that, after the navigator,
-// the clock face, the request card, the Wi-Fi policy, the internet check, the
-// sync schedule, the bus endpoint and the bus link.
+// fake, along with the request card, the state ranking, the Wi-Fi policy, the
+// internet check, the bus endpoint and the bus link.
 //
 // The layout, `\n`-joined and nothing else, is §7's:
 //

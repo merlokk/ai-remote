@@ -3,8 +3,8 @@
 ## 10.4 What this links against
 
 Root [`../CLAUDE.md`](../CLAUDE.md) §1 requires sign-off for any dependency
-outside its list. **This board's list is the sibling board's minus four and plus
-one**, and the one addition is the only entry here that needed a new argument.
+outside its list. **Four components, and one of them is the only entry here that
+needed a new argument.**
 
 Declared in `main/idf_component.yml`, locked in `dependencies.lock` (committed) —
 the same rule `uv.lock` and `Cargo.lock` follow for the other halves of this
@@ -14,19 +14,13 @@ repository.
 |-----------|---------|-----|
 | `espressif/cjson` | `^1.7.18` | `config.json`, `fido.json`, and §7's wire format |
 | `debsahu/espidf-nats` | `^1.4.0` | the bus (§10.3, §10.5) |
-| `espressif/libsodium` | `^1.0.22` | Ed25519 — mbedTLS has none, and §6's server key is Ed25519 by fixed protocol |
+| `espressif/libsodium` | `^1.0.22` | Ed25519 — for **verifying §6's reply** only; mbedTLS has no EdDSA and the server key is Ed25519 by fixed protocol. Since §10.18 nothing on this device *signs* with it |
 | **`espressif/usb`** | **`^1.5.0`** | **the USB Host Library — new, and argued below** |
 
-**Gone with the panel**: `lvgl/lvgl`, `espressif/esp_lvgl_port`,
-`espressif/esp_lcd_sh8601` and `waveshare/esp_lcd_touch_cst9217` — four
-components and one transitive one (`espressif/esp_lcd_touch`). That is most of
-why this firmware is 1.29 MB where the sibling's is closer to 2.
-
-**And no graphics library is coming back.** There is nothing on this board that
-LVGL could draw on (§10.1) and nothing this firmware has to say that one WS2812
-cannot (§10.17), so LVGL is not a dependency that was postponed — it is one this
-design has no place for. The line above is the record of its removal, not a note
-about a gap.
+**There is no graphics library on this list and none is coming.** There is nothing
+on this board a graphics library could draw on (§10.1) and nothing this firmware
+has to say that one WS2812 cannot (§10.17), so its absence is a design decision
+rather than a gap — which is most of why this firmware is 1.3 MB.
 
 ### The one new dependency
 
@@ -43,11 +37,36 @@ about a gap.
   exists and would be the obvious second entry. It is the wrong tool: a FIDO key
   is not a boot-protocol keyboard, CTAPHID is its own framing on top of two raw
   interrupt endpoints, and that framing is ~200 lines this firmware owns and
-  host-tests (§10.18.3). Taking the class driver would add a dependency in order
+  host-tests (§10.18.4). Taking the class driver would add a dependency in order
   to *not* use most of it. **One new component instead of two.**
 
-It costs **35,342 bytes** of the image (`idf.py size-components`), of which 890
+It costs **35,354 bytes** of the image (`idf.py size-components`), of which 890
 are IRAM.
+
+### The dependency §10.18 did *not* add
+
+The ARKG derivation (§10.18.2) needs an elliptic curve, and there is an obvious
+way to get one wrong: add `micro-ecc`, or vendor a P-256 implementation, and put a
+fresh crypto library on root §1's list.
+
+**Neither happened.** `components/arkg` uses **PSA Crypto**, which is already in
+this image for `esp-tls`, for the hash, the ECDH and the scalar multiplication; the
+one operation PSA has no entry point for — adding two public points — is
+`mbedtls_ecp_muladd`, reached through `mbedtls/ecp.h`, which on v6 is *ESP-IDF's
+own shim* over the private header (§10.18.2 argues why that is a supported path and
+not a reach around one).
+
+So the dependency list does not move, and the derivation costs **3,921 bytes**:
+
+```
+libarkg.a    3,921    of which 3,420 .text, 501 .rodata, 0 .bss
+```
+
+Zero `.bss`, because everything it needs is on the caller's stack for the
+milliseconds a derivation takes. `CONFIG_MBEDTLS_ECP_C` and
+`CONFIG_MBEDTLS_ECP_DP_SECP256R1_ENABLED` were already on in the inherited
+defaults — TLS needs them — so the curve arithmetic is bytes that were in the image
+before this component existed.
 
 ### The transitive one nobody signed off in advance
 
@@ -81,7 +100,7 @@ read off the chip rather than off a product page (§10.1): 16 MB of quad flash,
 8 MB of **octal** PSRAM. The two lines most worth knowing:
 
 ```
-CONFIG_ESP_CONSOLE_UART_DEFAULT=y     # NOT USB Serial/JTAG - §10.1, §10.18.3
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y     # NOT USB Serial/JTAG - §10.1, §10.18.4
 CONFIG_USB_HOST_HUBS_SUPPORTED=n      # a key plugs straight in
 ```
 
@@ -115,8 +134,8 @@ be 64 KB aligned and an off-by-one there is a silent reflash away from confusing
 Measured on this build, `idf.py size` and `idf.py size-components`:
 
 ```
-Total image size: 1,287,259 bytes
-Smallest app partition: 2,621,440 bytes — 51% free
+Total image size: 1,298,215 bytes
+Smallest app partition: 2,621,440 bytes — 50% free
 Bootloader: 21,056 bytes — 36% free
 ```
 
@@ -124,50 +143,49 @@ The largest archives, and none of them is a surprise:
 
 | Archive | Bytes | What |
 |---------|-------|------|
-| `libnet80211.a` | 150,637 | the Wi-Fi MAC |
-| `libespressif__libsodium.a` | 135,991 | Ed25519 |
-| `libesp_stdio.a` | 106,629 | mostly `.rodata` — `printf` and its tables |
-| `libtfpsacrypto.a` | 111,125 | mbedTLS/PSA, linked for `esp-tls` and used by §10.18 |
-| `liblwip.a` | 108,309 | TCP/IP |
+| `libnet80211.a` | 150,629 | the Wi-Fi MAC |
+| `libespressif__libsodium.a` | 135,955 | Ed25519, and now only to *verify* (§10.6) |
+| `libtfpsacrypto.a` | 111,117 | mbedTLS/PSA, linked for `esp-tls` and used by §10.18 |
+| `libesp_stdio.a` | 108,533 | mostly `.rodata` — `printf` and its tables |
+| `liblwip.a` | 108,305 | TCP/IP |
 
 And this project's own, which is the interesting half:
 
 | Archive | Bytes | of which `.bss` |
 |---------|-------|-----------------|
-| `libresponder.a` | 50,772 | **36,142** — four 2.3 KB requests, two pending decisions, two task stacks |
-| `libespressif__usb.a` | 35,342 | 17 |
-| `libnats.a` | 32,780 | 10,496 |
-| `libfido.a` | 27,834 | **12,420** — the 2 KB CTAPHID buffer, a 512-byte request buffer, the enrolment |
-| `libcli.a` | 20,171 | 5,248 |
-| `libconfig.a` | 8,883 | 5,068 |
-| `libprotocol.a` | 6,624 | 0 |
-| `libled.a` | 5,345 | 2,800 — one task stack |
-| `libindicator.a` | 4,901 | 3,192 — one task stack |
+| `libresponder.a` | 50,850 | **36,142** — four 2.3 KB requests, two pending decisions, two task stacks |
+| `libespressif__usb.a` | 35,354 | 17 |
+| `libfido.a` | 34,732 | **14,804** — the 2 KB CTAPHID buffer, a 1,152-byte request buffer sized from §10.18's ceilings, the enrolment |
+| `libnats.a` | 33,032 | 10,496 |
+| `libcli.a` | 20,339 | 5,248 |
+| `libwifimgr.a` | 8,968 | 4,499 — one task stack |
+| `libconfig.a` | 8,814 | 5,066 |
+| `libprotocol.a` | 6,633 | 0 |
+| `libwifi.a` | 5,456 | 1,472 |
+| `libled.a` | 5,333 | 2,660 — one task stack |
+| `libindicator.a` | 4,873 | 3,192 — one task stack |
+| `libarkg.a` | 3,921 | 0 — §10.18's derivation, and it allocates nothing at all |
+| `libcrypto.a` | 2,310 | 144 |
 | `libui.a` | 1,486 | 0 |
-| `libbuttons.a` | 869 | 0 |
+| `libbuttons.a` | 775 | 0 |
 | `libboards.a` | 512 | 102 |
 
 **The `.bss` column is where §10.14.1 shows up as a number.** Nothing here
 allocates, so every buffer is in that column and every one of them is a decision
 that was made once: `libresponder.a`'s 36 KB is four queued requests at 2.3 KB
-each plus two decisions waiting to be signed, and `libfido.a`'s 12 KB is the
-CTAPHID reassembly buffer capped at 2 KB rather than the protocol's 7,609.
+each plus two decisions waiting to be signed, and `libfido.a`'s 14.8 KB is the
+CTAPHID reassembly buffer capped at 2 KB rather than the protocol's 7,609, a
+request buffer sized from the *ceilings* rather than from what a YubiKey happens to
+send (`fido.cpp` shows the arithmetic — a tight one there would fail at the moment
+of an approval and name nothing), and an enrolment that now carries a seed key and
+a key handle (§10.18.1).
+
+**What §10.18's change to the signer cost, in total: about 10 KB** — 3,921 for the
+derivation, the rest in `fido` and `ctap2` for `previewSign` and the wider
+enrolment. Nothing was added to the dependency list to get it.
 
 `libboards.a` at 512 bytes is the whole of this board's hardware layer, which is
 the clearest single number for what §10.13's list of absences bought.
-
-**Four archives are missing from that table because there are no such archives.**
-`libwatcher.a` went with §9.7's and §9.10's parsers, the two view classes over them
-and the `limits` command that printed them — a device with no display was carrying
-two subscriptions and a readout for a screen that does not exist. `libtimesync.a`
-and `libtimezone.a` went with the clock: no RTC, no SNTP, no `date`, no zone table
-(§10.13). And that board's `libi2cbus.a` and its four chip drivers were never here.
-
-Between them that is **22 KB off the image** — 1,309,451 bytes to 1,287,259 —
-and the interesting part is where: `libprotocol.a` 8,699 → 6,624, `libcli.a`
-23,151 → 20,171, `libconfig.a` 9,382 → 8,883, `libui.a` 1,672 → 1,486, and about
-5 KB of `libesp_stdio.a` that nothing asks the linker for now that no command
-formats a date.
 
 ### Flashing
 
@@ -179,9 +197,10 @@ because it costs a registration:
 the key enrolment all go with it — and the registration cannot be recovered
 without a **new** one-time token minted on the host, because the old one is spent.
 
-The identity is *not* lost: the Ed25519 seed lives in NVS, which a `flash` does
-not touch, so the device comes back with the same `key_id` and the same public key
-— unregistered rather than unknown.
+**And since §10.18 the enrolment is the identity**, so losing `fido.json` is
+losing the signing key: the device comes back with the same `key_id` and *no* key,
+and needs `key enrol` before `register` will even run. The Ed25519 seed in NVS
+survives a `flash` and is not what signs anything (§10.6).
 
 `idf.py app-flash` has none of these consequences and is what the edit-build-run
 loop should use.

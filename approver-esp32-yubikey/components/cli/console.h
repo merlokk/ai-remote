@@ -2,7 +2,7 @@
 
 // The device console (CLAUDE.md §10.7), on **UART0 — the CH343P bridge**, which
 // is the board's first USB-C socket. The second one is the chip's own USB and is
-// a *host* for a security key (§10.18.3), so unlike the sibling board these two
+// a *host* for a security key (§10.18.4), so unlike the sibling board these two
 // jobs do not have to share a port.
 //
 // It is still the same port the monitor uses, which is why the two cannot both

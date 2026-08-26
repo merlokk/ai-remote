@@ -28,7 +28,7 @@
 // ## The three facts that shape everything above this file
 //
 //   * **there are two USB-C connectors and they are not interchangeable**
-//     (§10.18.3). One is a CH343P USB-to-UART bridge — that is the programming
+//     (§10.18.4). One is a CH343P USB-to-UART bridge — that is the programming
 //     port, the console port, and the one `idf.py -p COM6 monitor` talks to. The
 //     other is the S3's *native* USB on GPIO19/20, and this firmware runs it as a
 //     **host** so a security key can be plugged into it. On the C6 board of the
@@ -111,7 +111,7 @@ inline constexpr gpio_num_t kRx = GPIO_NUM_44;
 inline constexpr uart_port_t kUart = UART_NUM_0;
 }  // namespace console
 
-// --- The native USB, running as a host (§10.18.3) ------------------------
+// --- The native USB, running as a host (§10.18.4) ------------------------
 //
 // D- and D+ of the S3's own USB peripheral. **Recorded and never configured**:
 // the USB Host Library takes the pins from the peripheral itself, and a GPIO

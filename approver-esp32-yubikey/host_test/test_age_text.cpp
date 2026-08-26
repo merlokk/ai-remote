@@ -1,15 +1,11 @@
-// `ui::AgeText` (CLAUDE.md §10.11) — the one thing that outlived the screens.
+// `ui::AgeText` (CLAUDE.md §10.11) — the duration formatter the console prints
+// every age with.
 //
-// This suite is what is left of `test_limits.cpp`, which tested §9.7's parser and
-// the limits screen above it. Both are gone: this device has no display and does
-// not watch what a Claude Code session is spending or doing. What survived is the
-// duration formatter, because `cli/console.cpp` prints ages in three places —
-// when the clock last synced, how long the bus has been up, how long a request
-// has left — and it calls this rather than keeping its own copy.
-//
-// So the value of the suite is the same as before: the bands are pinned, so a
-// paste of one readout and a paste of the next cannot describe the same instant
-// two different ways.
+// `cli/console.cpp` reaches for it in several places — how long the bus has been
+// up, how long since the last state change, how long a request has left — rather
+// than each readout formatting its own. So what this suite is worth is the bands
+// being pinned: a paste of one readout and a paste of the next cannot describe the
+// same instant two different ways.
 
 #include <cstring>
 

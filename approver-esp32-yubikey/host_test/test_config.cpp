@@ -30,7 +30,7 @@ constexpr const char *kGoodJson = R"({
   "wifi": { "active": true, "networks": [ { "ssid": "desk", "password": "hunter2" } ] },
   "nats": { "url": "nats://10.0.0.9:4222" },
   "led": { "brightness": 55, "idleBrightness": 12 },
-  "approval": { "requireKey": false, "touchTimeoutSeconds": 45, "denyButton": false }
+  "approval": { "touchTimeoutSeconds": 45, "denyButton": false }
 })";
 
 void Fresh() {
@@ -234,43 +234,47 @@ void test_config_reads_every_field(void) {
     TEST_ASSERT_EQUAL_STRING("nats://10.0.0.9:4222", c.nats.url);
     TEST_ASSERT_EQUAL_UINT8(55, c.led.percent);
     TEST_ASSERT_EQUAL_UINT8(12, c.led.idle_percent);
-    // **The gate, read off a file that switches it off.** The one setting on
-    // this device that makes it less careful (§10.18) has to be parsed exactly
-    // as written, and a test that only ever saw the default would not notice a
-    // parser that ignored the field.
-    TEST_ASSERT_FALSE(c.approval.require_key);
+    // The gate, read off a file that moves both of its fields away from the
+    // defaults — a test that only ever saw the defaults would not notice a parser
+    // that ignored the section.
     TEST_ASSERT_EQUAL_UINT16(45, c.approval.touch_timeout_seconds);
     TEST_ASSERT_FALSE(c.approval.deny_button);
 }
 
-void test_config_requirekey_defaults_to_true_when_the_section_is_absent(void) {
-    // **The direction this must fail in** (§10.18): a file that says nothing
-    // about the gate leaves it shut. The opposite default would be a firmware
-    // that approves for anybody who can reach the button, on any config that
-    // predates the field.
+void test_config_a_file_that_still_says_requirekey_is_read_without_it(void) {
+    // **The setting is gone** (§10.18): the private key lives inside the security
+    // key, so there is no mode in which a button alone approves and no field to ask
+    // for one. A config left over from before must therefore load *and* leave
+    // nothing behind — the risk is not a parse failure, it is a device that reads a
+    // stale `"requireKey": false` as permission.
     FreshWithDefaults();
-    fake::PutFile("config.json", R"({"nats":{"url":"nats://10.0.0.1:4222"}})");
+    fake::PutFile("config.json",
+                  R"({"approval":{"requireKey":false,"touchTimeoutSeconds":12}})");
 
     TEST_ASSERT_EQUAL_INT(ESP_OK, config::Init());
-    TEST_ASSERT_TRUE(config::Get().approval.require_key);
+    TEST_ASSERT_EQUAL_UINT16(12, config::Get().approval.touch_timeout_seconds);
+    // And it is not written back out, so the next save drops it for good.
+    TEST_ASSERT_EQUAL_INT(ESP_OK, config::Save());
+    char written[2048] = {};
+    TEST_ASSERT_TRUE(fake::GetFile("config.json", written, sizeof written));
+    TEST_ASSERT_NULL(std::strstr(written, "requireKey"));
 }
 
-void test_config_requirekey_is_only_moved_by_a_real_boolean(void) {
-    // A file that says `"requireKey": "false"` is a file with a mistake in it.
+void test_config_the_gate_is_only_moved_by_a_real_boolean(void) {
+    // A file that says `"denyButton": "false"` is a file with a mistake in it.
     // Reading that string as `true`-because-non-empty, or as `false` because
-    // somebody meant it, are both worse than leaving the default alone — and
-    // one of them is worse in the direction §10.10 exists to prevent.
+    // somebody meant it, are both worse than leaving the default alone.
     const char *const junk[] = {
-        R"({"approval":{"requireKey":"false"}})",
-        R"({"approval":{"requireKey":0}})",
-        R"({"approval":{"requireKey":null}})",
-        R"({"approval":{"requireKey":[]}})",
+        R"({"approval":{"denyButton":"false"}})",
+        R"({"approval":{"denyButton":0}})",
+        R"({"approval":{"denyButton":null}})",
+        R"({"approval":{"denyButton":[]}})",
     };
     for (const char *json : junk) {
         FreshWithDefaults();
         fake::PutFile("config.json", json);
         TEST_ASSERT_EQUAL_INT_MESSAGE(ESP_OK, config::Init(), json);
-        TEST_ASSERT_TRUE_MESSAGE(config::Get().approval.require_key, json);
+        TEST_ASSERT_TRUE_MESSAGE(config::Get().approval.deny_button, json);
     }
 }
 
@@ -278,7 +282,6 @@ void test_config_the_gate_round_trips(void) {
     FreshWithDefaults();
     TEST_ASSERT_EQUAL_INT(ESP_OK, config::Init());
 
-    config::Get().approval.require_key = false;
     config::Get().approval.deny_button = false;
     config::Get().approval.touch_timeout_seconds = 7;
     config::Get().led.percent = 33;
@@ -286,7 +289,6 @@ void test_config_the_gate_round_trips(void) {
     TEST_ASSERT_EQUAL_INT(ESP_OK, config::Save());
     TEST_ASSERT_EQUAL_INT(ESP_OK, config::Reload());
 
-    TEST_ASSERT_FALSE(config::Get().approval.require_key);
     TEST_ASSERT_FALSE(config::Get().approval.deny_button);
     TEST_ASSERT_EQUAL_UINT16(7, config::Get().approval.touch_timeout_seconds);
     TEST_ASSERT_EQUAL_UINT8(33, config::Get().led.percent);
@@ -308,7 +310,7 @@ void test_config_every_field_missing_falls_back_field_by_field(void) {
 
     TEST_ASSERT_EQUAL_STRING(expected.nats.url, c.nats.url);
     TEST_ASSERT_EQUAL_UINT8(expected.led.percent, c.led.percent);
-    TEST_ASSERT_TRUE(c.approval.require_key);
+    TEST_ASSERT_TRUE(c.approval.deny_button);
     TEST_ASSERT_EQUAL_UINT8(0, c.wifi.network_count);
 }
 
@@ -832,9 +834,10 @@ void test_config_survives_defaults_that_are_missing_too(void) {
     config::Data expected = {};
     config::FillDefaults(&expected);
     TEST_ASSERT_EQUAL_UINT8(expected.led.percent, config::Get().led.percent);
-    // And the gate is still shut, which is the half of "sane rather than
-    // zeros" that matters (§10.18).
-    TEST_ASSERT_TRUE(config::Get().approval.require_key);
+    // And the gate is still whole, which is the half of "sane rather than zeros"
+    // that matters (§10.18): a touch timeout of zero would mean no ceiling at all.
+    TEST_ASSERT_EQUAL_UINT16(expected.approval.touch_timeout_seconds,
+                             config::Get().approval.touch_timeout_seconds);
 }
 
 // --- Writing, and the window SPIFFS forces open --------------------------
@@ -924,7 +927,7 @@ void test_config_a_restore_is_written_through_the_same_atomic_path(void) {
     TEST_ASSERT_FALSE(fake::FileExists("config.json.new"));
 }
 
-// --- `KEY` at boot (§10.15) ------------------------------------------------
+// --- `BOOT` at boot (§10.15) -----------------------------------------------
 //
 // The button is not here — whether it was held is the caller's answer, because
 // this layer knows about a file and has never heard of a GPIO (§10.14.2). What
@@ -1042,8 +1045,8 @@ void RegisterConfigTests(void) {
     RUN_TEST(test_config_both_shipped_files_agree_on_whether_the_ap_is_protected);
 
     RUN_TEST(test_config_reads_every_field);
-    RUN_TEST(test_config_requirekey_defaults_to_true_when_the_section_is_absent);
-    RUN_TEST(test_config_requirekey_is_only_moved_by_a_real_boolean);
+    RUN_TEST(test_config_a_file_that_still_says_requirekey_is_read_without_it);
+    RUN_TEST(test_config_the_gate_is_only_moved_by_a_real_boolean);
     RUN_TEST(test_config_the_gate_round_trips);
     RUN_TEST(test_config_every_field_missing_falls_back_field_by_field);
     RUN_TEST(test_config_a_partial_file_keeps_the_defaults_for_the_rest);

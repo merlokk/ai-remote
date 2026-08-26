@@ -4,27 +4,18 @@
 // over USB, and it is worth knowing before wondering why this is not on USB
 // Serial/JTAG the way the sibling board's is.
 //
-// **This file is `../approver-esp32/components/cli/console.cpp` with the
-// hardware this board does not have cut out of it, and two commands added.**
-// Gone: `imu`, `power`, `poweroff`, `display`, `audio`, `play`, `touch`,
-// `screen`, `clock`, `screenshot` and `web` — eleven commands and about 1,400
-// lines, every one of them about a chip or a panel that is not here. Gone with
-// them, and for the same reason:
+// **Sixteen commands, and there is a command per piece of hardware this board
+// actually has.** `led` (§10.17) and `key` with its verbs (§10.18) are this
+// device's own; `status`, `config`, `wifi`, `nats`, `keys`, `register`, `forget`,
+// `ls`, `cat`, `term` and `reboot` are the same commands the sibling board
+// answers, deliberately unchanged so that an operator who knows one of these two
+// devices knows the other.
 //
-//   * `limits`, a readout of §9.7's and §9.10's documents. There is no display
-//     and this device watches neither subject, so there is nothing to read out;
-//   * `date` and `config zones`, and the `tz` / `sntp` / `sync` settings under
-//     them. **There is no clock on this board** (§10.13) — no RTC, and after this
-//     no SNTP either. A time that is only right once a server has been asked, on
-//     a device with nowhere to show it and nothing that reads it, is machinery
-//     with no consumer: §7's `ts` is echoed from the request and never
-//     re-derived (`signing.h`), and every duration this console prints is a
-//     monotonic one off `esp_timer`.
-//
-// Added: `led` (§10.17) and `key` with its two verbs (§10.18). Everything in
-// between — `status`, `config`, `wifi`, `nats`, `keys`, `register`, `forget`,
-// `ls`, `cat`, `term`, `reboot` — is unchanged on purpose, so that an operator
-// who knows one of these two devices knows the other.
+// **There is no command here for a display, a speaker, a power rail or a clock**,
+// because none of those is on this board (§10.13). The clock is the one worth a
+// sentence: §7's `ts` is echoed from the request and never re-derived
+// (`signing.h`), and every duration this console prints is a monotonic one off
+// `esp_timer`.
 //
 // `commands.md` in this folder is the list of what you can type. Design
 // documents describe why; that one describes what.
@@ -367,14 +358,14 @@ int CmdButtons(int argc, char **argv) {
 
 // A number field, its bounds, and where it lives. Strings are handled below;
 // the Wi-Fi networks are not settable from here — they are a list of pairs and
-// belong to the screen of §10.8.6, not to a one-line console setter.
+// belong to `wifi join`, not to a one-line console setter.
 //
 // **One copy of the list**, because §10.7's four-places rule bites hardest here:
 // the setter's own "unknown field" line and the usage block below both have to
-// name the same fields, and two hand-kept enumerations of the same nine words is
+// name the same fields, and two hand-kept enumerations of the same six words is
 // the drift that rule exists to prevent.
 constexpr const char *kSettableFields =
-    "led, ledidle, requirekey, denybutton, touchtimeout, nats, wifi";
+    "led, ledidle, denybutton, touchtimeout, nats, wifi";
 
 int SetConfigField(const char *key, const char *value) {
     config::Data &c = config::Get();
@@ -484,30 +475,25 @@ int SetConfigField(const char *key, const char *value) {
         return 0;
     }
 
-    // --- The gate of §10.18, as two words --------------------------------
+    // --- The gate of §10.18 -----------------------------------------------
     //
-    // **`requirekey off` is the one setting on this device that makes it less
-    // careful**, so it is the one that says so out loud — in the reply, in a
-    // warning log line, and again at every boot. A device that can approve
-    // without a key must never be one somebody forgot they configured.
-    if (strcmp(key, "requirekey") == 0 || strcmp(key, "denybutton") == 0) {
+    // **`requirekey` is gone and saying so is the point** (§10.18). It switched off
+    // the security key back when this device signed with a key of its own; there is
+    // no such key any more, so there is nothing for it to switch. An operator who
+    // types it is holding an old instruction, and "unknown setting" would send them
+    // looking for a typo.
+    if (strcmp(key, "requirekey") == 0) {
+        printf("there is no requirekey any more: the signing key lives inside the\n");
+        printf("security key, so a device with none cannot approve OR deny (§10.18).\n");
+        return 1;
+    }
+    if (strcmp(key, "denybutton") == 0) {
         if (strcmp(value, "on") != 0 && strcmp(value, "off") != 0) {
             printf("%s takes on or off, got '%s'\n", key, value);
             return 1;
         }
         const bool on = strcmp(value, "on") == 0;
-        if (strcmp(key, "requirekey") == 0) {
-            c.approval.require_key = on;
-            if (!on) {
-                ESP_LOGW(TAG, "approval.requireKey set to false from the console");
-                printf("requirekey = off — THIS DEVICE WILL NOW APPROVE ON A BUTTON ALONE.\n");
-                printf("hold BOOT for %lu ms to allow, tap it to deny. this is a development\n",
-                       static_cast<unsigned long>(responder::kButtonAllowHoldMs));
-                printf("mode; 'config set requirekey on' puts the key back in the way.\n");
-            } else {
-                printf("requirekey = on — no allow leaves this device without a key touch\n");
-            }
-        } else {
+        {
             c.approval.deny_button = on;
             printf("denybutton = %s — %s\n", value,
                    on ? "a tap on BOOT denies a pending request"
@@ -579,7 +565,7 @@ int CmdConfig(int argc, char **argv) {
         } else if (strcmp(what, "save") == 0) {
             err = config::Save();
         } else if (strcmp(what, "restore") == 0) {
-            // §10.15's restore, minus the five blind seconds of holding KEY at
+            // §10.15's restore, minus the five seconds of holding BOOT at
             // boot. It puts the defaults back over the settings and leaves the
             // registration alone — the whole reason those are two files.
             err = config::Restore();
@@ -601,21 +587,19 @@ int CmdConfig(int argc, char **argv) {
             return 0;
         }
         // **Nothing is re-applied here any more, and that is the point.** A
-        // reload or a restore moves every field at once, and four subsystems are
-        // holding copies of some of them — the codec a volume, the Wi-Fi manager
-        // a network list, the clock's sync task an interval and a server, the bus
-        // a URL. That list used to live here, in the one caller there was; there
-        // are three now (this, the settings screen's row, and the boot restore),
-        // so it lives where it cannot drift: `config::OnChanged`, registered by
-        // `main`, called by `Reload` and `Restore` themselves.
+        // reload or a restore moves every field at once, and three subsystems are
+        // holding copies of some of them — the LED a brightness, the Wi-Fi manager
+        // a network list, the bus a URL. That list used to live here, in the one
+        // caller there was; there are two now (this and the boot restore), so it
+        // lives where it cannot drift: `config::OnChanged`, registered by `main`,
+        // called by `Reload` and `Restore` themselves.
     }
 
     const config::Data &c = config::Get();
     printf("source     %s%s\n", config::kPath, config::Loaded() ? "" : " (built-in defaults)");
-    // §10.15's restore, if it happened. **After the boot log has scrolled away
-    // and after the screen has taken the line down**, this is the only place
-    // left that says so — which is why it is printed every time rather than
-    // once. Nothing at all on an ordinary boot.
+    // §10.15's restore, if it happened. **After the boot log has scrolled away**
+    // this is the only place left that says so — which is why it is printed every
+    // time rather than once. Nothing at all on an ordinary boot.
     if (const char *restored = config::BootRestoreText(); restored != nullptr) {
         printf("boot       %s (BOOT was held)\n", restored);
     }
@@ -628,7 +612,7 @@ int CmdConfig(int argc, char **argv) {
            static_cast<unsigned>(c.wifi.rounds_before_ap),
            static_cast<unsigned>(c.wifi.ap_window_seconds));
     for (uint8_t i = 0; i < c.wifi.network_count; ++i) {
-        // **The password is never printed** (§10.8.6, §10.15): it is a secret
+        // **The password is never printed** (§10.15): it is a secret
         // from the moment it is typed, and a console dump is exactly the place
         // it must not turn up. An address is not a secret and is printed.
         printf("           %u. %s (password %s, %s)\n", static_cast<unsigned>(i + 1),
@@ -639,11 +623,9 @@ int CmdConfig(int argc, char **argv) {
     printf("nats       %s\n", c.nats.url);
     printf("led        %u%%, idle %u%%\n", static_cast<unsigned>(c.led.percent),
            static_cast<unsigned>(c.led.idle_percent));
-    // **The gate, and the un-careful half of it is shouted** (§10.18). Every
-    // other line here is a readout; this one is a warning when it is off.
-    printf("approval   key %s, deny button %s, %u s to touch\n",
-           c.approval.require_key ? "REQUIRED" : "*** NOT REQUIRED ***",
-           c.approval.deny_button ? "on" : "off",
+    // The gate (§10.18). There is no line here about whether the key is required,
+    // because there is no answer but yes — see `config.h`'s `Approval`.
+    printf("approval   deny button %s, %u s to touch\n", c.approval.deny_button ? "on" : "off",
            static_cast<unsigned>(c.approval.touch_timeout_seconds));
     return 0;
 }
@@ -671,7 +653,7 @@ void PrintWifiStatus() {
     // and to no others. Printed unconditionally it read `temporary ap
     // 'YOUR_SSID' … round 3 of 2` on a device that had given up on that
     // network two rounds ago — a stale index and a counter past its own limit,
-    // both true internally and both nonsense on a screen.
+    // both true internally and both nonsense in a readout.
     printf("state      %s", wifimgr::Name(snapshot.state));
     const bool about_a_network = snapshot.state == wifimgr::State::kConnecting ||
                                  snapshot.state == wifimgr::State::kWaiting ||
@@ -1266,11 +1248,10 @@ int CmdNatsUrl(int argc, char **argv) {
         printf("usage: nats url <nats://host[:port]>\n");
         return 1;
     }
-    // Parsed here rather than at the task, so a typo is refused while the
-    // person who made it is still looking at the screen — `wifi static` and
-    // `config set tz` make the same call, and the reason is the same one:
-    // libc, lwIP and this parser all have a way of reading a wrong string as
-    // *something*.
+    // Parsed here rather than at the task, so a typo is refused while the person
+    // who made it is still looking at the console — `wifi static` makes the same
+    // call, and the reason is the same one: lwIP and this parser both have a way
+    // of reading a wrong string as *something*.
     nats::Endpoint parsed = {};
     if (!nats::ParseUrl(argv[2], &parsed)) {
         printf("'%s' is not an address this can use\n", argv[2]);
@@ -1480,10 +1461,9 @@ int CmdKeys(int argc, char **argv) {
         return (library && own) ? 0 : 1;
     }
 
-    // **A confirmation word, because this one cannot be undone from here.** The
-    // rule §10.8.5 states for its destructive entries and `poweroff now` follows:
-    // what is lost is a registration, and getting it back means a fresh token
-    // minted on the host.
+    // **A confirmation word, because this one cannot be undone from here.** What
+    // is lost is a registration, and getting it back means a fresh token minted on
+    // the host.
     if (argc >= 2 && strcmp(argv[1], "forget") == 0) {
         if (argc != 3 || strcmp(argv[2], "now") != 0) {
             printf("this deletes the saved signing key. the next boot makes a new one, so this\n");
@@ -1574,10 +1554,9 @@ void PrintRegisterUsage() {
     printf("it is one-time: a token that has been used, or has expired, is refused.\n");
 }
 
-// §6, over USB, and on this board there is no alternative to argue against: the
-// sibling firmware offered a keyboard on a touchscreen for it, and typing 50
-// characters of base64 that way was the reason this exists. Here there is neither
-// screen nor touch panel (§10.13), so the console is the only way in.
+// §6, over USB, and on this board there is no alternative to argue against: with
+// no display and no touch surface (§10.13) the console is the only way to get 50
+// characters of base64 into this device.
 int CmdRegister(int argc, char **argv) {
     if (argc != 2 || strcmp(argv[1], "help") == 0) {
         PrintRegisterUsage();
@@ -1712,16 +1691,25 @@ int CmdRequest(int argc, char **argv) {
         // **The three things that have to be true**, spelled out rather than
         // summarised, because "not subscribed" is one word for three different
         // afternoons.
-        printf("key        %s\n", crypto::Ready() ? protocol::kKeyId : "none - see 'keys'");
-        printf("registered %s\n", registration::Registered()
-                                      ? registration::KeyId()
-                                      : "no - run 'register <token>'");
-        printf("gate       %s\n", config::Get().approval.require_key
-                                      ? (fido::Enrolled()
-                                             ? (fido::Present() ? "a key is on the port"
-                                                                : "enrolled, and no key plugged in")
-                                             : "no key enrolled - run 'key enrol'")
-                                      : "*** OPEN *** - requireKey is off, the button decides");
+        printf("key        %s\n",
+               fido::Enrolled() ? fido::PublicKeyBase64() : "none - run 'key enrol'");
+        // **"Registered" is two questions now** (§10.18.1): whether the handler was
+        // ever told about this device, and whether what it was told is still the key
+        // this device holds. A re-enrolment answers yes to the first and no to the
+        // second, and only the second decides whether anything can be approved.
+        if (registration::Registered()) {
+            printf("registered %s\n", registration::KeyId());
+        } else if (registration::RegistrationPresent()) {
+            printf("registered STALE - for %s, not the key enrolled now\n",
+                   registration::RegisteredPublicKey());
+        } else {
+            printf("registered no - run 'register <token>'\n");
+        }
+        printf("gate       %s\n",
+               fido::Enrolled()
+                   ? (fido::Present() ? "a key is on the port"
+                                      : "enrolled, and no key plugged in")
+                   : "no key enrolled - run 'key enrol'");
 
         const responder::PendingView front = responder::Front();
         if (front.present) {
@@ -1800,13 +1788,9 @@ int CmdRequest(int argc, char **argv) {
     }
 
     printf("queued: %s, %" PRIu32 " s\n", tool, seconds);
-    if (config::Get().approval.require_key) {
-        printf("touch the key on the OTG port to allow%s\n",
-               config::Get().approval.deny_button ? ", or tap BOOT to deny" : "");
-    } else {
-        printf("hold BOOT for %lu ms to allow, tap it to deny (requireKey is off)\n",
-               static_cast<unsigned long>(responder::kButtonAllowHoldMs));
-    }
+    printf("touch the key on the OTG port to allow%s\n",
+           config::Get().approval.deny_button ? ", or tap BOOT to deny and touch it to sign that"
+                                              : "");
     printf("nothing will be published — this request's reply subject is the test one\n");
     return 0;
 }
@@ -1814,9 +1798,8 @@ int CmdRequest(int argc, char **argv) {
 // --- `led` (CLAUDE.md §10.17) --------------------------------------------
 //
 // **The one output this device has, and therefore the one that has to be
-// checkable from a script.** On the sibling board `screenshot` answers "is the
-// screen right"; here the question is "is the light saying what the device is",
-// and it has two halves: what the ranking decided, and what the emitter is
+// checkable from a script.** The question is "is the light saying what the device
+// is", and it has two halves: what the ranking decided, and what the emitter is
 // actually being driven with.
 //
 // `led test` walks every state's look in turn. It does **not** change what the
@@ -1878,8 +1861,9 @@ int CmdLed(int argc, char **argv) {
             indicator::State::kFault,       indicator::State::kNoStorage,
             indicator::State::kNoDeviceKey, indicator::State::kNoWifi,
             indicator::State::kNoInternet,  indicator::State::kNoBus,
-            indicator::State::kNotRegistered, indicator::State::kNoFidoKey,
-            indicator::State::kWatching,    indicator::State::kReady,
+            indicator::State::kNotRegistered, indicator::State::kNotEnrolled,
+            indicator::State::kNoFidoKey,   indicator::State::kWatching,
+            indicator::State::kReady,
         };
         printf("walking %u states, 1.5 s each — the device is unaffected\n",
                static_cast<unsigned>(sizeof(kAll) / sizeof(kAll[0])));
@@ -1916,8 +1900,9 @@ int CmdLed(int argc, char **argv) {
 void PrintKeyUsage() {
     printf("usage: key                what is on the port, and what is enrolled\n");
     printf("       key info           ask the key what it can do\n");
-    printf("       key enrol          make this device's credential (needs a touch)\n");
+    printf("       key enrol          make this device's signing key (needs a touch)\n");
     printf("       key test           ask for an assertion (needs a touch, approves nothing)\n");
+    printf("       key selftest       check the derivation on this chip — no key needed\n");
     printf("       key forget now     delete %s; the credential stays on the key\n", fido::kPath);
 }
 
@@ -1949,9 +1934,12 @@ int CmdKey(int argc, char **argv) {
             printf("enrolled   no — run 'key enrol' with a key plugged in\n");
         }
 
-        printf("required   %s\n", config::Get().approval.require_key
-                                      ? "yes — no allow without a touch"
-                                      : "*** NO *** — requireKey is off");
+        // The key this device answers as, which is the string the handler's allowlist
+        // has to contain (§10.2). Printed here because comparing the two by eye is
+        // how a stale registration gets found in seconds.
+        if (fido::Enrolled()) {
+            printf("signs as   %s (p256)\n", fido::PublicKeyBase64());
+        }
 
         const fido::Stats gate = fido::GetStats();
         printf("gate       %" PRIu32 " asked, %" PRIu32 " approved, %" PRIu32 " timed out\n",
@@ -2035,7 +2023,15 @@ int CmdKey(int argc, char **argv) {
         const fido::Enrolment &e = fido::Current();
         printf("enrolled on %04x:%04x, aaguid %s, credential %u bytes\n", e.vendor_id,
                e.product_id, e.aaguid, static_cast<unsigned>(e.credential_id_length));
-        printf("written to %s. this is a separate thing from 'register' (§10.18).\n", fido::kPath);
+        printf("written to %s\n", fido::kPath);
+        // **The two lines somebody has to act on.** The signing key is new, so
+        // whatever the handler has in its allowlist is now worthless: this device
+        // cannot be verified until it registers again (§10.18.1). Printed rather
+        // than implied, because a device that looks enrolled and is refused on every
+        // approval is the hardest failure here to read from the outside.
+        printf("signs as   %s (p256)\n", fido::PublicKeyBase64());
+        printf("this is a NEW key — the registration is stale. run 'register <token>'\n");
+        printf("with a fresh token from the handler before this device can answer.\n");
         return 0;
     }
 
@@ -2055,8 +2051,10 @@ int CmdKey(int argc, char **argv) {
         fido::usb::Fault fault = fido::usb::Fault::kNone;
         uint8_t status = 0;
         const int64_t started = esp_timer_get_time();
-        const fido::Gate gate =
-            fido::RequireTouch(challenge, 30000, nullptr, nullptr, &fault, &status);
+        uint8_t signature[ctap2::kMaxSignatureSize];
+        size_t signature_length = 0;
+        const fido::Gate gate = fido::Sign(challenge, 30000, nullptr, nullptr, signature,
+                                           sizeof(signature), &signature_length, &fault, &status);
         const int64_t took_ms = (esp_timer_get_time() - started) / 1000;
 
         printf("%s — %s\n", fido::GateName(gate), fido::GateText(gate));
@@ -2068,9 +2066,39 @@ int CmdKey(int argc, char **argv) {
             printf("\n");
             return 1;
         }
-        printf("verified in %lld ms against the enrolled public key.\n",
-               static_cast<long long>(took_ms));
-        printf("nothing was approved: this challenge belongs to no request.\n");
+        // **This is the whole approval path except the request.** The key made a
+        // signature over a challenge, and it verified against the public key this
+        // device registered — which is exactly what a verdict is, minus any bytes
+        // that mean anything.
+        char encoded[ctap2::kMaxSignatureSize * 2 + 4] = {};
+        crypto::Base64Encode(signature, signature_length, encoded, sizeof(encoded));
+        printf("signed and verified in %lld ms, %u bytes: %.12s…\n",
+               static_cast<long long>(took_ms), static_cast<unsigned>(signature_length), encoded);
+        printf("nothing was approved: this challenge belongs to no request, so the\n");
+        printf("bytes it signed are not a decision about anything (§10.18).\n");
+        return 0;
+    }
+
+    if (argc == 2 && strcmp(argv[1], "selftest") == 0) {
+        // **The half of §10.18 that can be checked with nothing plugged in.** The
+        // pure steps of the derivation are host-tested against Python's own numbers
+        // (§10.11 tier 2); the ECDH and the point addition need the chip, and this
+        // is where they get run — against the same vector, on this silicon.
+        //
+        // A failure here means no security key would ever have worked: the device
+        // would register a public key whose private half the authenticator cannot
+        // reconstruct, every reply would be rejected by the hook, and from the desk
+        // that looks exactly like a device that is not answering.
+        char detail[128] = {};
+        const int64_t started = esp_timer_get_time();
+        const bool ok = fido::SelfTest(detail, sizeof(detail));
+        const int64_t took_ms = (esp_timer_get_time() - started) / 1000;
+        printf("%s (%lld ms)\n", detail, static_cast<long long>(took_ms));
+        if (!ok) {
+            printf("this chip cannot derive the key it is supposed to. nothing this\n");
+            printf("device signs would ever verify — do not register it.\n");
+            return 1;
+        }
         return 0;
     }
 
@@ -2102,11 +2130,9 @@ int CmdKey(int argc, char **argv) {
 // `devstatus` (CLAUDE.md §10.7) — every readout at once, in the order in which
 // one of them being wrong stops the next from working.
 //
-// **It exists so there is one thing to paste into a bug report.** The sibling
-// board also serves it over HTTP, which is why it is a function the rest of the
-// firmware can call; this board has no web server, and the function stays split
-// out anyway because §10.7's four-places rule is about copies of a readout, not
-// about how many callers there are.
+// **It exists so there is one thing to paste into a bug report.** It is split out
+// as a function the rest of the firmware can call, because §10.7's four-places
+// rule is about copies of a readout rather than about how many callers there are.
 int CmdDevStatus(int argc, char **) {
     if (argc != 1) {
         printf("usage: devstatus     the board, the light, the key and the network\n");
@@ -2152,8 +2178,8 @@ int CmdDevStatus(int argc, char **) {
 // about approvals, the two pieces of hardware it has, the settings, the network,
 // the bus, the identity, and the filesystem last.
 //
-// Eleven of the sibling board's commands are missing and two are new; the file's
-// opening comment says which and why.
+// Sixteen of them; the file's opening comment says what there is no command for
+// and why.
 const esp_console_cmd_t kCommands[] = {
     {
         .command = "devstatus",
@@ -2194,7 +2220,7 @@ const esp_console_cmd_t kCommands[] = {
     {
         .command = "key",
         .help = "the security key on the OTG port: what is plugged in, enrol it, test it, forget it",
-        .hint = "[info|enrol|test|forget now]",
+        .hint = "[info|enrol|test|selftest|forget now]",
         .func = &CmdKey,
         .argtable = nullptr,
         .func_w_context = nullptr,
@@ -2323,7 +2349,7 @@ esp_err_t Init() {
     repl_config.task_stack_size = crypto::kSignStackBytes + 4096;
 
     // **UART, not USB Serial/JTAG, and this is the one line where this file most
-    // differs from the sibling board's** (§10.1, §10.18.3). That board has one
+    // differs from the sibling board's** (§10.1, §10.18.4). That board has one
     // USB-C wired to the chip's own USB peripheral, so its console has to live
     // there. This one has two: a CH343P bridge on UART0, and the native USB —
     // which is a *host* here, with a security key on the end of it.

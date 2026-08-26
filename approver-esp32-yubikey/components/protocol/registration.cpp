@@ -100,7 +100,7 @@ size_t BuildRegistrationRequest(const RegistrationRequest &request, char *out, s
         return 0;
     }
     if (std::strlen(request.token) > kTokenMax || std::strlen(request.key_id) > kKeyIdMax ||
-        std::strlen(request.pubkey) > kB64_32Max || std::strlen(request.nonce) > kB64_32Max) {
+        std::strlen(request.pubkey) > kPubkeyMax || std::strlen(request.nonce) > kB64_32Max) {
         return 0;
     }
 
@@ -118,8 +118,14 @@ size_t BuildRegistrationRequest(const RegistrationRequest &request, char *out, s
     cJSON_AddStringToObject(root, "key_id", request.key_id);
     cJSON_AddStringToObject(root, "pubkey", request.pubkey);
     // §10.2: fixed, never varied. The allowlist pins the scheme on the verifying
-    // side and nothing this device sends may choose one.
-    cJSON_AddStringToObject(root, "key_type", "ed25519");
+    // side and nothing this device sends may choose one — which is why this is a
+    // constant here and not a field of `RegistrationRequest`.
+    //
+    // **It is `p256` because the signer is the security key** (§10.18): what gets
+    // registered is an ARKG-derived P-256 public key, and every verdict is an ECDSA
+    // signature the authenticator made. `lib/crypto.py` has verified that scheme
+    // since `responder_yubikey.py` (§8.7), so the handler needed no change for it.
+    cJSON_AddStringToObject(root, "key_type", kKeyType);
     cJSON_AddStringToObject(root, "nonce", request.nonce);
     cJSON_AddNumberToObject(root, "ts", static_cast<double>(request.ts));
 

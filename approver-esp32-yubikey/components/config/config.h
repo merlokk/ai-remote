@@ -90,9 +90,9 @@ struct Network {
 // silently lands on a different address than the one written down is a
 // half-hour nobody gets back.
 //
-// Pure, and in the config layer rather than the driver, for the reason
-// `tz::Lookup` is: turning what the file says into what the hardware takes is
-// the file's job, and it makes both testable without a board.
+// Pure, and in the config layer rather than the driver: turning what the file
+// says into what the hardware takes is the file's job, and it makes both
+// testable without a board.
 bool ParseIpv4(const char *text, uint32_t *out);
 
 // What the operator asked the radio to be (§10.9). Not what it is doing —
@@ -167,9 +167,9 @@ struct InternetCheck {
 
 // --- The one output this device has (§10.1, §10.17) -----------------------
 //
-// There is no panel here, so every state the C6 board puts on glass this one
-// puts into a single WS2812 on GPIO48 — the colour is the state and the rhythm
-// is the urgency (§10.17 is the whole table). Two numbers are the operator's,
+// One WS2812 on GPIO48 says everything this device has to say — the colour is the
+// state and the rhythm is the urgency (§10.17 is the whole table). Two numbers are
+// the operator's,
 // and both are brightness rather than colour for a reason worth writing down:
 // **which colour means what is protocol, not preference.** An operator who can
 // recolour "denied" can build a device that lies about what it did, so the
@@ -186,21 +186,17 @@ struct Led {
     uint8_t idle_percent;  // 0..100, what the ready-state breath settles to
 };
 
-// **What has to be true before this device will sign anything** (§10.18).
+// **When a verdict may be asked for** (§10.18). Two fields, and neither of them
+// can decide *what* the verdict is.
 //
-// The gate, not the palette: these three fields decide when a verdict may be
-// produced, and none of them can decide *what* the verdict is. `require_key`
-// false is the only one that loosens anything, and it loosens it in the
-// direction §10.10 permits — a device that cannot approve is safe, a device
-// that approves without the operator is not — which is why it defaults to
-// true and why turning it off is logged at boot rather than silently obeyed.
+// **There is no `requireKey` here and there cannot be one.** It existed while the
+// device signed with a key of its own and could therefore be told to skip the
+// security key; since §10.18 the derived private key lives inside the
+// authenticator and nowhere else, so a device with no key is not a device with a
+// looser policy — it is a device with no signature to make. A setting that
+// pretended otherwise would be a switch that does nothing, which is worse than an
+// absent one.
 struct Approval {
-    // No `allow` is signed unless a FIDO key answered a `getAssertion` bound to
-    // this request, with user presence, on the OTG port (§10.18). **True by
-    // default.** False is a development mode: the BOOT button alone then
-    // approves, which is the C6 board's model and is written down as such.
-    bool require_key;
-
     // How long a pending request waits for that touch before the device gives
     // up on it. Nothing is published when it expires — §10.10's fail-safe is
     // silence, and the hook's own timeout is what closes the loop.
@@ -240,9 +236,9 @@ esp_err_t Reload();
 // Writes the fields back, atomically (temp file, then rename).
 esp_err_t Save();
 
-// Copies `config.init.json` over `config.json` and re-reads it — the same
-// thing holding `KEY` at boot does (§10.15), and what the settings screen's
-// "Restore config" entry will call. `registration.json` is not touched.
+// Copies `config.init.json` over `config.json` and re-reads it — the same thing
+// holding `BOOT` at boot does (§10.15), and what `config restore` on the console
+// calls. `registration.json` is not touched.
 esp_err_t Restore();
 
 // --- Who has to be told when the fields moved under them ------------------
@@ -286,7 +282,7 @@ enum class RestoreOutcome : uint8_t {
     kFailed,            // asked for and did not happen — the settings are as they were
 };
 
-// The restore §10.15 gives `KEY` its job for. **Whether the button was held is
+// The restore §10.15 gives `BOOT` its second job for. **Whether the button was held is
 // the caller's answer**, not this component's: a layer that knows about a file
 // and its fields has never heard of a GPIO (§10.14.2), and `main` is where the
 // two meet — the same place the codec's volume is applied.
@@ -307,9 +303,8 @@ RestoreOutcome RestoreAtBoot(bool key_held);
 RestoreOutcome BootRestore();
 
 // That, as one line for the operator, or null when there is nothing to say.
-// **One string rather than two**: §10.15 wants it on the screen as soon as
-// there is a screen and the console has to answer the same question, and a
-// second copy of a sentence is a copy that drifts.
+// **One string rather than two**: the boot log and the console answer the same
+// question, and a second copy of a sentence is a copy that drifts.
 const char *BootRestoreText();
 
 // The live values. Mutable on purpose: a caller changes a field and calls

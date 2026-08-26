@@ -15,15 +15,11 @@
 // scrolling past a hundred lines of PASS to find the one that matters is how a
 // suite stops being run.
 //
-// **Thirteen of the sibling board's suites are missing and five are new.** Gone
-// with the hardware: the navigator, the clock face, the settings menu, the Wi-Fi
-// screen, the touch calibration, the idle policy, the I²C bus and the four chips
-// on it, and the three web ones. Gone with the two documents this device does not
-// watch: the limits suite and the activity one. And gone with the clock — there is
-// no RTC here and no SNTP either (§10.13) — the timezone suite and the sync-policy
-// one. New: the LED's arithmetic, the state ranking, CTAPHID framing, CBOR, and
-// CTAP2. What is left in the middle is shared with that board and is expected to
-// stay identical.
+// **Seventeen suites.** Six are this board's own — the LED's arithmetic, the state
+// ranking, CTAPHID framing, CBOR, CTAP2 and the ARKG derivation. Ten are shared
+// with `../approver-esp32` and are expected to stay identical. One is the duration
+// formatter the console prints ages with. There is no suite for hardware this
+// board does not have (§10.13), and none is kept as a placeholder for one.
 
 #include <cstring>
 
@@ -48,6 +44,7 @@ void RegisterIndicatorTests(void);
 void RegisterCtaphidTests(void);
 void RegisterCborTests(void);
 void RegisterCtap2Tests(void);
+void RegisterArkgTests(void);
 
 void setUp(void) { fake::Reset(); }
 
@@ -87,6 +84,7 @@ int main(int argc, char **argv) {
     if (Wanted("ctaphid") || Wanted("fido") || Wanted("hid")) RegisterCtaphidTests();
     if (Wanted("cbor") || Wanted("fido")) RegisterCborTests();
     if (Wanted("ctap2") || Wanted("fido") || Wanted("key")) RegisterCtap2Tests();
+    if (Wanted("arkg") || Wanted("fido") || Wanted("key") || Wanted("parity")) RegisterArkgTests();
 
     // The settings and the queue a request waits in.
     if (Wanted("config")) RegisterConfigTests();
@@ -102,7 +100,7 @@ int main(int argc, char **argv) {
     if (Wanted("registration") || Wanted("protocol")) RegisterRegistrationTests();
     if (Wanted("approval") || Wanted("protocol")) RegisterApprovalTests();
 
-    // And the one formatter left over from the screens (`ui/age_text.h`).
+    // And the duration formatter the console prints ages with (`ui/age_text.h`).
     if (Wanted("age") || Wanted("duration")) RegisterAgeTextTests();
 
     // Tier 2: the cross-language parity vectors.

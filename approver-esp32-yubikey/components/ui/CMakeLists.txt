@@ -5,12 +5,9 @@
 # one part of this firmware whose whole value is being identical to the sibling's:
 # a struct that drifts there is a signature that stops verifying (§10.2).
 #
-# So what survives here is **§7's request and the queue over it**, plus one
-# formatter the console still needs (`age_text.h`). The six view classes that made
-# the name honest on the other board are gone with the screens they drew, and so
-# are the two watch-only documents they drew — this device has no display and
-# nothing to display: §9.7's numbers and §9.10's activity line are the sibling
-# board's, not this one's.
+# So what is here is **§7's request and the queue over it**, plus one formatter the
+# console needs (`age_text.h`). There is no view class of any kind, because there
+# is nothing on this board to draw one on.
 #
 # No REQUIRES, and that is worth noticing rather than filling in: everything in
 # here includes `<cstdint>` and nothing else — not ESP-IDF — which is what lets

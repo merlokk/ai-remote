@@ -136,14 +136,14 @@ KeyState State();
 KeySource Source();
 bool Ready();
 
-// One line each for a console or a screen, in words rather than section numbers
-// (§10.7). Never null.
+// One line each for the console, in words rather than section numbers (§10.7).
+// Never null.
 const char *StateText();
 const char *SourceText();
 
 // True when the key came from a seed in flash — the fallback rather than the
 // design. A caller that wants to warn about it should not have to compare enum
-// values to find out, and the screen of §10.8.5 will want exactly this question.
+// values to find out.
 bool KeyIsInFlash();
 
 // Valid only while `Ready()`. The base64 form is built once at `Init`.
@@ -159,7 +159,7 @@ int EfuseBlock();
 // key it already derived — this changes nothing until the next boot, which then
 // makes a fresh seed and a fresh identity. So it is a key rotation with a felt
 // cost: the registration it invalidates needs a new token from the handler (§6),
-// the same as §10.8.5's `forget`.
+// the same as `forget`'s on the console.
 //
 // Exists for one honest reason: a device leaving the desk should not carry a
 // signing key in its flash, and route 2 is the only route where there is

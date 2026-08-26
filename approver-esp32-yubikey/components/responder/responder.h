@@ -2,40 +2,43 @@
 
 // **The loop, closed** (CLAUDE.md §7, §10.2, §10.18): take a request off
 // `approvals.*`, put it in front of a human, get a fingertip on a security key,
-// sign what that fingertip authorised, and publish it into the subject the
-// request arrived with.
+// and publish what that fingertip **signed** into the subject the request arrived
+// with.
 //
-// Everything under it already exists — a key (§10.6), a registration (§10.7), the
-// bytes (§10.2), a queue (`ui::RequestCard`), a light (§10.17), a gate (§10.18)
-// and a socket (§10.5). This is the glue, and the interesting part is all in
-// *when* rather than in *what*.
+// Everything under it already exists — an enrolment (§10.18), a registration
+// (§10.7), the bytes (§10.2), a queue (`ui::RequestCard`), a light (§10.17) and a
+// socket (§10.5). This is the glue, and the interesting part is all in *when*
+// rather than in *what*.
 //
-// ## How this differs from the C6 board's responder, in one paragraph
+// ## Who decides, and who signs
 //
-// There, a request went on a screen and a press on the case decided it. Here
-// there is no screen and one button, so the two halves of a decision are split
-// by **which one is safe to make cheap**:
+// There is one button on this board and **no signing key on it at all** — the
+// private half lives inside the security key (§10.18). So:
 //
-//   * **`deny` is a button.** One short press, no key, no ceremony. Refusing
-//     something is never the dangerous direction (§10.10);
-//   * **`allow` is a key.** The device asks a FIDO authenticator for an assertion
-//     over *the exact bytes it is about to sign*, and the key will not answer
-//     until somebody touches it. No touch, no allow — and the touch cannot be
-//     replayed onto a different request, because a different request is different
-//     bytes.
+//   * **the button chooses, the key signs.** A tap on BOOT means `deny` and a
+//     touch on the key means `allow`, but *either* verdict then has to be signed by
+//     the key, because nothing else here can sign anything;
+//   * **that makes a deny two gestures**, and §10.18.5 says so rather than hiding
+//     it. Tapping and then walking away produces no reply, which is the third
+//     outcome and the safe one;
+//   * **a touch cannot be replayed onto a different request**, because what the
+//     key signs is that request's own bytes — the verdict included, so an `allow`
+//     touch cannot be turned into a `deny` or the other way round.
 //
 // ## The four rules it exists to keep
 //
 //   * **it subscribes only when it could actually answer.** §6's queue group
 //     means each request reaches exactly one responder, so a device that
-//     subscribed without a key, or without a registration, would take requests
-//     away from the YubiKey responder and answer them with silence. Registered
-//     plus a key plus a connection, or it is not on the subject at all — and
-//     `request` on the console says which of the three is missing;
-//   * **nothing is signed on the task that ran the gate.** The gate blocks for
+//     subscribed without an enrolment, or with a registration naming a key it no
+//     longer holds, would take requests away from the YubiKey responder and answer
+//     them with silence. Enrolled, registered **for that key**, and connected, or
+//     it is not on the subject at all — and `request` on the console says which is
+//     missing;
+//   * **nothing is published on the task that ran the gate.** The gate blocks for
 //     up to half a minute waiting for a finger; a task that both waited and
-//     signed would be a task that cannot notice a reconnect. A decision is copied
-//     into a slot and this component's *other* task does the work;
+//     published would be a task that cannot notice a reconnect. A decision **and
+//     the signature the key made for it** are copied into a slot and this
+//     component's *other* task does the work;
 //   * **a decision that missed its moment is dropped, not sent.** §10.10: if the
 //     connection went and came back between the touch and the publish, the inbox
 //     the reply would go into no longer exists, and publishing into it is worse
@@ -50,9 +53,10 @@
 //
 // **No reply is the safe outcome** (§10.10). Every failure here — a payload that
 // will not parse, a queue that is full, a key that is not there, a signature that
-// fails, a socket that dropped — ends in nothing being published, the hook timing
-// out, and Claude Code asking in its own terminal. There is no path that invents
-// a verdict, and the only path to `allow` is a human touching a key.
+// does not verify, a socket that dropped — ends in nothing being published, the
+// hook timing out, and Claude Code asking in its own terminal. There is no path
+// that invents a verdict, and there is no path to *any* verdict that does not go
+// through a human touching a key.
 
 #include <cstddef>
 #include <cstdint>
@@ -61,15 +65,15 @@
 
 namespace responder {
 
-// The task that signs. Sized from `crypto::kSignStackBytes` plus room for the
-// JSON either side of it — the header holds the number because the console prints
-// the low-water mark against it, and two copies of it would drift.
+// The task that publishes. It no longer signs — the signature arrives from the
+// key — but the size is kept: it holds a 2.3 KB request, the reply JSON and the
+// base64 around it, and the console prints its low-water mark against this number.
 inline constexpr uint32_t kTaskStackBytes = 12288;
 
-// The task that waits for a fingertip. It holds a CTAP request and response
-// buffer indirectly (they are static in `fido.cpp`) but it does run an ECDSA
-// P-256 verification, which is the deepest stack in this firmware after the
-// Ed25519 signature above.
+// The task that waits for a fingertip. It holds a CTAP request and response buffer
+// indirectly (they are static in `fido.cpp`), assembles §7's bytes, and runs **two**
+// ECDSA P-256 verifications per approval — the assertion's and the verdict's — which
+// is the deepest stack in this firmware.
 inline constexpr uint32_t kGateStackBytes = 8192;
 
 // Above the LED and the indicator, below the USB client. A decision waiting to be
@@ -92,12 +96,6 @@ inline constexpr uint32_t kGateIdleMs = 100;
 // **drop**, which is §10.10's fail-safe and is counted.
 inline constexpr size_t kPendingDecisions = 2;
 
-// In the development mode of §10.18 (`approval.requireKey` false), how long BOOT
-// has to be held to mean `allow`. **Deliberately awkward**: two seconds is long
-// enough that nobody produces one by accident, and the awkwardness is the honest
-// signal that this mode is not the one the device is meant to run in.
-inline constexpr uint32_t kButtonAllowHoldMs = 2000;
-
 // Why this device is not on the subject, in words rather than section numbers
 // (§10.7). Ordered by what somebody would fix first.
 enum class Blocker : uint8_t {
@@ -105,8 +103,12 @@ enum class Blocker : uint8_t {
     kNoKey,
     kNotRegistered,
     kNoBus,
-    // **No key enrolled, with the gate switched on** (§10.18) — a device that
-    // could never say `allow` whatever anybody does.
+    // **No key enrolled** (§10.18) — a device that could never say `allow`, or
+    // `deny` either, whatever anybody does.
+    //
+    // Since the verdict is signed inside the security key, an enrolment is not a
+    // policy this device applies; it is the private key existing at all. There is
+    // no setting that relaxes it and there cannot be one.
     //
     // This one is not on the sibling board's list and it is the most important
     // entry here, because it was found the hard way: the device registered, went

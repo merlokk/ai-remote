@@ -44,11 +44,9 @@ Status g_status;
 bool g_started = false;
 TaskHandle_t g_gate_task = nullptr;
 
-// **The queue, and it is the sibling board's screen queue with the screen taken
-// off it.** `ui::RequestCard` owns which request is in front, how long it has
-// left, and what happens when it runs out — all of which is the same on a device
-// with one LED as on a device with a panel, because none of it was ever about
-// pixels (§10.8.4's logic, §10.11's host tests).
+// **The queue.** `ui::RequestCard` owns which request is in front, how long it
+// has left, and what happens when it runs out — none of which was ever about
+// having somewhere to draw it (§10.11's host tests run all of it).
 ui::RequestCard g_card;
 
 // Where a delivery is parsed. On the **bus task**, whose stack is 8 KB with about
@@ -88,6 +86,14 @@ struct Pending {
     bool used = false;
     ui::Request request;
     ui::Verdict verdict = ui::Verdict::kDeny;
+
+    // **The verdict's signature, made inside the security key** (§10.18). It exists
+    // before this struct does: the gate does not come back `kApproved` until the key
+    // has signed *and* the signature has verified against the registered public key.
+    // So `Answer` below has nothing left to sign — it publishes what a human's
+    // fingertip produced, or it publishes nothing.
+    uint8_t signature[ctap2::kMaxSignatureSize] = {};
+    size_t signature_length = 0;
     // Which connection the decision belonged to. If the bus has reconnected
     // since, the inbox this would answer into is gone and publishing is worse
     // than silence — it looks like an answer to something nobody is waiting for.
@@ -171,6 +177,12 @@ struct GateWatch {
     bool button_denied = false;
     bool bus_gone = false;
     uint16_t connects = 0;
+
+    // **False once the button has already decided.** A deny still has to be signed
+    // by the key (§10.18 — the device holds no signing key of its own), so there is
+    // a second touch to wait for, and a finger still resting on BOOT from the tap
+    // that chose `deny` must not cancel it half a millisecond later.
+    bool button_armed = true;
 };
 
 // **Called roughly twice a second while a fingertip is owed**, and on every
@@ -178,14 +190,14 @@ struct GateWatch {
 // where the three ways a gate should stop early live.
 //
 // Returning false cancels the exchange: `CTAPHID_CANCEL` goes to the key and
-// `fido::RequireTouch` comes back `kCancelled`.
+// `fido::Sign` comes back `kCancelled`.
 bool GateKeepAlive(uint8_t, void *context) {
     GateWatch *watch = static_cast<GateWatch *>(context);
 
     // 1. **A short press on BOOT is a deny**, and it stops the key being asked
     //    for something nobody wants any more. This is the whole reason the gate
     //    has a hook rather than a plain timeout.
-    if (config::Get().approval.deny_button) {
+    if (watch->button_armed && config::Get().approval.deny_button) {
         board::Buttons().Poll(board::button::kBootIndex);
         if (board::Buttons().Pressed(board::button::kBootIndex)) {
             watch->button_denied = true;
@@ -212,37 +224,10 @@ bool GateKeepAlive(uint8_t, void *context) {
     return true;
 }
 
-// The development mode of §10.18: no key required, so the button carries both
-// verdicts and the awkward one is `allow`. Returns true when a verdict was made.
-bool ButtonOnlyDecision(GateWatch *watch, ui::Verdict *out) {
-    buttons::PressLength press(kButtonAllowHoldMs);
-    for (;;) {
-        if (static_cast<int32_t>(NowMs() - watch->deadline_ms) >= 0) {
-            return false;
-        }
-        const nats::Status bus = nats::Get();
-        if (bus.state != nats::State::kConnected || bus.connects != watch->connects) {
-            watch->bus_gone = true;
-            return false;
-        }
-
-        board::Buttons().Poll(board::button::kBootIndex);
-        const buttons::Press result =
-            press.Update(board::Buttons().Pressed(board::button::kBootIndex), NowMs());
-        if (result == buttons::Press::kLong) {
-            *out = ui::Verdict::kAllow;
-            return true;
-        }
-        if (result == buttons::Press::kShort) {
-            *out = ui::Verdict::kDeny;
-            return true;
-        }
-        vTaskDelay(pdMS_TO_TICKS(buttons::kPollIntervalMs));
-    }
-}
-
-// Hands a decided request to the signing task.
-void Decided(const ui::Request &request, ui::Verdict verdict, uint16_t connects) {
+// Hands a decided request, **and the signature the key made for it**, to the
+// publishing task.
+void Decided(const ui::Request &request, ui::Verdict verdict, uint16_t connects,
+             const uint8_t *signature, size_t signature_length) {
     Lock();
     Pending *slot = nullptr;
     for (Pending &candidate : g_pending) {
@@ -264,6 +249,12 @@ void Decided(const ui::Request &request, ui::Verdict verdict, uint16_t connects)
     slot->request = request;
     slot->verdict = verdict;
     slot->connects = connects;
+    slot->signature_length = 0;
+    if (signature != nullptr && signature_length != 0 &&
+        signature_length <= sizeof slot->signature) {
+        std::memcpy(slot->signature, signature, signature_length);
+        slot->signature_length = signature_length;
+    }
     Unlock();
 
     xSemaphoreGive(g_work);
@@ -308,6 +299,69 @@ bool WaitForKey(GateWatch *watch, bool *deny) {
 // decided and nothing will be published (§10.10); the caller then remembers this
 // request and lets it expire on the queue rather than gating it again, which is
 // the fix for a spin found on the board and described at `g_abandoned_nonce`.
+// **One verdict, signed by the key.** Assembles §7's bytes for `behavior`, hashes
+// them, and asks the authenticator for a signature over that digest.
+//
+// The digest is the whole of what binds a fingertip to a request: it carries the
+// session, the nonce, the tool, the input hash, the verdict and the timestamp. A
+// touch collected for one of these cannot be replayed onto another, and a touch
+// collected for `allow` is not a `deny` — the two are different bytes and need
+// different touches.
+//
+// Returns the gate's verdict about the exchange. Only `kApproved` writes a
+// signature, and by then it has already been checked against the public key this
+// device registered (§10.18.3).
+fido::Gate AskTheKey(const ui::Request &request, const char *behavior, GateWatch *watch,
+                     uint8_t *signature, size_t signature_capacity, size_t *signature_length,
+                     fido::usb::Fault *fault, uint8_t *ctap_status) {
+    protocol::Decision decision;
+    decision.v = request.v;
+    decision.ts = request.ts;
+    decision.session_id = request.session_id;
+    decision.nonce = request.nonce;
+    decision.tool_name = request.tool_name;
+    decision.input_sha256 = request.input_sha256;
+    decision.behavior = behavior;
+
+    char message[protocol::kSigningBytesMax];
+    const size_t length = protocol::DecisionSigningBytes(decision, message, sizeof message);
+    if (length == 0) {
+        ESP_LOGE(TAG, "the signing bytes would not assemble - the key is not asked");
+        return fido::Gate::kBadSignature;
+    }
+
+    // PSA rather than `mbedtls_sha256`, for the reason `fido.cpp` states at its own
+    // hash: on ESP-IDF v6 the classic mbedTLS entry points live under
+    // `mbedtls/private/`, and this one is too important to reach for that way.
+    uint8_t digest[32];
+    size_t produced = 0;
+    if (psa_hash_compute(PSA_ALG_SHA_256, reinterpret_cast<const uint8_t *>(message), length,
+                         digest, sizeof digest, &produced) != PSA_SUCCESS ||
+        produced != sizeof digest) {
+        ESP_LOGE(TAG, "could not hash the signing bytes - the key is not asked");
+        return fido::Gate::kBadSignature;
+    }
+
+    // The budget left *now*, not the one this started with: a request that spent
+    // twenty of its thirty seconds waiting for a key gets ten to be touched in, not
+    // another thirty it does not have.
+    const int32_t remaining = static_cast<int32_t>(watch->deadline_ms - NowMs());
+    if (remaining <= 0) {
+        return fido::Gate::kTimeout;
+    }
+
+    return fido::Sign(digest, static_cast<uint32_t>(remaining), &GateKeepAlive, watch, signature,
+                      signature_capacity, signature_length, fault, ctap_status);
+}
+
+// **The gate itself.** Runs on its own task, blocks for as long as the request has
+// left, and produces one of three things: a signed allow, a signed deny, or
+// nothing.
+//
+// Returns **true when it answered**. False means nothing was decided and nothing
+// will be published (§10.10); the caller then remembers this request and lets it
+// expire on the queue rather than gating it again, which is the fix for a spin
+// found on the board and described at `g_abandoned_nonce`.
 bool RunGate(const ui::Request &request) {
     const config::Data &settings = config::Get();
     const nats::Status bus = nats::Get();
@@ -316,8 +370,8 @@ bool RunGate(const ui::Request &request) {
     watch.connects = bus.connects;
     watch.deadline_ms = NowMs() + request.ttl_ms;
     {
-        // The operator's own ceiling, when it is the shorter of the two. Its
-        // whole job is to stop asking before the hook has given up (§10.18).
+        // The operator's own ceiling, when it is the shorter of the two. Its whole
+        // job is to stop asking before the hook has given up (§10.18).
         const uint32_t configured = settings.approval.touch_timeout_seconds * 1000u;
         if (configured != 0 && configured < request.ttl_ms) {
             watch.deadline_ms = NowMs() + configured;
@@ -330,148 +384,99 @@ bool RunGate(const ui::Request &request) {
 
     ui::Verdict verdict = ui::Verdict::kDeny;
     bool decided = false;
+    uint8_t signature[ctap2::kMaxSignatureSize];
+    size_t signature_length = 0;
 
-    if (!settings.approval.require_key) {
-        // §10.18's development mode. Logged every single time, because a device
-        // that can approve without a key must never be one somebody forgot they
-        // configured.
-        ESP_LOGW(TAG, "approval.requireKey is false - the button alone decides this");
-        decided = ButtonOnlyDecision(&watch, &verdict);
-        if (!decided) {
-            SetReceipt(watch.bus_gone ? "no reply - the bus had gone" : "no reply - nobody pressed");
+    // **First, wait for a key.** A request arriving with nothing in the OTG port is
+    // the ordinary case, not an edge one: the operator sees the light, reaches into
+    // a pocket and plugs one in. So the device sits on `pending` — white, fast
+    // (§10.17) — until a key appears, somebody taps BOOT, the bus goes, or the
+    // request runs out.
+    //
+    // Refusing at the door instead is what the first version did, and it collapsed
+    // the whole gate to a microsecond: nothing was decided, the request stayed at
+    // the head of the queue, and the task took it again several hundred times a
+    // second.
+    bool button_denied = false;
+    if (!WaitForKey(&watch, &button_denied) && !button_denied) {
+        const char *why = watch.bus_gone ? "the bus had gone" : "nobody plugged a key in";
+        char note[64];
+        snprintf(note, sizeof note, "no reply - %s", why);
+        SetReceipt(note);
+        ESP_LOGW(TAG, "%s: %s", request.tool_name, why);
+        Lock();
+        ++g_status.gate_declined;
+        Unlock();
+        return false;
+    }
+
+    fido::usb::Fault fault = fido::usb::Fault::kNone;
+    uint8_t ctap_status = 0;
+
+    if (!button_denied) {
+        // The ordinary path: ask for an `allow`, and let the operator answer with a
+        // fingertip on the key or a tap on BOOT.
+        const fido::Gate gate = AskTheKey(request, protocol::kBehaviorAllow, &watch, signature,
+                                          sizeof signature, &signature_length, &fault,
+                                          &ctap_status);
+        if (gate == fido::Gate::kApproved) {
+            Lock();
+            ++g_status.gate_approved;
+            Unlock();
+            verdict = ui::Verdict::kAllow;
+            decided = true;
+        } else if (!watch.button_denied) {
+            // **Not a deny.** A gate that timed out or failed says nothing at all —
+            // see the fourth rule in `responder.h`.
+            char note[64];
+            snprintf(note, sizeof note, "no reply - %s", fido::GateName(gate));
+            SetReceipt(note);
+            ESP_LOGW(TAG, "%s: %s (%s)", request.tool_name, fido::GateText(gate),
+                     fido::usb::FaultName(fault));
             Lock();
             ++g_status.gate_declined;
             Unlock();
+            return false;
         }
-    } else {
-        // **First, wait for a key.** A request arriving with nothing in the OTG
-        // port is the ordinary case, not an edge one: the operator sees the
-        // light, reaches into a pocket and plugs one in. So the device sits on
-        // `pending` — white, fast (§10.17) — until a key appears, somebody taps
-        // BOOT, the bus goes, or the request runs out.
+        button_denied = watch.button_denied;
+    }
+
+    if (!decided && button_denied) {
+        // **A deny costs a touch too**, and that is the honest consequence of the
+        // key holding the only signing key there is (§10.18): the device cannot put
+        // its name to `deny` any more than it can to `allow`. The button chooses the
+        // verdict; the key signs it.
         //
-        // Refusing at the door instead is what the first version did, and it
-        // collapsed the whole gate to a microsecond: nothing was decided, the
-        // request stayed at the head of the queue, and the task took it again
-        // several hundred times a second.
-        bool button_denied = false;
-        if (!WaitForKey(&watch, &button_denied)) {
-            if (button_denied) {
-                Lock();
-                ++g_status.button_denied;
-                Unlock();
-                verdict = ui::Verdict::kDeny;
-                decided = true;
-            } else {
-                const char *why = watch.bus_gone ? "the bus had gone"
-                                                 : "nobody plugged a key in";
-                char note[64];
-                snprintf(note, sizeof note, "no reply - %s", why);
-                SetReceipt(note);
-                ESP_LOGW(TAG, "%s: %s", request.tool_name, why);
-                Lock();
-                ++g_status.gate_declined;
-                Unlock();
-                return false;
-            }
+        // Walking away here is not a failure mode to be smoothed over — it is the
+        // third outcome, and the safe one: no touch, no reply, the hook times out
+        // and Claude Code asks in its own terminal (§10.10 rule 1). What the counters
+        // then say is `gate_declined`, not `button_denied`.
+        Lock();
+        ++g_status.button_denied;
+        Unlock();
+        watch.button_armed = false;
+        watch.button_denied = false;
+
+        ESP_LOGI(TAG, "%s: denied on the button - touch the key to sign it", request.tool_name);
+        SetReceipt("denied - touch the key to sign it");
+        indicator::Poke();
+
+        const fido::Gate gate = AskTheKey(request, protocol::kBehaviorDeny, &watch, signature,
+                                          sizeof signature, &signature_length, &fault,
+                                          &ctap_status);
+        if (gate != fido::Gate::kApproved) {
+            char note[64];
+            snprintf(note, sizeof note, "no reply - deny unsigned (%s)", fido::GateName(gate));
+            SetReceipt(note);
+            ESP_LOGW(TAG, "%s: the deny was not signed: %s (%s)", request.tool_name,
+                     fido::GateText(gate), fido::usb::FaultName(fault));
+            Lock();
+            ++g_status.gate_declined;
+            Unlock();
+            return false;
         }
-
-        if (!decided) {
-            // **The challenge, and it is the whole design in four lines.**
-            //
-            // What the key signs over is the SHA-256 of the *exact bytes this
-            // device would sign for an `allow`* — session, nonce, tool, input
-            // hash, verdict and timestamp. Three things follow:
-            //
-            //   * the touch is bound to this request and cannot be replayed onto
-            //     another one;
-            //   * the key can only ever authorise an **allow**, because the bytes
-            //     it committed to say `allow`. A deny needs no key and cannot be
-            //     manufactured out of one;
-            //   * if the bytes could not be assembled, there is nothing to
-            //     authorise and nothing is asked for. §10.10 reaching this far
-            //     down.
-            protocol::Decision decision;
-            decision.v = request.v;
-            decision.ts = request.ts;
-            decision.session_id = request.session_id;
-            decision.nonce = request.nonce;
-            decision.tool_name = request.tool_name;
-            decision.input_sha256 = request.input_sha256;
-            decision.behavior = protocol::kBehaviorAllow;
-
-            char message[protocol::kSigningBytesMax];
-            const size_t length =
-                protocol::DecisionSigningBytes(decision, message, sizeof message);
-            if (length == 0) {
-                ESP_LOGE(TAG, "the signing bytes would not assemble - the key is not asked");
-                SetReceipt("no reply - the request would not assemble");
-                Lock();
-                ++g_status.gate_declined;
-                Unlock();
-                return false;
-            }
-
-            // PSA rather than `mbedtls_sha256`, for the reason `fido.cpp` states
-            // at its own hash: on ESP-IDF v6 the classic mbedTLS entry points
-            // live under `mbedtls/private/`, and this one is too important to
-            // reach for that way.
-            uint8_t challenge[32];
-            size_t produced = 0;
-            if (psa_hash_compute(PSA_ALG_SHA_256, reinterpret_cast<const uint8_t *>(message),
-                                 length, challenge, sizeof challenge, &produced) != PSA_SUCCESS ||
-                produced != sizeof challenge) {
-                ESP_LOGE(TAG, "could not hash the signing bytes - the key is not asked");
-                SetReceipt("no reply - the challenge would not hash");
-                Lock();
-                ++g_status.gate_declined;
-                Unlock();
-                return false;
-            }
-
-            // The budget left *now*, not the one this started with: a request
-            // that spent twenty of its thirty seconds waiting for a key gets ten
-            // to be touched in, not another thirty it does not have.
-            const int32_t remaining = static_cast<int32_t>(watch.deadline_ms - NowMs());
-            if (remaining <= 0) {
-                SetReceipt("no reply - time ran out");
-                Lock();
-                ++g_status.gate_declined;
-                Unlock();
-                return false;
-            }
-
-            fido::usb::Fault fault = fido::usb::Fault::kNone;
-            uint8_t ctap_status = 0;
-            const fido::Gate gate =
-                fido::RequireTouch(challenge, static_cast<uint32_t>(remaining), &GateKeepAlive,
-                                   &watch, &fault, &ctap_status);
-            if (gate == fido::Gate::kApproved) {
-                Lock();
-                ++g_status.gate_approved;
-                Unlock();
-                verdict = ui::Verdict::kAllow;
-                decided = true;
-            } else if (watch.button_denied) {
-                Lock();
-                ++g_status.button_denied;
-                Unlock();
-                verdict = ui::Verdict::kDeny;
-                decided = true;
-            } else {
-                // **Not a deny.** A gate that timed out or failed says nothing at
-                // all — see the fourth rule in `responder.h`.
-                char note[64];
-                snprintf(note, sizeof note, "no reply - %s", fido::GateName(gate));
-                SetReceipt(note);
-                ESP_LOGW(TAG, "%s: %s (%s)", request.tool_name, fido::GateText(gate),
-                         fido::usb::FaultName(fault));
-                Lock();
-                ++g_status.gate_declined;
-                Unlock();
-                return false;
-            }
-        }
+        verdict = ui::Verdict::kDeny;
+        decided = true;
     }
 
     if (!decided) {
@@ -511,7 +516,7 @@ bool RunGate(const ui::Request &request) {
         return true;
     }
 
-    Decided(taken, verdict, watch.connects);
+    Decided(taken, verdict, watch.connects, signature, signature_length);
     return true;
 }
 
@@ -555,8 +560,10 @@ void GateTask(void *) {
 
 // --- and back onto it ------------------------------------------------------
 
-// Signs one decision and publishes it. On this component's own task, which is the
-// only one with the stack for it.
+// Publishes one decision. **Nothing is signed here** (§10.18): the signature was
+// made inside the security key while a human was touching it, and was verified
+// against the registered public key before the gate returned. What is left is
+// base64, one JSON object and a publish.
 void Answer(const Pending &pending) {
     const char *behavior =
         pending.verdict == ui::Verdict::kAllow ? protocol::kBehaviorAllow : protocol::kBehaviorDeny;
@@ -580,35 +587,30 @@ void Answer(const Pending &pending) {
     // there for when it does not.
     g_signing = true;
 
-    protocol::Decision decision;
-    decision.v = pending.request.v;
-    decision.ts = pending.request.ts;
-    decision.session_id = pending.request.session_id;
-    decision.nonce = pending.request.nonce;
-    decision.tool_name = pending.request.tool_name;
-    decision.input_sha256 = pending.request.input_sha256;
-    decision.behavior = behavior;
-
-    char message[protocol::kSigningBytesMax];
-    const size_t length = protocol::DecisionSigningBytes(decision, message, sizeof message);
-
-    uint8_t signature[crypto::kSignatureSize];
-    char signature_b64[crypto::kSignatureB64Size];
+    // A DER ECDSA P-256 signature is variable-length, so this buffer is sized from
+    // the ceiling rather than from a constant: `kMaxSignatureSize` bytes of DER come
+    // to at most 108 characters of base64.
+    char signature_b64[ctap2::kMaxSignatureSize * 2 + 4];
     char payload[protocol::kDecisionReplyMax];
 
-    const bool signed_ok =
-        length != 0 &&
-        crypto::Sign(reinterpret_cast<const uint8_t *>(message), length, signature) == ESP_OK &&
-        crypto::Base64Encode(signature, sizeof signature, signature_b64, sizeof signature_b64);
+    const bool have_signature =
+        pending.signature_length != 0 &&
+        crypto::Base64Encode(pending.signature, pending.signature_length, signature_b64,
+                             sizeof signature_b64);
 
-    if (!signed_ok || protocol::BuildDecisionReply(pending.request, behavior, protocol::kKeyId,
-                                                   signature_b64, payload, sizeof payload) == 0) {
+    if (!have_signature || protocol::BuildDecisionReply(pending.request, behavior,
+                                                        protocol::kKeyId, signature_b64, payload,
+                                                        sizeof payload) == 0) {
+        // **This should be unreachable**, and it is kept because "should be" is not
+        // a guarantee: a decision reaches this task only through `Decided`, which is
+        // only called after the gate verified a signature. If it ever fires, the
+        // fail-safe is the same as everywhere else — nothing is published.
         Lock();
         ++g_status.sign_failed;
         Unlock();
-        SetReceipt("decided, not sent - could not sign it");
+        SetReceipt("decided, not sent - the signature did not survive the queue");
         g_signing = false;
-        ESP_LOGE(TAG, "could not sign the decision - nothing sent");
+        ESP_LOGE(TAG, "a decided request reached the publisher with no signature - nothing sent");
         return;
     }
 
@@ -664,18 +666,24 @@ void Answer(const Pending &pending) {
 // --- the subscription ------------------------------------------------------
 
 Blocker WhyNot(const nats::Status &bus) {
+    // **The first rule of this component, and the one it broke on its first real
+    // registration** (see `Blocker::kNotEnrolled`): a device that cannot produce an
+    // `allow` must not be on a queue group that takes requests away from devices
+    // that can.
+    //
+    // Enrolment comes first now, and not only in the ordering: since §10.18 the
+    // enrolment *is* the signing key, so "no key" and "not enrolled" are the same
+    // sentence and there is one of them. `crypto::Ready()` is still checked, because
+    // §6's reply verification is Ed25519 and a device that cannot verify a handler's
+    // signature must not register — but it is no longer what signs a verdict.
+    if (!fido::Enrolled()) {
+        return Blocker::kNotEnrolled;
+    }
     if (!crypto::Ready()) {
         return Blocker::kNoKey;
     }
     if (!registration::Registered()) {
         return Blocker::kNotRegistered;
-    }
-    // **The first rule of this component, and the one it broke on its first real
-    // registration** (see `Blocker::kNotEnrolled`): a device that cannot produce
-    // an `allow` must not be on a queue group that takes requests away from
-    // devices that can.
-    if (config::Get().approval.require_key && !fido::Enrolled()) {
-        return Blocker::kNotEnrolled;
     }
     if (bus.state != nats::State::kConnected) {
         return Blocker::kNoBus;

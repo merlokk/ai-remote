@@ -4,9 +4,14 @@
 parts and why rather than copying them.**
 [`../approver-esp32/protocol.md`](../approver-esp32/protocol.md) is the long form
 of §10.5, §10.6 and §10.7, and it is authoritative for everything not
-contradicted below. That is not laziness: `components/nats`, `components/crypto`,
-`components/protocol` and `components/registration` are **copied byte for byte**
-from that folder, and two copies of a rationale is one copy that drifts.
+contradicted below. That is not laziness: `components/nats` and `components/crypto`
+are **the same code**, down to a pair of adapted header comments, and two copies of
+a rationale is one copy that drifts.
+
+**§10.6 is the exception and it is now a large one.** Since §10.18 this device does
+not sign with a key of its own at all, so `components/protocol` and
+`components/registration` have diverged — one constant and one ordering rule — and
+key custody has stopped being a question this board answers.
 
 What follows is what this device does differently, and the one thing that is
 identical for a reason worth restating.
@@ -18,49 +23,66 @@ policy, the `debsahu/espidf-nats` client and the wrapper over it. Same subjects,
 same queue group, same 64 KB ceiling, same reconnect-invalidates-subscriptions
 behaviour.
 
-**One difference, and it is a subtraction: this device subscribes to one subject,
-not three.** The sibling board also watches §9.7's `status` and §9.10's
-`activity` — the two broadcast current values a Claude Code session publishes —
-because it has a screen to put them on. There is no screen here and no readout
-either, so `components/watcher`, both parsers and the `limits` command are gone
-rather than reduced: a subscription whose only purpose was a display is dead
-weight on a device with no display, and it was taking deliveries off the bus task
-to update a struct nobody read.
+**One difference, and it is a subtraction: this device subscribes to exactly one
+subject.** `approvals.*` is the only thing it has any use for — there is no display
+here, so a subscription whose only purpose would be a readout would be deliveries
+taken off the bus task to fill a struct nobody reads.
 
-What is left on `approvals.*` is unchanged, and that is the point — the subject
-this device exists for was never one of the two.
+What is on `approvals.*` is unchanged, and that is the point.
 
-## 10.6 The key
+## 10.6 Key custody: **not this board's problem any more**
 
-Identical, including the part that is a compromise.
+This is the section that stopped being the same as next door.
 
-`components/crypto` derives an Ed25519 key per boot from an eFuse key through the
-HMAC unit **where one is burned**, and from a seed in NVS where one is not.
-**This board is running the fallback**, exactly as the sibling one is, and the
-boot log says so every time:
+The sibling board signs verdicts with an Ed25519 key derived from an eFuse
+secret — or, where no eFuse key is burned, from **a seed in unencrypted NVS**,
+which its own §10.6 calls "strictly worse" and which it is: `esptool read_flash`
+gives up the signing key.
 
-```
-I (2167) crypto: key ready (a saved key, readable from a flash dump), public key fbbYKJnHFGn6dpWFXGcPCfsTO+oHlq0cD32uVNiNR+0=
-W (2167) crypto: the signing key is stored in flash and can be read out of it - this is the fallback, not the design
-```
+**This device has no signing key of its own** (§10.18). What it registers is an
+ARKG-derived P-256 public key; the private half is reconstructed inside the
+security key from a key handle, per signature, and never exists on this chip. So
+the whole eFuse-versus-NVS question is not answered here — it is **absent**:
 
-The sibling folder's §10.6 has the table of what that costs. Nothing about it is
-different here — but there is one thing worth adding, because it changes the
-shape of the risk:
+| | The C6 board | This one |
+|---|---|---|
+| What signs a verdict | an Ed25519 key on the board | the authenticator's ECDSA P-256 |
+| Where the private key rests | eFuse-derived, or a seed in flash | inside the security key |
+| A flash dump yields | the signing key, in the fallback | `ikm`, a seed *public* key and a credential id — none of which can sign |
+| Losing the board | the key is compromised | nothing is; the key walks away in a pocket |
+| Losing the key | — | this device cannot answer until it re-enrols and re-registers |
 
-**On this device, reading the seed out of flash is not enough to approve
-anything.** With `approval.requireKey` on, an attacker holding the Ed25519 seed
-still has to be physically holding the enrolled security key and touching it for
-the specific request (§10.18). That is the whole argument for the gate, and it is
-why the eFuse fallback is a smaller problem here than next door — not because the
-fallback got better, but because it is no longer the only thing standing there.
+**What is in `fido.json` is worth being precise about.** It holds `ikm`, the seed
+public key, a credential id and a key handle. Anyone with all of it can derive this
+device's *public* key — which is on the bus in every registration anyway — and can
+tell that two registrations were the same device. None of it produces a signature.
+§10.18.1 says the same thing where the file is defined.
 
-**A boot self-test runs before anything can sign.** `CONFIG_LIBSODIUM_USE_MBEDTLS_SHA`
-is a seam that has historically produced valid-looking but *wrong* `crypto_sign`
-output (esp-idf#1044), and `keys selftest` on the console re-runs it against a
-vector generated by `lib/crypto.py`. On this chip it passes; that was measured on
-the board, and `sdkconfig.defaults` notes that the *size* comparison behind the
-setting was made on esp32c6 rather than here.
+### What Ed25519 is still doing here
+
+`components/crypto` is still linked and still derives an identity at boot, and
+**that identity now signs nothing**. Two things keep the component:
+
+* **verifying the handler's reply.** §6's server key is Ed25519 by fixed protocol
+  and mbedTLS has no EdDSA at all, so libsodium stays. `crypto::Verify` is static
+  and needs no identity of its own;
+* **base64**, which half this firmware uses.
+
+**The identity itself is vestigial and its removal is owed** — with it goes the
+seed in NVS, which is the last private key on this board. [`status.md`](status.md)
+lists it; nothing depends on it except `keys` on the console and one blocker in the
+responder that can never fire.
+
+**A boot self-test still runs.** `CONFIG_LIBSODIUM_USE_MBEDTLS_SHA` is a seam that
+has historically produced valid-looking but *wrong* `crypto_sign` output
+(esp-idf#1044), and `keys selftest` re-runs it against a vector generated by
+`lib/crypto.py`. On this chip it passes; that was measured on the board.
+
+**And there is a second self-test now, for the half that matters more.** `key
+selftest` runs the ARKG derivation's two curve operations — the ECDH and the point
+addition — against a vector compiled into the firmware, on this silicon, with
+nothing plugged into the OTG port. A failure there means no security key would ever
+have worked (§10.18.2).
 
 ## 10.7 Registration, and the console
 
@@ -76,7 +98,13 @@ argument so there is no way to get the fields out without it having run.
 `key_id` is **`approver-esp32-yubikey`**, and it is a constant in
 `protocol/registration.h` rather than a setting. It is half of what an allowlist
 entry is bound to, and an operator who could change it could make this device
-answer as another one.
+answer as another one. `key_type` is a constant there too, and it is now
+**`p256`**: the key being registered is the ARKG-derived one (§10.18), and nothing
+this device sends may choose an algorithm.
+
+**And `pubkey` comes from the enrolment**, which is the ordering that changed:
+`register` refuses, with a sentence saying so, if nothing is enrolled. There is no
+weaker key to fall back on — there is no key at all.
 
 ### What it looks like when it works
 
@@ -100,11 +128,32 @@ random source with the radio enabled, and `Register` refuses without a bus
 connection — which means a client link, which means the radio. A predictable nonce
 gives away exactly the replay protection the nonce exists for.
 
+### Registration, and the enrolment underneath it
+
+**A registration names one public key, and on this device that key belongs to the
+enrolment.** So a `key enrol` invalidates it: the handler's allowlist entry now
+describes a key nothing holds, and every reply this device signed would be rejected.
+
+`registration.json` therefore records the `pubkey` it was made with, and
+`registration::Registered()` compares it with the enrolment's on every boot and
+every tick. When they differ the device is **not registered** as far as the
+responder is concerned — it stays off `approvals.*` — and the console says which:
+
+```
+> request
+key        A6t4…    (the key enrolled now)
+registered STALE - for AmNq…, not the key enrolled now
+```
+
+The fix is a fresh token and `register` again. There is no way to re-point an
+allowlist entry from the device, and there should not be: the token is what proves
+somebody with access to the handler agreed to this key.
+
 ### The blocker that is new here
 
 The sibling board's responder subscribes when it has a key, a registration and a
-connection. This one needs a fourth thing: **an enrolled security key**, whenever
-`approval.requireKey` is on.
+connection. This one needs the enrolment, because on this device **the enrolment
+is the key**.
 
 That was added after this device's first real registration, when it did exactly
 what the rule forbids — went straight onto `approvals.*` with nothing enrolled and
@@ -132,7 +181,7 @@ away with the key.
 
 Same `esp_console` REPL, same command style, **a different port**: UART0 through
 the CH343P bridge, because the chip's own USB is a host for the security key
-(§10.1, §10.18.3). `commands.md` is the list of what you can type.
+(§10.1, §10.18.4). `commands.md` is the list of what you can type.
 
 The up-arrow is off until you type `term`, and the reason is inherited from the
 sibling board: the probe that would enable line editing runs while the REPL is

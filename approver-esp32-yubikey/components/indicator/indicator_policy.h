@@ -56,10 +56,9 @@ struct Inputs {
     bool registered = false;   // §10.7 — the handler knows this key_id
     bool subscribed = false;   // and the device is on `approvals.*`
 
-    // The gate of §10.18. `fido_required` mirrors `config::Approval::require_key`
-    // and is carried here rather than assumed, so that a development device with
-    // the gate open does not spend its life showing a missing-key colour.
-    bool fido_required = true;
+    // The gate of §10.18. **There is no `fido_required` any more**: the key is not
+    // a policy this device applies, it is where the private key lives, so "no key"
+    // is always a device that cannot answer and the light always says so.
     bool fido_present = false;
     // **Whether this device has ever been introduced to a key** (§10.18), which
     // is a different fact from whether one is plugged in now: an enrolment is

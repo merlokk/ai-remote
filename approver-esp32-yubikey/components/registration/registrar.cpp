@@ -7,6 +7,7 @@
 #include "cJSON.h"
 #include "device_key.h"
 #include "esp_log.h"
+#include "fido.h"
 #include "esp_random.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -30,6 +31,13 @@ struct Record {
     int64_t ts = 0;
     char key_id[protocol::kKeyIdMax + 1] = {};
     char server_key[protocol::kB64_32Max + 1] = {};
+
+    // **Which key was registered** (§10.18.1). The handler's allowlist entry names
+    // one public key, and on this device that key comes from the enrolment — so a
+    // re-enrolment silently invalidates the registration. Recording it here turns
+    // that from "every approval is quietly rejected" into a refusal to subscribe,
+    // with a sentence saying which of the two files to fix.
+    char pubkey[protocol::kPubkeyMax + 1] = {};
 };
 
 Record g_record;
@@ -118,6 +126,7 @@ esp_err_t Save(const Record &record) {
     cJSON_AddNumberToObject(root, "v", 1);
     cJSON_AddStringToObject(root, "key_id", record.key_id);
     cJSON_AddStringToObject(root, "server_key", record.server_key);
+    cJSON_AddStringToObject(root, "pubkey", record.pubkey);
     cJSON_AddNumberToObject(root, "registered_ts", static_cast<double>(record.ts));
     const cJSON_bool printed =
         cJSON_PrintPreallocated(root, buffer, static_cast<int>(sizeof buffer), 1);
@@ -164,6 +173,17 @@ bool Load(Record *out) {
 
     std::snprintf(out->key_id, sizeof out->key_id, "%s", key_id->valuestring);
     std::snprintf(out->server_key, sizeof out->server_key, "%s", server_key->valuestring);
+
+    // The registered public key. **Absent is not tolerated**: a record with no
+    // `pubkey` was written by a build that registered a different kind of key
+    // (§10.18), and treating it as "probably still fine" is exactly the silent
+    // failure this field exists to prevent.
+    const cJSON *pubkey = cJSON_GetObjectItemCaseSensitive(root, "pubkey");
+    if (!cJSON_IsString(pubkey) || std::strlen(pubkey->valuestring) > protocol::kPubkeyMax ||
+        pubkey->valuestring[0] == 0) {
+        return false;
+    }
+    std::snprintf(out->pubkey, sizeof out->pubkey, "%s", pubkey->valuestring);
     const cJSON *ts = cJSON_GetObjectItemCaseSensitive(root, "registered_ts");
     out->ts = cJSON_IsNumber(ts) ? static_cast<int64_t>(ts->valuedouble) : 0;
     out->present = true;
@@ -186,6 +206,14 @@ esp_err_t Init() {
     if (Load(&loaded)) {
         g_record = loaded;
         ESP_LOGI(TAG, "registered as %s, handler key %s", g_record.key_id, g_record.server_key);
+        // The check that costs nothing here and everything later: the registration
+        // names a public key, and the enrolment has to still produce it.
+        if (!Registered()) {
+            ESP_LOGW(TAG,
+                     "the registration is for another key (%s) - this device has enrolled since. "
+                     "Run `register <token>` with a fresh token.",
+                     g_record.pubkey);
+        }
     } else if (storage::Exists(kPath)) {
         // The file is there and is not one. Said out loud rather than treated as
         // "not registered", because those need different things from an operator.
@@ -196,7 +224,28 @@ esp_err_t Init() {
     return ESP_OK;
 }
 
-bool Registered() { return g_record.present; }
+// **Registered means "the handler knows the key this device is holding now"**, and
+// the second half is what makes this more than a file check: the allowlist entry
+// names one public key, and on this device that key belongs to the enrolment. A
+// `key enrol` produces a new one, so the entry becomes worthless the moment it runs.
+//
+// §10.10 rule 5 is why this is enforced rather than logged: a device that subscribed
+// with a stale registration would take requests out of a shared queue group and
+// answer them with signatures the hook rejects — which is worse than not answering,
+// because it is invisible.
+bool Registered() {
+    if (!g_record.present) {
+        return false;
+    }
+    const char *current = fido::PublicKeyBase64();
+    return current[0] != 0 && std::strcmp(current, g_record.pubkey) == 0;
+}
+
+// Was there a registration at all, whatever it names. The console needs the
+// difference so it can say "stale" instead of "none" (`commands.md`).
+bool RegistrationPresent() { return g_record.present; }
+
+const char *RegisteredPublicKey() { return g_record.present ? g_record.pubkey : ""; }
 const char *KeyId() { return g_record.present ? g_record.key_id : ""; }
 const char *ServerKey() { return g_record.present ? g_record.server_key : ""; }
 int64_t RegisteredTs() { return g_record.present ? g_record.ts : 0; }
@@ -232,9 +281,13 @@ esp_err_t Register(const char *token, char *detail, size_t detail_size) {
     // Then the two things about the world somebody can act on, named rather than
     // folded into one failure. A device with no key has nothing to register; a
     // device with no bus has nobody to register with.
-    if (!crypto::Ready()) {
-        std::snprintf(detail, detail_size, "this device has no key to register: %s",
-                      crypto::StateText());
+    // **Enrolment comes first on this device**, which is the one ordering §10.18
+    // changed: the key being registered is derived from a security key, so with
+    // nothing enrolled there is no key to register — not a weaker one, none.
+    if (!fido::Enrolled() || fido::PublicKeyBase64()[0] == 0) {
+        std::snprintf(detail, detail_size,
+                      "this device has no signing key yet - plug a security key in and run "
+                      "`key enrol` first");
         return ESP_ERR_INVALID_STATE;
     }
     if (nats::Get().state != nats::State::kConnected) {
@@ -257,7 +310,9 @@ esp_err_t Register(const char *token, char *detail, size_t detail_size) {
     request.ts = static_cast<int64_t>(std::time(nullptr));
     request.token = token;
     request.key_id = key_id;
-    request.pubkey = crypto::PublicKeyBase64();
+    // The ARKG-derived public key (§10.18), base64 of its compressed point — which
+    // is exactly what `lib/crypto.py` verifies a `key_type: "p256"` signature with.
+    request.pubkey = fido::PublicKeyBase64();
     request.nonce = nonce;
 
     char payload[protocol::kRequestMax];
@@ -334,6 +389,9 @@ esp_err_t Register(const char *token, char *detail, size_t detail_size) {
     std::snprintf(record.key_id, sizeof record.key_id, "%s",
                   reply.key_id[0] != '\0' ? reply.key_id : key_id);
     std::snprintf(record.server_key, sizeof record.server_key, "%s", reply.server_key);
+    // **The key this registration is for**, recorded at the moment it was accepted.
+    // Read back at every boot and compared with the enrolment's; see `Registered`.
+    std::snprintf(record.pubkey, sizeof record.pubkey, "%s", request.pubkey);
 
     err = Save(record);
     if (err != ESP_OK) {

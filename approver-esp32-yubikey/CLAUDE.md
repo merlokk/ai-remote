@@ -16,37 +16,43 @@ one has no glass, and it does not try to replace it with a button — a button i
 thing anybody in the room can press, and firmware that had been tampered with
 could press it in software.
 
-Instead the *permission to sign* comes off a **security key on the OTG port**.
-Before a single byte of a verdict is signed, the device asks a FIDO
-authenticator for an assertion over *the exact bytes it is about to sign*, and
-the key will not answer until somebody touches it. Three properties fall out of
-that, and they are the whole reason this folder exists next to the other one:
+Instead **the signature itself is made inside a security key on the OTG port**.
+The device derives an ARKG public key from the authenticator's seed key (§8's
+`previewSign` flow, the same one `approver/responder_yubikey.py` uses), registers
+*that* through §6, and from then on every verdict is an ECDSA P-256 signature the
+key produces — and it will not produce one until somebody touches it. Four
+properties fall out, and they are the whole reason this folder exists next to the
+other one:
 
-* **a touch cannot be replayed onto a different request** — the challenge is the
-  request's own session, nonce, tool, input hash and timestamp;
-* **the device alone cannot approve anything** — compromised firmware with the
-  Ed25519 seed still needs the physical key present and a finger on it;
-* **the key alone cannot approve anything either** — it has never heard of NATS.
+* **a touch cannot be replayed onto a different request** — what is signed is the
+  request's own session, nonce, tool, input hash, verdict and timestamp;
+* **the device alone cannot approve anything, literally** — there is no signing
+  key in this board's flash to steal. The private half is reconstructed inside the
+  authenticator from a key handle and never leaves it;
+* **the key alone cannot approve anything either** — it has never heard of NATS,
+  and the derived key means nothing without the `ikm` this device holds;
+* **a `deny` costs a touch too** — the device cannot put its name to one either.
+  That is the one place this design is more awkward than the button next door, and
+  §10.18.5 says so rather than hiding it.
 
 Both halves, or nothing. That is what a second factor is, and it is what the
 single button on the sibling board does not have.
 
-**And nothing here shows anything.** There is no panel, so there is also no
-`approvals` card, no clock face, and — the one that is easy to assume is still
-here because the subjects exist — **no readout of what a Claude Code session is
-spending or doing**: §9.7's `status` and §9.10's `activity` are watched by the
-sibling board and by [`approver-web/`](../approver-web/CLAUDE.md), and this device
-does not subscribe to either. It has one output, and its whole vocabulary is
-§10.17's fourteen states.
+**Nothing on the host side knows any of this.** `hook.py`, `protocol.py` and
+`registration_handler.py` are unchanged: a `key_type: "p256"` responder is one
+`lib/crypto.py` has verified since §8.7, and this device is indistinguishable from
+`responder_yubikey.py` to everything that checks it.
 
-**There is also no clock, and that follows from the same sentence.** No RTC — the
-board has no I²C bus for one (§10.13) — and no SNTP either, because a time that
-is only right once a server has been asked, on a device with nowhere to show it,
-is machinery with no consumer. §7's `ts` is echoed from the request and never
-re-derived, and every interval this firmware measures is monotonic. The same
-reasoning removes the accelerometer, the codec and the touch panel from every list
-in this folder: they are not parts this firmware declines to use, they are parts
-that are not there.
+**And nothing here shows anything.** There is no display of any kind, so there is
+nothing to render a request, a session's spending or a session's activity on, and
+this device subscribes to no subject but `approvals.*`. It has one output, and its
+whole vocabulary is §10.17's fifteen states.
+
+**There is also no clock**, for the same reason: no RTC — the board has no I²C bus
+for one (§10.13) — and no SNTP, because a time that is only right once a server has
+been asked, on a device with nowhere to show it, is machinery with no consumer.
+§7's `ts` is echoed from the request and never re-derived, and every interval this
+firmware measures is monotonic.
 
 ## The documents
 
@@ -67,9 +73,9 @@ status summary below, whose long form is [`status.md`](status.md).
 
 | File | What it owns |
 |------|--------------|
-| [`hardware.md`](hardware.md) | **§10.1** the board, the two USB-C sockets that are not interchangeable, and the one button that is also a boot strap; **§10.13** what is not on this board at all — no I²C bus and so no clock, no PMIC, no accelerometer and no codec; no panel and no touch — and what each absence costs |
+| [`hardware.md`](hardware.md) | **§10.1** the board, the two USB-C sockets that are not interchangeable, and the one button that is also a boot strap; **§10.13** what is not on this board at all — no I²C bus and so no clock, no PMIC, no accelerometer and no codec; no display and no touch — and what each absence costs |
 | [`led.md`](led.md) | **§10.17** the one output: the palette, the ranking behind it, and the UART trick that drives a WS2812 with no extra component. The whole user interface of this device is in this file |
-| [`key.md`](key.md) | **§10.18** the security key: what it is and what it is not, enrolment as a separate step from registration, the four checks an assertion has to pass, and why there is no PIN |
+| [`key.md`](key.md) | **§10.18** the security key: that it is the *signer*, the ARKG derivation that gives it a key to sign with, enrolment and what it costs the registration, the five checks an answer has to pass, why a deny needs a touch, and why there is no PIN |
 | [`protocol.md`](protocol.md) | **§10.5** the NATS client and the subset of it this device uses; **§10.6** key custody, as designed and as shipped; **§10.7** registration, and the console it is driven from |
 | [`firmware.md`](firmware.md) | **§10.9** Wi-Fi, the radio and the manager above it; **§10.14** the language, no heap, and the layer that comes first; **§10.15** where the configuration lives and the button that puts it back |
 | [`tests.md`](tests.md) | **§10.11** the three tiers — host, parity vectors, device — what each pins, and what is still owed |
@@ -77,36 +83,54 @@ status summary below, whose long form is [`status.md`](status.md).
 | [`commands.md`](commands.md) | every console command the device answers and what each one does. Design documents describe why; that one describes what you can type |
 | [`status.md`](status.md) | the row-by-row state of every piece — what runs on the board, what is written and untried, what is still a design. No decisions in it, and the fastest-moving file here |
 | [`working-with-code.md`](working-with-code.md) | the mechanics: where ESP-IDF is installed on this machine, how to get a shell that has `idf.py`, which COM port is which, and how to drive the console from a script |
+| [`README.md`](README.md) | the short form, for somebody arriving rather than working here: what the device is, the four hardware facts, build and flash, first-time setup and what the light means. **It owns no section and decides nothing** — every line in it is a summary of one of the files above, which stay authoritative |
 
-## Status: a working responder with the gate shut
+## Status: a working responder with no signing key yet
 
 **The device is real and the loop is closed up to the key.** It boots, mounts its
-filesystem, derives an Ed25519 identity and self-tests it, joins Wi-Fi, connects
-to the NATS server on the LAN, registers with the handler over §6, and takes its place on `approvals.*` in the `approvers` queue group. A
-request put on it appears as a white flashing light, waits for a fingertip,
-expires with **no reply** if none comes, and the counters say which of those happened. All of that has been done on
-the board on this desk, against the real handler and the real NATS server.
+filesystem, joins Wi-Fi, connects to the NATS server on the LAN, and — in the
+shape it had before §10.18 changed the signer — registered with the handler over
+§6 and took its place on `approvals.*` in the `approvers` queue group. A request
+put on it appears as a white flashing light, waits for a fingertip, expires with
+**no reply** if none comes, and the counters say which of those happened. All of
+that has been done on the board on this desk, against the real handler and the
+real NATS server.
 
-**What has not been done on hardware is the key itself.** No FIDO authenticator
-has been plugged into the OTG port yet, so §10.18's three layers — CTAPHID
-framing, CBOR, CTAP2 — are **written, compiled, host-tested against hand-built
-frames, and never once spoken to a real device.** [`status.md`](status.md) is row
-by row about which is which, and it is the file to read before believing anything
-in this paragraph is more finished than it says.
+**What has not been done on hardware is the key itself, and that is now most of
+the design.** No FIDO authenticator has been plugged into the OTG port, so
+§10.18's four layers — CTAPHID framing, CBOR, CTAP2 with `previewSign`, and the
+ARKG derivation — are **written, compiled, host-tested against numbers Python
+produced, and never once spoken to a real device.** The derivation's two
+curve operations have not been run on the chip either: `key selftest` is the
+command that does it, and it has not been typed on the board yet.
+[`status.md`](status.md) is row by row about which is which, and it is the file to
+read before believing anything in this paragraph is more finished than it says.
 
 Because of that the device is, right now, in the state its own light calls
 `not-enrolled` — cyan, flashing — and **it is deliberately not on `approvals.*`
-while it is**: a device that cannot produce an `allow` must not take requests out
-of a queue group away from responders that can (§6's "Multiple clients", and
-`responder::Blocker::kNotEnrolled` is where that is enforced). That rule was
-added after the first registration, when the device did exactly that.
+while it is**: with nothing enrolled there is no signing key at all, so it must
+not take requests out of a queue group away from responders that can answer them
+(§6's "Multiple clients", and `responder::Blocker::kNotEnrolled` is where that is
+enforced). That rule was added after the first registration, when the device did
+exactly that.
 
-Below the key, what runs: the WS2812 on GPIO48 driven off a UART (§10.17.1), a
-fourteen-state ranking that decides what a single emitter says about a device
+**And the registration made before §10.18 is stale by construction** — it names an
+Ed25519 key this firmware no longer signs with. The device says so at boot and the
+console says `registered STALE`; the fix is `key enrol` and then a fresh token.
+
+Below the key, what runs: the WS2812 on GPIO48 driven off a UART (§10.17.3), a
+fifteen-state ranking that decides what a single emitter says about a device
 that is several things at once (§10.17), the BOOT button as a deny, the settings
 file on SPIFFS with the restore that puts it back, the Wi-Fi radio with a manager
 above it, the bus, and a console on the CH343P bridge with a command per piece of
 it ([`commands.md`](commands.md) is the list).
+
+And one thing that is **written and not yet needed**: `components/crypto` still
+derives an Ed25519 identity at boot, which since §10.18 signs nothing. What it is
+still for is verifying the *handler's* reply (§6's server key is Ed25519 by fixed
+protocol) and base64. Removing the identity — and with it the seed in unencrypted
+NVS that §10.6 called strictly worse — is owed work, and [`status.md`](status.md)
+lists it as such.
 
 Read §10.3 before anything else: it is the one part of this that changes
 something outside this folder.
@@ -121,19 +145,23 @@ it:
 | | Value |
 |---|---|
 | `key_id` | `approver-esp32-yubikey` (its own — **not** shared with `approver-esp32`) |
-| `key_type` | `ed25519` (§10.6 explains why, and what it costs) |
+| `key_type` | `p256` — an ARKG-derived key, signed inside the security key (§10.18) |
 | Subscribes | `approvals.*`, queue group `approvers` |
 | Registers over | `registrations`, §6, on the device (§10.7) |
 | `reason` | always `""` — no keyboard, same call `responder_yubikey.py` makes (§8.7) |
 | `updated_input` | **never sent** |
 
-**The verdict's signature is the device's Ed25519 key, not the security key's**,
-and that is worth stating here rather than only in §10.18 because it is the thing
-somebody will assume otherwise. Swapping the protocol's signature to something a
-FIDO key emits would have meant a second scheme in `crypto.py`, a second
-registration path, and an ARKG flow (§8) on a microcontroller — for a property
-this design already has by other means. What the security key produces is
-**permission to use** the device's key, bound to one request.
+**The verdict's signature is the security key's, and the key `key_id` names is
+derived from it** (§10.18). What §6 registers is the compressed P-256 point of an
+ARKG-derived key; what §7 carries is an ECDSA signature the authenticator made
+while somebody was touching it. `lib/crypto.py` has verified that pair since §8.7,
+so the handler and the hook needed no change — which is the test this design had
+to pass, and root §2's rule that the five responders look the same from outside.
+
+Two consequences worth having here rather than only in §10.18: **the enrolment is
+the identity**, so a re-enrolment invalidates the registration and needs a fresh
+token; and **there is no key on this board to steal**, because the private half
+lives inside the authenticator.
 
 `key_id` is a **constant in `protocol/registration.h`**, not a setting. It is
 half of what an allowlist entry is bound to, and an operator who could change it
@@ -171,26 +199,40 @@ sibling board keeps, plus one that is this device's own.
 2. **A timeout is not a deny.** They are different outcomes and they are counted
    apart. A deny is a statement somebody made; silence is what a device says when
    nobody made one. `responder::Status` has `gate_declined` and `button_denied`
-   as separate numbers for exactly this reason.
+   as separate numbers for exactly this reason — and since §10.18 a deny has to be
+   *signed* by the key, so the tap that chooses one and the touch that makes it
+   real are two events and only the second produces a reply.
 
 3. **Never publish into a dead inbox.** The connection generation is recorded when
    a decision is made and checked before the reply goes out. A reply into an inbox
    that no longer exists is worse than silence, because it looks like an answer.
 
-4. **Nothing that can reach a verdict may be reachable from the network.** There is
-   no web server on this device and no console over the bus. The two ways to
-   produce an `allow` are a fingertip on a security key and — only with
-   `approval.requireKey` explicitly off — a two-second hold on the button.
+4. **Nothing that can reach a verdict may be reachable from the network.** There
+   is no web server on this device and no console over the bus. And since §10.18
+   there is exactly **one** way to produce an `allow`: a fingertip on a security
+   key. `approval.requireKey` — the setting that used to open a second way — was
+   deleted with the signing key it belonged to (§10.18.6), because a device that
+   holds no private key cannot be told to approve without one.
 
 5. **The device does not subscribe unless it could actually answer.** §6's queue
    group means each request reaches exactly *one* responder, so a device that
    subscribed while unable to sign would be taking requests away from responders
-   that can and answering them with silence. Key, registration, **enrolment**, and
-   a connection — or it is not on the subject at all.
+   that can and answering them with silence. Enrolment, a registration **that names
+   the key currently enrolled**, and a connection — or it is not on the subject at
+   all.
 
-6. **The key's answer is never inferred, and neither is its absence.** An assertion
+   The middle clause is §10.18.1's: the registered key comes from the enrolment, so
+   a `key enrol` makes the handler's allowlist entry worthless. `registration.json`
+   records which key it was made for and the two are compared at every boot, because
+   a device answering with signatures the hook rejects is worse than one not
+   answering — it is invisible.
+
+6. **The key's answer is never inferred, and neither is its absence.** An answer
    that does not verify is not a `deny` and is not an `allow`: it is a
    `bad-signature`, the loudest outcome this firmware has, and it produces no
-   reply. §10.18 has the four checks and why each one is load-bearing.
+   reply. §10.18.3 has the five checks and why each one is load-bearing — including
+   the last, where the device verifies the key's signature against its own
+   registered public key **before** publishing it, so a mismatch is one log line
+   rather than an approval that silently never lands.
 
 A change that softens any of these is a change to this file first.

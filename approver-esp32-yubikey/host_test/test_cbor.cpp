@@ -1,4 +1,4 @@
-// The CBOR subset (CLAUDE.md §10.18.2), and the reason it is worth a test file
+// The CBOR subset (CLAUDE.md §10.18.4), and the reason it is worth a test file
 // of its own: **every length in a CTAP2 response is a number the key chose.**
 //
 // A parser fed by a device on the other end of a cable is the same class of

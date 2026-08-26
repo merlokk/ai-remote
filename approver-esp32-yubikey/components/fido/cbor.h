@@ -1,6 +1,6 @@
 #pragma once
 
-// **As much CBOR as CTAP2 needs and not one byte more** (CLAUDE.md §10.18.2).
+// **As much CBOR as CTAP2 needs and not one byte more** (CLAUDE.md §10.18.4).
 //
 // CTAP2's wire format is CBOR (RFC 8949) in its canonical form. A general CBOR
 // library is a dependency root §1 would have to sign off; what this device

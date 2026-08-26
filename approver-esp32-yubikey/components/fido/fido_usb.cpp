@@ -1,4 +1,4 @@
-// The USB host half of §10.18.3: two tasks, one claimed interface, and a
+// The USB host half of §10.18.4: two tasks, one claimed interface, and a
 // blocking CTAPHID exchange on top of two interrupt endpoints.
 //
 // The framing is `ctaphid_frames.h` and is tested without a board; what is here
@@ -263,7 +263,7 @@ void OpenDevice(uint8_t address) {
     runtime.ep_in = ep_in;
     runtime.ep_out = ep_out;
 
-    // §10.18.3: the one allocation this component makes, at a device boundary,
+    // §10.18.4: the one allocation this component makes, at a device boundary,
     // freed when the key is unplugged. Never per exchange.
     if (usb_host_transfer_alloc(ctaphid::kPacketSize, 0, &runtime.transfer_in) != ESP_OK ||
         usb_host_transfer_alloc(ctaphid::kPacketSize, 0, &runtime.transfer_out) != ESP_OK) {

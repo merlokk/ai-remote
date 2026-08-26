@@ -307,7 +307,7 @@ void test_buttons_an_index_that_is_not_there_answers_safely(void) {
 
 void test_buttons_init_adopts_a_button_that_is_already_down(void) {
     // **§10.15's actual scenario**, and the reason `Init` reads the pin instead
-    // of assuming released: the finger is on `KEY` before the board powers on,
+    // of assuming released: the finger is on `BOOT` before the board powers on,
     // so there is no edge to wait for and no window to sit out. A driver that
     // started from "released" would need 25 ms of held button before it agreed
     // anything was pressed, and the restore check runs before that.

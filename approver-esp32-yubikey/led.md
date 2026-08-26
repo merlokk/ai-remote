@@ -4,15 +4,14 @@
 reduced screen — a different kind of thing, and this document is the design
 rather than a list of colours.
 
-The sibling board answers "what is going on" with seven screens, each of which can
-show several facts at once. One emitter can show exactly one, so the question has
-to be answered by **ranking**: at any moment a handful of things are true about
-this device — no internet, not registered, a request waiting — and precisely one
-of them gets the light.
+A display answers "what is going on" with several facts at once. One emitter can
+show exactly one, so the question has to be answered by **ranking**: at any moment
+a handful of things are true about this device — no internet, not registered, a
+request waiting — and precisely one of them gets the light.
 
 That ranking is `components/indicator/indicator_policy.cpp`, it has no ESP-IDF in
 it, and §10.11's host tier runs every branch of it. That is deliberate: a
-fourteen-way decision that could only be checked by unplugging things and watching
+fifteen-way decision that could only be checked by unplugging things and watching
 a desk would be a decision nobody ever checked.
 
 ## 10.17.1 What each state looks like
@@ -29,12 +28,12 @@ built around them.
 | `pending` | **white** | fast (200/200 ms) | full | **a request is waiting for you** |
 | `fault` | red | fast | full | something that should work did not |
 | `no-storage` | **yellow** | fast | full | the filesystem would not mount |
-| `no-device-key` | **yellow** | fast | full | no Ed25519 identity |
+| `no-device-key` | **yellow** | fast | full | libsodium is not usable — §6's reply could not be verified |
 | `no-wifi` | **yellow** | fast | full | no link |
 | `no-internet` | **yellow** | fast | full | associated, and nothing answers |
 | `no-bus` | **yellow** | fast | full | no NATS connection |
 | `not-registered` | magenta | 500/500 ms | full | run `register <token>` |
-| `not-enrolled` | cyan | fast | full | run `key enrol` |
+| `not-enrolled` | cyan | fast | full | **no signing key at all** — run `key enrol` (§10.18) |
 | `no-fido-key` | cyan | 500/500 ms | idle | plug a key into the OTG port |
 | `watching` | cyan | beacon (100 ms / 2 s) | idle | connected, not yet on `approvals.*` |
 | `ready` | **green** | breathe (~9 s) | idle | nothing to do, and able to do it |
@@ -118,59 +117,6 @@ cannot see the effect of is one you cannot judge. **That it took four sittings t
 settle them is the argument for their being file fields rather than constants**: a
 brightness cannot be chosen on paper.
 
-## 10.17.5 Why 15 and 7 are not as dim as they sound
-
-An observation from the desk, worth writing down because it will otherwise be
-re-discovered as a bug: **turning this LED up stops doing anything at about 20 %,
-and the range from there to 100 is nearly wasted.**
-
-Two things cause it and they compound.
-
-**1. `Scale` is linear in duty cycle and the eye is not.** Perceived lightness
-goes as roughly the cube root of radiated power — CIE L\* is `116·Y^(1/3) − 16` —
-so the numbers this device takes and the brightness a person sees pull apart
-badly:
-
-| duty (`config set led`) | 2 % | 5 % | 7 % | 10 % | 15 % | 20 % | 30 % | 50 % | 70 % | 100 % |
-|---|---|---|---|---|---|---|---|---|---|---|
-| **seen** (CIE L\*, 0–100) | 15.5 | 26.7 | 31.8 | 37.8 | 45.6 | 51.8 | 61.7 | 76.1 | 87.0 | 100 |
-
-**Half of everything a person can see is in the bottom fifth of the numbers.**
-20 % already looks like slightly over half of full; the remaining 80 % of the
-range buys the other 48 points, and the last half of it — 50 to 100 — buys 24.
-
-So 15 % is not "dim". It is a bit under half of what this emitter can look like,
-and 7 % is a bit over two thirds of *that* rather than the one half the
-arithmetic suggests.
-
-**2. Above roughly a fifth the colour goes.** This is a bare RGB die with no
-diffuser, at arm's length. Past that point the eye reads a point source that
-bright as glare rather than as a hue, and a saturated colour turns into a white
-dot with a tint. On a device where **which colour it is** *is* the interface
-(§10.17.2), losing hue discrimination costs more than the extra light is worth.
-
-Between them, the useful range on this part is about **5 to 25**, and both
-defaults sit inside it.
-
-### Why the scale is left linear anyway
-
-The obvious fix is to gamma-correct `Scale`, so that `config set led 50` means
-"half as bright as it looks at 100" rather than "half the duty cycle". It is
-deliberately not done, for the reason the function's own comment states: **this is
-the operator's ceiling, and a ceiling that is not proportional to the number typed
-is a ceiling nobody can reason about** — a `led` readout saying `50%` next to an
-emitter running at 12 % duty is a readout that has to be explained every time.
-
-The perceptual curve *is* applied, in the one place it belongs: `kBreathRamp`,
-the sixty-step Weber–Fechner table the breath walks (§10.17.3). There it is not a
-setting anybody reads back — it is the shape of an animation, and a linear ramp
-there looks like a lamp that snaps on and then does nothing for most of its
-travel, which is exactly the effect this section is about.
-
-If the numbers ever want to mean perceived brightness instead, the change is one
-line in `Scale` plus a re-derivation of both defaults — and this section is the
-note to read first.
-
 ## 10.17.3 The wire: a WS2812 driven from a UART
 
 **This is the house firmware's trick, not a new idea here** — it comes from
@@ -244,3 +190,56 @@ second wasted.
 comparison — `Animator::Set` is a no-op when nothing moved, which is why it takes
 a clock — and it buys the case where a verdict flash has just expired and the
 state underneath has to be put back without anything having changed.
+
+## 10.17.5 Why 15 and 7 are not as dim as they sound
+
+An observation from the desk, worth writing down because it will otherwise be
+re-discovered as a bug: **turning this LED up stops doing anything at about 20 %,
+and the range from there to 100 is nearly wasted.**
+
+Two things cause it and they compound.
+
+**1. `Scale` is linear in duty cycle and the eye is not.** Perceived lightness
+goes as roughly the cube root of radiated power — CIE L\* is `116·Y^(1/3) − 16` —
+so the numbers this device takes and the brightness a person sees pull apart
+badly:
+
+| duty (`config set led`) | 2 % | 5 % | 7 % | 10 % | 15 % | 20 % | 30 % | 50 % | 70 % | 100 % |
+|---|---|---|---|---|---|---|---|---|---|---|
+| **seen** (CIE L\*, 0–100) | 15.5 | 26.7 | 31.8 | 37.8 | 45.6 | 51.8 | 61.7 | 76.1 | 87.0 | 100 |
+
+**Half of everything a person can see is in the bottom fifth of the numbers.**
+20 % already looks like slightly over half of full; the remaining 80 % of the
+range buys the other 48 points, and the last half of it — 50 to 100 — buys 24.
+
+So 15 % is not "dim". It is a bit under half of what this emitter can look like,
+and 7 % is a bit over two thirds of *that* rather than the one half the
+arithmetic suggests.
+
+**2. Above roughly a fifth the colour goes.** This is a bare RGB die with no
+diffuser, at arm's length. Past that point the eye reads a point source that
+bright as glare rather than as a hue, and a saturated colour turns into a white
+dot with a tint. On a device where **which colour it is** *is* the interface
+(§10.17.2), losing hue discrimination costs more than the extra light is worth.
+
+Between them, the useful range on this part is about **5 to 25**, and both
+defaults sit inside it.
+
+### Why the scale is left linear anyway
+
+The obvious fix is to gamma-correct `Scale`, so that `config set led 50` means
+"half as bright as it looks at 100" rather than "half the duty cycle". It is
+deliberately not done, for the reason the function's own comment states: **this is
+the operator's ceiling, and a ceiling that is not proportional to the number typed
+is a ceiling nobody can reason about** — a `led` readout saying `50%` next to an
+emitter running at 12 % duty is a readout that has to be explained every time.
+
+The perceptual curve *is* applied, in the one place it belongs: `kBreathRamp`,
+the sixty-step Weber–Fechner table the breath walks (§10.17.3). There it is not a
+setting anybody reads back — it is the shape of an animation, and a linear ramp
+there looks like a lamp that snaps on and then does nothing for most of its
+travel, which is exactly the effect this section is about.
+
+If the numbers ever want to mean perceived brightness instead, the change is one
+line in `Scale` plus a re-derivation of both defaults — and this section is the
+note to read first.

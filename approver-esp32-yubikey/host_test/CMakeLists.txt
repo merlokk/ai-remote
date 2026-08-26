@@ -109,10 +109,12 @@ add_executable(host_test
     test_indicator.cpp
     test_buttons.cpp
 
-    # The key on the OTG port, bottom up: framing, then CBOR, then CTAP2.
+    # The key on the OTG port, bottom up: framing, then CBOR, then CTAP2, and
+    # then the derivation that decides which key the verdict is signed with.
     test_ctaphid.cpp
     test_cbor.cpp
     test_ctap2.cpp
+    test_arkg.cpp
 
     test_request_card.cpp
     test_config.cpp
@@ -148,6 +150,14 @@ add_executable(host_test
     ../components/fido/ctaphid_frames.cpp
     ../components/fido/cbor.cpp
     ../components/fido/ctap2.cpp
+    # **The ARKG derivation** (§10.18): the arithmetic that decides which public
+    # key this device registers, and therefore whether anything it signs can ever
+    # be verified. The curve arrives through a function-pointer backend, so all of
+    # it compiles here; the PSA backend next to it is device-only.
+    ../components/arkg/arkg.cpp
+    # SHA-256 for the tests only -- `sha256_ref.h` says why it is not a fake and
+    # why nothing on the device links it.
+    sha256_ref.c
 
     ../components/ui/request_card.cpp
     ../components/ui/age_text.cpp
@@ -185,6 +195,7 @@ target_include_directories(host_test PRIVATE
     ../components/led
     ../components/indicator
     ../components/fido
+    ../components/arkg
     ../components/ui
     ../components/config
     ../components/buttons

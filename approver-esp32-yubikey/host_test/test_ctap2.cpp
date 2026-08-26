@@ -1,4 +1,4 @@
-// CTAP2 requests and responses (CLAUDE.md §10.18.2).
+// CTAP2 requests and responses (CLAUDE.md §10.18.4).
 //
 // Two halves, and the second one is where the security is:
 //

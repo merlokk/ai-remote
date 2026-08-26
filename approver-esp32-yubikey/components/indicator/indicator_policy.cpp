@@ -57,10 +57,10 @@ State Decide(const Inputs &in) {
     }
     // Enrolment first, because it is the one with a command that fixes it and
     // the one that keeps this device off `approvals.*` entirely.
-    if (in.fido_required && !in.fido_enrolled) {
+    if (!in.fido_enrolled) {
         return State::kNotEnrolled;
     }
-    if (in.fido_required && !in.fido_present) {
+    if (!in.fido_present) {
         return State::kNoFidoKey;
     }
     // Registered, connected, keyed — and still not on `approvals.*`. Rare and

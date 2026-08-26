@@ -47,7 +47,6 @@
         "idleBrightness": 7
     },
     "approval": {
-        "requireKey": true,
         "touchTimeoutSeconds": 30,
         "denyButton": true
     }

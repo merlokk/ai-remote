@@ -3,11 +3,10 @@
 // **Where the bus is** — one string in `config.json` turned into a host and a
 // port (CLAUDE.md §10.3, §10.15).
 //
-// It is here rather than in `config` for the reason `tz::Lookup` is *not*:
-// `nats.url` is not a fact about a file, it is the one format this component
-// defines. What the two share is the shape §10.15 argues for — text in the
-// file, the parsed form at the driver, and something pure between them that a
-// host test can hold to account.
+// It is here rather than in `config` because `nats.url` is not a fact about a
+// file: it is the one format this component defines. The shape is the one §10.15
+// argues for — text in the file, the parsed form at the driver, and something
+// pure between them that a host test can hold to account.
 //
 // **This header includes `<cstdint>`/`<cstddef>` and nothing else**, which is
 // what puts it under Unity with no board (§10.11) next to `link_policy.h`.

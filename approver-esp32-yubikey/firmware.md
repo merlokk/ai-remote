@@ -77,16 +77,13 @@ convention:
   It has never heard of Wi-Fi. §10.17.4 has the argument, and the test is that
   deleting `responder` leaves a working indicator.
 
-### 10.14.3 The bus that is not here
+### 10.14.3 The one contended resource
 
-The sibling folder's §10.14.3 is about leasing an I²C bus between five chips and
-the three driver bugs that found. **There is no I²C bus on this board and no chip
-that would want one** (§10.13), so that section has no counterpart here — no
-lease, no epoch bookkeeping, and none of it in the host tier's fake either, which
-is a fifth of the size that board's is. That is most of why this firmware is a
-third of the size.
+**There is no I²C bus on this board and no chip that would want one** (§10.13), so
+there is no bus lease here and no epoch bookkeeping in the host tier's fake — which
+is most of why both are small.
 
-What replaced it as the one shared, contended resource is the **USB port**:
+The one shared, contended resource is the **USB port**:
 `fido::usb::Exchange` takes a mutex for the length of one CTAPHID conversation,
 because the console and the responder can both want the key and a second command
 interleaved into a conversation is a wedged channel.
@@ -120,13 +117,20 @@ all unchanged:
 
 ```json
 "led":      { "brightness": 15, "idleBrightness": 7 },
-"approval": { "requireKey": true, "touchTimeoutSeconds": 30, "denyButton": true }
+"approval": { "touchTimeoutSeconds": 30, "denyButton": true }
 ```
 
-and what is *gone*: `display`, `touch`, `audio` (no such hardware), `web` (no web
-server here) and **`time`** — `zone`, `posix`, `sntp` and `syncHours`, which
-configured a clock this board does not have and cannot show (§10.13). §10.17.2 and
-§10.18.4 argue the two that replaced them.
+and what has **no section at all**: there are no `display`, `touch` or `audio`
+fields (no such hardware), no `web` one (no server here), and no `time` one — there
+is no clock on this board and nowhere to show one (§10.13). §10.17.2 and §10.18.6
+argue the two above.
+
+**`requireKey` was here and is gone**, which is worth a line because a config file
+left over from before will still have it. It switched the security key off and let
+the button approve alone; since §10.18 the private key lives inside the
+authenticator, so there is no such mode and nothing for the field to switch. A file
+that still carries it loads fine, the field is ignored, and the next write drops
+it — §10.18.6 has the argument and a host test pins the behaviour.
 
 ### The restore, and the one place this board differs
 
@@ -143,10 +147,10 @@ If the pin is high when `app_main` looks, nothing happens and the boot costs one
 GPIO read — which is every ordinary boot. If it is low, the LED goes **white,
 solid** and the five-second hold begins.
 
-That last part is the thing this board has that the sibling's does not: its five
-seconds are *blind*, because there is no screen and no sound that early. Here the
-LED is already up before the window opens, so the hold has feedback. It is the one
-place where having a single emitter instead of a panel is an improvement.
+**The white is the part worth having**: the LED is up before the window opens, so
+a five-second hold has feedback rather than being blind. It is the one place where
+having a single emitter and nothing else is an improvement — a display would not
+be initialised this early, and there is no sound on this board at all.
 
 The restore still runs **before** `config::Init()` parses the file, because the
 failure it exists for is a `config.json` that stops the device booting, and a

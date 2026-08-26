@@ -1,6 +1,6 @@
 #pragma once
 
-// **The cable** (CLAUDE.md §10.18.3): the ESP32-S3's own USB peripheral running
+// **The cable** (CLAUDE.md §10.18.4): the ESP32-S3's own USB peripheral running
 // as a *host*, one FIDO key on the other end of it, and a CTAPHID exchange that
 // blocks until the key answers or the operator gives up.
 //

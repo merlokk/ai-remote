@@ -1,36 +1,24 @@
 #pragma once
 
-// The request card — the screen the device exists for (CLAUDE.md §10.8.4), and
-// the part of it that decides rather than draws.
+// The request card — the queue the device exists for (CLAUDE.md §10.2), and the
+// part of it that decides rather than shows.
 //
-// **This file includes `<cstdint>` and `<cstddef>` and nothing else.** On the C6
-// board of the sibling folder it also included `navigator.h`, for one constant;
-// this board has no screens to navigate, so the constant is stated here — see
-// `kMaxPending` below. That is the only difference between the two copies of this
-// file, and it is written down because everything else in it must stay identical:
-// `components/protocol` is shared with that folder byte for byte, and a struct
-// that drifts is a signature that stops verifying.
+// **This file includes `<cstdint>` and `<cstddef>` and nothing else**, so it runs
+// under Unity with no board and no fake (§10.11) — and it is the file where that
+// matters most, because every rule below is a rule about not approving something
+// by accident.
 //
-// The original note, which still applies to the second half of it:
-//
-// **It included `<cstdint>`, `<cstddef>` and the navigator**, the last of
-// which includes nothing itself. So this is the seventh subject in the firmware
-// that runs under Unity with no board and no fake (§10.11) — and it is the one
-// where that matters most, because every rule below is a rule about not
-// approving something by accident.
-//
-// It is logic rather than library (§10.14.2), like `navigator.h` next to it, and
-// unlike the navigator it **does** know what an approval is: §7's fields are in
-// `Request` verbatim, because the whole point of this object is to hold one
-// until a human has answered it.
+// It is logic rather than library (§10.14.2), and it **does** know what an
+// approval is: §7's fields are in `Request` verbatim, because the whole point of
+// this object is to hold one until a human has answered it.
 //
 // The rules it enforces, and each is somebody's sentence made executable:
 //
 //   * **no press, no verdict** (§10.10). There is no timer that answers, no
 //     default, and no third way out. `Tick` can make a card *disappear*; it can
 //     never make one say `allow`;
-//   * **a card that arrives under a finger is not a press** (§10.8.1's queued
-//     touch, in the shape a button has). A press counts only if it *began* at
+//   * **a card that arrives under a finger is not a press** — a queued gesture,
+//     in the shape a button has. A press counts only if it *began* at
 //     least `kPressGuardMs` after the card appeared — one comparison, and it
 //     covers both "the finger was already down" and "the card has only just
 //     arrived", which are the same mistake seen from two ends;
@@ -38,9 +26,9 @@
 //     that timed out leaves a receipt reading as a timeout, not as a deny — the
 //     hook has already fallen back to its own prompt and the operator needs to
 //     know that happened;
-//   * **a `tool_input` that does not fit is refused, never truncated** (§10.8.4:
-//     a card whose command has not been fully seen is exactly the card people
-//     approve by reflex). Refusing is §10.10's fail-safe — no reply, one log
+//   * **a `tool_input` that does not fit is refused, never truncated** (§10.3): a
+//     request whose command has not been fully seen is exactly the one people
+//     approve by reflex. Refusing is §10.10's fail-safe — no reply, one log
 //     line, the hook times out — and the cost is stated at `kToolInputSize`;
 //   * **full is a designed state** (§10.14.1): the fifth arrival is refused, and
 //     the caller's job is then the same fail-safe.
@@ -110,9 +98,9 @@ struct Request {
     // never reach anybody.
     char reply[kReplySubjectSize] = {};
 
-    // How long the card may stay up. **The hook's number, not the device's**
-    // (§10.8.4) — it must be at least the `timeout` in `handler-config.json`, and
-    // reaching zero means the card goes with no reply.
+    // How long the card may stay up. **The hook's number, not the device's** — it
+    // must be at least the `timeout` in `handler-config.json`, and reaching zero
+    // means the card goes with no reply.
     uint32_t ttl_ms = 0;
 };
 
@@ -125,7 +113,7 @@ enum class Verdict : uint8_t {
 
 // What the card area is showing.
 enum class CardState : uint8_t {
-    kIdle,     // nothing pending — the screen underneath is all there is
+    kIdle,     // nothing pending
     kCard,     // a request is up and can be answered
     kReceipt,  // what happened to the last one, for a beat
 };
@@ -142,23 +130,19 @@ enum class Outcome : uint8_t {
 
 class RequestCard {
    public:
-    // **Four, and on this board it is a number rather than a reference to
-    // one.** The C6 firmware ties this to `Navigator::kMaxPending` because a
-    // queue that could hold five while the navigation counted four would put a
-    // card on screen with nothing to come back to. There is no navigation here
-    // — one LED and one button — so the tie has nothing to tie to, and the
-    // number stands on its own argument: four requests waiting at once is
-    // already a session that has got ahead of its operator, and the fifth is
-    // dropped rather than queued (§10.10 counts it).
+    // **Four, and the number stands on its own argument**: four requests waiting
+    // at once is already a session that has got ahead of its operator, and the
+    // fifth is dropped rather than queued (§10.10 counts it). Four 2.3 KB slots is
+    // also what it costs in `.bss`, which `build.md` prints.
     static constexpr uint8_t kMaxPending = 4;
 
-    // §10.8.1: "Ignore presses for the first ~300 ms of any newly presented
-    // card, and discard any touch whose press began before it appeared." Both
-    // halves are one comparison here — see `Press`.
+    // Ignore presses for the first ~300 ms of any newly presented card, and
+    // discard any press that began before it appeared. Both halves are one
+    // comparison here — see `Press`.
     static constexpr uint32_t kPressGuardMs = 300;
 
-    // How long the receipt of §10.8.4 stays up. Long enough to read three words,
-    // short enough that it is a beat rather than a screen.
+    // How long the receipt stays up. Long enough to be a beat, short enough that
+    // the next card is not kept waiting behind it.
     static constexpr uint32_t kReceiptMs = 2000;
 
     // Used when a request does not name its own. Below any plausible hook
@@ -176,21 +160,21 @@ class RequestCard {
     // parser so that "it did not fit" is one rule in one place.
     bool Arrived(const Request &request, uint32_t now_ms);
 
-    // Runs the timers. Returns true when something changed, which is the screen's
-    // cue to repaint — and the reason this is not `void`: a card whose countdown
-    // is redrawn ten times a second for no reason is a panel being worn out.
+    // Runs the timers. Returns true when something changed, which is the caller's
+    // cue that the light may have to say something different — and the reason this
+    // is not `void`.
     //
     // **It can drop a card and it can never answer one.**
     bool Tick(uint32_t now_ms);
 
     CardState State() const { return state_; }
 
-    // The card on screen, or `nullptr`. Only ever the oldest (§10.8.4).
+    // The card being answered, or `nullptr`. Only ever the oldest.
     const Request *Front() const;
 
     uint8_t Pending() const { return count_; }
 
-    // The "+N waiting" of §10.8.4: everything except the one on screen.
+    // Everything except the one being answered.
     uint8_t Waiting() const { return count_ > 0 ? static_cast<uint8_t>(count_ - 1) : uint8_t{0}; }
 
     // Milliseconds left on the card, 0 when there is none or it is due.
@@ -238,9 +222,9 @@ class RequestCard {
 
     CardState state_ = CardState::kIdle;
 
-    // When the card now on screen was **presented**, which is not when it
-    // arrived: a request that waited behind two others gets its own guard from
-    // the moment it came up.
+    // When the card now up was **presented**, which is not when it arrived: a
+    // request that waited behind two others gets its own guard from the moment it
+    // came up.
     uint32_t front_since_ms_ = 0;
     uint32_t receipt_until_ms_ = 0;
 
