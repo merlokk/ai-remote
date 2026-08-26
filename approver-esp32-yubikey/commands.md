@@ -26,18 +26,38 @@ report.
 
 ### `status`
 ```
-firmware   approver-esp32-yubikey 4bbb764 (Aug 25 2026 21:23:35)
+firmware   approver-esp32-yubikey c7036c2 (Aug 26 2026 18:15:53)
 idf        v6.0.2 (built with v6.0.2)
-chip       esp32s3 rev 0.2, 2 core(s)
+chip       esp32s3 rev 0.2, 2 core(s), wifi + ble
+flash      16 MB, build assumes 16MB
+psram      8 MB, octal at 80 MHz, 8380928 free
 mac        7c:e8:b1:b0:95:04
 running    ota_0 at 0x020000, 2560 KB
 uptime     0d 00h 20m 29s
-heap       8511460 free, 8502848 lowest ever
-storage    /spiffs, 3012 of 10474481 bytes used
+heap       157119 internal free, 148347 lowest ever
+storage    /spiffs, 4267 of 10474481 bytes used
 ```
+
 The `running` line is how you find out whether the flash you just did landed.
-`heap` is large because of the PSRAM (§10.13); the second number is the low-water
-mark, which is the one that matters.
+
+**`flash` and `psram` report what the chip came up with, next to what the build
+assumed.** `hardware.md` §10.1 says both are assumptions — this board ships in
+several memory variants, and a wrong PSRAM mode is a device that fails somewhere
+far from the mistake — so the two halves of each line are there to be compared. A
+`psram` line reading `none` on a build that expects some is the loudest thing
+`status` can say.
+
+Neither line says *embedded* or *external*, because on this target nothing knows:
+the esp32s3's `chip_info.c` reports `wifi + ble` and nothing else, so those bits are
+always zero and a word derived from them would be a constant pretending to be a
+measurement.
+
+**`heap` is internal RAM, and only internal RAM.** That is the number worth
+watching: task stacks, every static buffer and anything a driver wants during an
+interrupt come out of it, a stack may not live in PSRAM at all (§10.13), and it is
+what decided `responder::kGateStackBytes`. The PSRAM's own free space is on the
+`psram` line, where it cannot be mistaken for headroom that a stack could use. The
+second number is the low-water mark, which is the one that matters.
 
 ### `reboot`
 Restarts now. No confirmation word — it undoes itself in seconds — but the line

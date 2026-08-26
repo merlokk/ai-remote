@@ -39,6 +39,9 @@
 #include "esp_app_desc.h"
 #include "esp_chip_info.h"
 #include "esp_console.h"
+#include "esp_flash.h"
+#include "esp_heap_caps.h"
+#include "esp_psram.h"
 #include "esp_idf_version.h"
 #include "esp_log.h"
 #include "esp_mac.h"
@@ -91,8 +94,54 @@ int CmdStatus(int, char **) {
 
     esp_chip_info_t chip = {};
     esp_chip_info(&chip);
-    printf("chip       %s rev %d.%d, %d core(s)\n", CONFIG_IDF_TARGET,
-           chip.revision / 100, chip.revision % 100, chip.cores);
+    printf("chip       %s rev %d.%d, %d core(s)%s%s\n", CONFIG_IDF_TARGET,
+           chip.revision / 100, chip.revision % 100, chip.cores,
+           (chip.features & CHIP_FEATURE_WIFI_BGN) != 0 ? ", wifi" : "",
+           (chip.features & CHIP_FEATURE_BLE) != 0 ? " + ble" : "");
+
+    // **What the chip actually has, next to what the build assumed it had.**
+    // `hardware.md` §10.1 says this board ships in several memory variants and that
+    // 16 MB / 8 MB octal is an assumption; these two lines are how an operator
+    // checks it on the device instead of trusting `sdkconfig`. A part that came up
+    // with less than the build expects is a device that will fail somewhere far
+    // from here.
+    //
+    // **Neither line says "embedded" or "external", and that is deliberate.**
+    // `CHIP_FEATURE_EMB_FLASH` and `CHIP_FEATURE_EMB_PSRAM` are set only by the
+    // original ESP32's `chip_info.c`; the esp32s3 one returns
+    // `WIFI_BGN | BLE` and nothing else, so on this target those bits are always
+    // zero and a word derived from them would be a constant wearing the clothes of
+    // a measurement — it would have said "external" about the in-package PSRAM that
+    // `hardware.md` §10.1 quotes esptool calling embedded.
+    uint32_t flash_bytes = 0;
+    if (esp_flash_get_size(nullptr, &flash_bytes) == ESP_OK) {
+        printf("flash      %" PRIu32 " MB, build assumes %s\n", flash_bytes / (1024 * 1024),
+               CONFIG_ESPTOOLPY_FLASHSIZE);
+    }
+
+    if (esp_psram_is_initialized()) {
+        const size_t psram_bytes = esp_psram_get_size();
+        printf("psram      %u MB, %s at %s, %" PRIu32 " free\n",
+               static_cast<unsigned>(psram_bytes / (1024 * 1024)),
+#if CONFIG_SPIRAM_MODE_OCT
+               "octal",
+#else
+               "quad",
+#endif
+#if CONFIG_SPIRAM_SPEED_120M
+               "120 MHz",
+#elif CONFIG_SPIRAM_SPEED_80M
+               "80 MHz",
+#else
+               "40 MHz",
+#endif
+               static_cast<uint32_t>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)));
+    } else {
+        // Not a footnote: **every task stack and every static buffer competes for
+        // internal RAM without it** (§10.13), and the `heap` line below would be
+        // the whole budget rather than a slice of it.
+        printf("psram      none — this build expects some (§10.13)\n");
+    }
 
     uint8_t mac[6] = {};
     if (esp_read_mac(mac, ESP_MAC_WIFI_STA) == ESP_OK) {
@@ -110,10 +159,19 @@ int CmdStatus(int, char **) {
     printf("uptime     %lldd %02lldh %02lldm %02llds\n", up / 86400, (up % 86400) / 3600,
            (up % 3600) / 60, up % 60);
 
+    // **Internal RAM only, and that is the change worth knowing.** This line used to
+    // be `esp_get_free_heap_size`, which counts the PSRAM too — so it read as eight
+    // and a half megabytes and said nothing about the memory that is actually
+    // scarce. Task stacks, every static buffer and everything a driver wants during
+    // an interrupt come out of *this* number (§10.13: a stack may not live in
+    // PSRAM), and it is the one that decided `kGateStackBytes`. The PSRAM's own free
+    // space is on its own line above.
+    //
     // The low-water mark is the number that says whether the device is safe
-    // (§10.14.1); the current free heap only says what this instant looks like.
-    printf("heap       %" PRIu32 " free, %" PRIu32 " lowest ever\n",
-           esp_get_free_heap_size(), esp_get_minimum_free_heap_size());
+    // (§10.14.1); the current free figure only says what this instant looks like.
+    printf("heap       %" PRIu32 " internal free, %" PRIu32 " lowest ever\n",
+           static_cast<uint32_t>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)),
+           static_cast<uint32_t>(heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL)));
 
     size_t total = 0;
     size_t used = 0;
