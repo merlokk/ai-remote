@@ -15,12 +15,28 @@
 // used to be here is gone with the power-management chip it described — there is
 // none on this board, and no I²C bus for one to sit on (§10.13).
 //
-// **Polled, not interrupt-driven, and no task of its own.** Nothing in this
-// firmware needs a press faster than a poll delivers it, and an ISR plus a queue
-// would be machinery with no consumer. The owner polls — on this board the
-// responder's gate task, every
-// `kPollIntervalMs` — and gets edges back. When something needs a callback, it
-// arrives with the thing that needs it.
+// **Polled, not interrupt-driven — and it does own one small task, which the
+// sibling copy of this file does not.** An ISR plus a queue would still be
+// machinery with no consumer; what this board needed instead was somebody to do the
+// polling at all.
+//
+// The design was "the owner polls, every `kPollIntervalMs`, and gets edges back",
+// and on this board the owner is the responder's gate — which spends the whole of a
+// request blocked inside a USB read and is consulted only when the key says
+// something, every 100 to 300 ms. The debounce promotes a level that has held
+// *across* two calls, so at that rate BOOT had to be held for most of a second to
+// register as a deny, and an ordinary tap disappeared between two samples: the
+// press and the release both happened while nobody was looking. Twice on the desk
+// that came out as an `allow` nobody meant, because the next thing the operator
+// does is touch the key.
+//
+// Shortening the USB read to poll faster was tried first and is not available:
+// `fido_usb.cpp` records what re-submitting an in-flight transfer every 10 ms does
+// to an exchange. So the polling moved here, where it can happen on time, and the
+// press waits in a latch until the gate asks — `TakePress`.
+//
+// Edges still go to whoever calls `Poll`; the latch is separate state, so the
+// console watching a button cannot swallow a deny.
 //
 // **The pins are arguments, not an include of `board.h`** (§10.14.2): this layer
 // knows about contacts, not about which board they are soldered to.
@@ -94,12 +110,28 @@ class Debounce {
 
     bool Pressed() const { return pressed_; }
 
+    // **Was there a press since this was last asked?** Consumes it: one tap is one
+    // decision, and two taps before a read are still one.
+    //
+    // `Update` hands its edge to whoever happened to be holding the poll, which is
+    // no use when the consumer is not the poller — and on this board it is not. The
+    // gate spends a request blocked inside a USB read and cannot poll at
+    // `kPollIntervalMs`; it tried, and `fido_usb.cpp` records what that did to the
+    // exchange. So a press is remembered here until it is collected, and the finger
+    // being long gone by then is the ordinary case rather than an edge one.
+    bool TakePress() {
+        const bool had = press_latched_;
+        press_latched_ = false;
+        return had;
+    }
+
     // How long the current state — pressed *or* released — has held.
     uint32_t StableMs(uint32_t now_ms) const { return now_ms - changed_at_ms_; }
 
    private:
     bool pressed_ = false;
     bool candidate_ = false;
+    bool press_latched_ = false;
     uint32_t candidate_since_ms_ = 0;
     uint32_t changed_at_ms_ = 0;
 };
@@ -186,11 +218,26 @@ class Buttons {
     // per poll and nothing else.
     bool HeldFor(size_t index, uint32_t hold_ms);
 
+    // **A press, collected whenever the consumer gets round to asking** — see
+    // `Debounce::TakePress`. Fed by this component's own poller at
+    // `kPollIntervalMs`, so it does not matter that the consumer is busy: the gate
+    // spends a whole request blocked inside a USB read, and a tap that happened in
+    // between is still a tap.
+    //
+    // It runs on a **second** debouncer per button, deliberately, rather than on the
+    // one `Poll` advances. Two independent state machines reading the same pin cost
+    // a few bytes and remove the only thing that could have gone wrong here: the
+    // console's `buttons watch` and this poller writing the same state, where a
+    // stolen edge would be a deny that silently did not happen.
+    bool TakePress(size_t index);
+
    private:
     bool Valid(size_t index) const { return index < count_; }
+    static void PollerTask(void *arg);
 
     Config configs_[kMaxButtons] = {};
     Debounce state_[kMaxButtons] = {};
+    Debounce latch_[kMaxButtons] = {};
     size_t count_ = 0;
 };
 

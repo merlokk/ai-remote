@@ -154,6 +154,37 @@ void test_indicator_pending_is_the_loudest_thing_this_device_does(void) {
     TEST_ASSERT_FALSE(look.colour == led::colour::kYellow);
 }
 
+void test_indicator_a_chosen_deny_outranks_the_request_it_answers(void) {
+    // **The light has to change when BOOT is tapped**, or the operator cannot tell
+    // a tap that landed from one that did not — and on this device the next thing
+    // they do is touch the key, which without that feedback signs an `allow`
+    // (§10.18.5). It happened twice on the desk before this state existed.
+    indicator::Inputs in = Working();
+    in.request_pending = true;
+    in.deny_pending = true;
+    TEST_ASSERT_TRUE(indicator::Decide(in) == indicator::State::kDenyPending);
+}
+
+void test_indicator_signing_outranks_a_chosen_deny(void) {
+    // The touch arrived and the signature is being made: that is the newer fact.
+    indicator::Inputs in = Working();
+    in.request_pending = true;
+    in.deny_pending = true;
+    in.signing = true;
+    TEST_ASSERT_TRUE(indicator::Decide(in) == indicator::State::kSigning);
+}
+
+void test_indicator_a_chosen_deny_is_red_and_not_a_fault(void) {
+    // Red because a deny is red on this device, including its verdict flash — but
+    // not red-fast, which is `fault` and already means something else.
+    const indicator::Look deny = indicator::LookOf(indicator::State::kDenyPending);
+    const indicator::Look fault = indicator::LookOf(indicator::State::kFault);
+    TEST_ASSERT_TRUE(deny.colour == led::colour::kRed);
+    TEST_ASSERT_FALSE_MESSAGE(deny.effect == fault.effect,
+                              "a chosen deny is indistinguishable from a fault");
+    TEST_ASSERT_FALSE_MESSAGE(deny.idle, "a decision owed a touch must not use the idle ceiling");
+}
+
 void test_indicator_signing_outranks_a_pending_request(void) {
     indicator::Inputs in = Working();
     in.request_pending = true;
@@ -283,6 +314,9 @@ void RegisterIndicatorTests(void) {
     RUN_TEST(test_indicator_a_pending_request_outranks_a_missing_network);
     RUN_TEST(test_indicator_pending_is_the_loudest_thing_this_device_does);
     RUN_TEST(test_indicator_signing_outranks_a_pending_request);
+    RUN_TEST(test_indicator_a_chosen_deny_outranks_the_request_it_answers);
+    RUN_TEST(test_indicator_signing_outranks_a_chosen_deny);
+    RUN_TEST(test_indicator_a_chosen_deny_is_red_and_not_a_fault);
     RUN_TEST(test_indicator_not_enrolled_is_its_own_state);
     RUN_TEST(test_indicator_enrolment_outranks_registration);
     RUN_TEST(test_indicator_enrolment_outranks_presence);

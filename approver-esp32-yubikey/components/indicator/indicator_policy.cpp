@@ -24,6 +24,13 @@ State Decide(const Inputs &in) {
     if (in.signing) {
         return State::kSigning;
     }
+    // **Above `pending`, because the request is no longer the news.** A tap on BOOT
+    // has chosen a verdict and what is owed now is a touch to sign it (§10.18.5).
+    // Saying "a request is waiting" at that point is saying the thing the operator
+    // has already done something about.
+    if (in.deny_pending) {
+        return State::kDenyPending;
+    }
     if (in.request_pending) {
         return State::kPending;
     }
@@ -86,6 +93,8 @@ const char *StateName(State state) {
             return "restore-window";
         case State::kSigning:
             return "signing";
+        case State::kDenyPending:
+            return "deny-pending";
         case State::kPending:
             return "pending";
         case State::kFault:
@@ -122,6 +131,8 @@ const char *StateText(State state) {
             return "hold BOOT to restore config.json";
         case State::kSigning:
             return "signing the decision";
+        case State::kDenyPending:
+            return "deny chosen - touch the key to sign it";
         case State::kPending:
             return "a request is waiting for you";
         case State::kFault:
@@ -184,6 +195,19 @@ Look LookOf(State state) {
         // colour really reports is a signature that got *stuck*.
         case State::kSigning:
             return {led::colour::kBlue, led::Effect::kSolid, false};
+
+        // **Red, and at the middle rate on purpose.** Red is what a deny is on this
+        // device — the verdict flash is red — so the light that says "your deny was
+        // heard, now sign it" is red too, and the operator sees the same colour
+        // before and after the touch.
+        //
+        // Not *fast*, which is `fault`: red-fast already means something, and the
+        // rule that no two states may look alike is a test
+        // (`test_indicator_no_two_states_look_alike_outside_the_yellow_stack`) and
+        // not a preference. The rate is also honest about the difference — a fault
+        // is the device's problem and this is a job still owed to it.
+        case State::kDenyPending:
+            return {led::colour::kRed, led::Effect::kNormBlink, false};
 
         // Red, fast — and it is red twice on this device, once solid at boot and
         // once blinking here. The pairing is the point: red is "this device",

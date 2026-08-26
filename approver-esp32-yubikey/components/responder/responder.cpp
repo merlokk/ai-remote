@@ -66,6 +66,12 @@ volatile bool g_gate_busy = false;
 // `request test` and looking at the light.
 volatile bool g_signing = false;
 
+// **Raised between the tap and the touch** (§10.18.5), so the light can say the
+// deny was heard. Without it nothing on this device changes when BOOT is pressed —
+// the operator taps, sees the same white flash, touches the key, and gets an
+// `allow` nobody meant. That happened twice before this existed.
+volatile bool g_deny_pending = false;
+
 // **The request the gate has given up on**, by nonce.
 //
 // This exists because of a spin found on the board: with no key on the port the
@@ -198,8 +204,14 @@ bool GateKeepAlive(uint8_t, void *context) {
     //    for something nobody wants any more. This is the whole reason the gate
     //    has a hook rather than a plain timeout.
     if (watch->button_armed && config::Get().approval.deny_button) {
-        board::Buttons().Poll(board::button::kBootIndex);
-        if (board::Buttons().Pressed(board::button::kBootIndex)) {
+        // **A collected press, not a sampled level.** This hook runs when the key
+        // sends a keep-alive or a read times out — every 100 ms or so, not
+        // continuously — and `Pressed()` was what the pin happened to be doing at
+        // that instant. An ordinary tap fell between two samples and was gone. The
+        // `buttons` poller now debounces BOOT at `kPollIntervalMs` and remembers the
+        // press until somebody asks; this is the asking, and the tap can have
+        // happened at any point since the last one.
+        if (board::Buttons().TakePress(board::button::kBootIndex)) {
             watch->button_denied = true;
             return false;
         }
@@ -463,6 +475,7 @@ bool RunGate(const ui::Request &request) {
         Unlock();
         watch.button_armed = false;
         watch.button_denied = false;
+        g_deny_pending = true;
 
         ESP_LOGI(TAG, "%s: denied on the button - touch the key to sign it", request.tool_name);
         SetReceipt("denied - touch the key to sign it");
@@ -471,6 +484,9 @@ bool RunGate(const ui::Request &request) {
         const fido::Gate gate = AskTheKey(request, protocol::kBehaviorDeny, &watch, signature,
                                           sizeof signature, &signature_length, &fault,
                                           &ctap_status);
+        // Cleared however that went: from here the light is either `signing` or back
+        // to whatever the device is, and neither of those is "a deny owed a touch".
+        g_deny_pending = false;
         if (gate != fido::Gate::kApproved) {
             char note[64];
             snprintf(note, sizeof note, "no reply - deny unsigned (%s)", fido::GateName(gate));
@@ -831,6 +847,8 @@ bool RequestPending() {
 }
 
 bool Busy() { return g_signing; }
+
+bool DenyPending() { return g_deny_pending; }
 
 PendingView Front() {
     PendingView view;

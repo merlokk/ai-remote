@@ -163,3 +163,14 @@ int gpio_get_level(gpio_num_t pin) {
     }
     return fake::P().level[index];
 }
+
+TaskHandle_t xTaskCreateStatic(void (*fn)(void *), const char *name, uint32_t depth, void *arg,
+                               UBaseType_t priority, StackType_t *stack, StaticTask_t *tcb) {
+    (void)fn;
+    (void)name;
+    (void)depth;
+    (void)arg;
+    (void)priority;
+    (void)stack;
+    return tcb;
+}

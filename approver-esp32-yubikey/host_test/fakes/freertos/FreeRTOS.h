@@ -16,3 +16,15 @@ typedef int BaseType_t;
 #define pdMS_TO_TICKS(ms) ((TickType_t)(ms))
 
 #define portMAX_DELAY ((TickType_t)0xffffffffUL)
+
+// Enough of a task to let `buttons::Buttons::Init` compile and start nothing.
+// **The host tier drives the debounce and the latch directly**, which is the point
+// of them being a pure class (`Debounce`) — a fake scheduler that actually ran the
+// poller would make every test in that suite depend on a thread's timing instead of
+// on the numbers it passes in.
+typedef unsigned long UBaseType_t;
+typedef void *TaskHandle_t;
+typedef struct {
+    unsigned long dummy;
+} StaticTask_t;
+typedef unsigned long StackType_t;

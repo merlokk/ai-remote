@@ -386,10 +386,33 @@ operator for a fingertip nobody is waiting for.
 The BOOT button chooses `deny`. **The key signs it**, because there is nothing
 else on this device that can sign anything.
 
-So a deny is two gestures: tap BOOT, then touch the key. Between them the light
-stays on `pending` and the console says `denied - touch the key to sign it`. It is
-more awkward than the sibling board's single press and it is the honest
-consequence of the private key living where it does.
+So a deny is two gestures: tap BOOT, then touch the key. It is more awkward than
+the sibling board's single press and it is the honest consequence of the private
+key living where it does.
+
+**What happens in between took three fixes to get right**, and all three were
+invisible until a real deny was tried on the board:
+
+* **the tap has to be seen.** The gate is blocked inside a USB read for the whole
+  of a request and is consulted only when the key speaks — every 100 to 300 ms —
+  while `buttons`' debounce promotes a level that has held *across* two polls. BOOT
+  therefore had to be held for most of a second, and an ordinary tap disappeared
+  between two samples. `buttons` owns a 10 ms poller now and latches the press
+  until the gate collects it; `buttons.h` carries the argument;
+* **the light has to change.** It did not: the tap altered nothing an operator
+  could see, and the next thing anybody does is touch the key — which signs an
+  `allow`. Twice on the desk that is exactly what happened. `deny-pending` is red
+  and lasts as long as the wait (§10.17);
+* **the cancelled request has to be cleared.** The tap cancels the key's request
+  for an `allow` with `CTAPHID_CANCEL`, and the key still answers the request it
+  abandoned — `CTAP2_ERR_KEEPALIVE_CANCEL`, `0x2D`. Left in the pipe, that answer
+  is what the deny's `getAssertion` read as its own: fourteen milliseconds,
+  `Gate::kCancelled`, and a red light that existed for seventeen. `fido_usb.cpp`
+  drains it now.
+
+So the sequence an operator actually sees is: **white and the key blinking → tap
+BOOT → the key stops asking → red and the key blinking again → touch.** The console
+says `denied - touch the key to sign it` at the tap.
 
 **Walking away is not a failure to be smoothed over — it is the third outcome,
 and the safe one.** No touch, no reply, the hook times out, and Claude Code asks

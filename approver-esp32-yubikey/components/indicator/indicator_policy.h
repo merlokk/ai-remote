@@ -73,6 +73,14 @@ struct Inputs {
     // milliseconds — and it has a colour anyway, because the one failure mode
     // worth seeing on this device is a sign that never finishes.
     bool signing = false;
+
+    // **A tap on BOOT chose `deny`, and the key has not signed it yet** (§10.18.5).
+    // It needs a colour of its own because without one the light does not change at
+    // all when the button is pressed: the operator taps, sees the same white flash,
+    // and cannot tell whether the tap landed or whether touching the key now will
+    // produce an allow. It did exactly that twice on the desk, both times ending in
+    // an `allow` nobody meant.
+    bool deny_pending = false;
 };
 
 // Ordered **worst first**, which is also the order `Decide` tests them in. The
@@ -82,6 +90,7 @@ enum class State : uint8_t {
     kBooting = 0,
     kRestoreWindow,
     kSigning,
+    kDenyPending,
     kPending,
     kFault,
     kNoStorage,

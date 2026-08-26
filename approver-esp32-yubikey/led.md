@@ -25,6 +25,7 @@ built around them.
 | `booting` | **red** | solid | full | `app_main` is still composing |
 | `restore-window` | white | solid | full | BOOT is down; keep holding to restore `config.json` |
 | `signing` | blue | solid | full | a decision is being signed right now |
+| `deny-pending` | **red** | 500/500 ms | full | **BOOT chose `deny` — touch the key to sign it** (§10.18.5) |
 | `pending` | **white** | fast (200/200 ms) | full | **a request is waiting for you** |
 | `fault` | red | fast | full | something that should work did not |
 | `no-storage` | **yellow** | fast | full | the filesystem would not mount |
@@ -61,6 +62,15 @@ is "I need you", **solid** is "got it". And it is the one override that can be
 ended early — a flash must finish being seen, but a light still asking for a
 fingertip after one arrived is a light that lies, which is why `led::EndFor` exists
 and `led::Set` deliberately does not do it.
+
+**`deny-pending` is the one state that exists because of something an operator
+could not see.** A tap on BOOT used to change nothing at all: the light went on
+flashing white, and the next thing anybody does is touch the key — which signs an
+`allow`. It happened twice on the desk. Red because a deny is red here, including
+its verdict flash, so the colour is the same before the touch and after it; at the
+middle rate rather than fast because red-fast is `fault` and no two states may look
+alike. The whole sequence now reads: **white and the key blinking → tap BOOT → the
+key's request is cancelled → red and the key blinking again → touch.**
 
 ### The three decisions in that table
 

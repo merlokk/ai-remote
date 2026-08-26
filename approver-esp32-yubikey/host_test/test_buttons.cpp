@@ -430,7 +430,81 @@ void test_the_hold_is_measured_across_the_millisecond_wrap(void) {
                           static_cast<int>(key.Update(true, 0xFFFFFF00u + 2000)));
 }
 
+// --- the latch -----------------------------------------------------------
+//
+// **A press that nobody was looking at still happened.** `Update` reports an edge
+// to the caller that happens to be holding the poll, which is fine when one owner
+// polls at `kPollIntervalMs` and useless when the consumer is somewhere else
+// entirely — the gate is blocked inside a USB read and cannot be the poller
+// (`fido_usb.cpp` says what happened when it tried). So the edge is remembered
+// until somebody asks for it.
+
+void test_a_press_is_latched_until_it_is_taken(void) {
+    buttons::Debounce d;
+    d.Reset(false, 0);
+    d.Update(true, 1000);
+    d.Update(true, 1000 + buttons::kDebounceMs);
+
+    // The finger is long gone by the time anybody asks.
+    d.Update(false, 1200);
+    d.Update(false, 1200 + buttons::kDebounceMs);
+
+    TEST_ASSERT_TRUE_MESSAGE(d.TakePress(), "the press was forgotten with the finger");
+}
+
+void test_a_latched_press_is_taken_only_once(void) {
+    // It is a decision, not a level: a second reader must not deny a second
+    // request off one tap.
+    buttons::Debounce d;
+    d.Reset(false, 0);
+    d.Update(true, 1000);
+    d.Update(true, 1000 + buttons::kDebounceMs);
+
+    TEST_ASSERT_TRUE(d.TakePress());
+    TEST_ASSERT_FALSE(d.TakePress());
+}
+
+void test_no_press_means_nothing_to_take(void) {
+    buttons::Debounce d;
+    d.Reset(false, 0);
+    d.Update(false, 500);
+    d.Update(false, 500 + buttons::kDebounceMs);
+    TEST_ASSERT_FALSE(d.TakePress());
+}
+
+void test_a_press_too_short_for_the_debounce_is_not_latched(void) {
+    // The latch remembers *debounced* presses. A contact that bounced for 5 ms
+    // never became one, and latching it would turn noise into a verdict.
+    buttons::Debounce d;
+    d.Reset(false, 0);
+    d.Update(true, 1000);
+    d.Update(false, 1000 + buttons::kDebounceMs - 5);
+    d.Update(false, 2000);
+    TEST_ASSERT_FALSE(d.TakePress());
+}
+
+void test_two_presses_before_a_read_are_still_one_decision(void) {
+    // Two taps and one question: the answer is yes, once. Nothing here counts
+    // presses, and a `deny` is not more denied for being tapped twice.
+    buttons::Debounce d;
+    d.Reset(false, 0);
+    const uint32_t taps[] = {1000u, 2000u};
+    for (uint32_t at : taps) {
+        d.Update(true, at);
+        d.Update(true, at + buttons::kDebounceMs);
+        d.Update(false, at + 200);
+        d.Update(false, at + 200 + buttons::kDebounceMs);
+    }
+    TEST_ASSERT_TRUE(d.TakePress());
+    TEST_ASSERT_FALSE(d.TakePress());
+}
+
 void RegisterButtonsTests(void) {
+    RUN_TEST(test_a_press_is_latched_until_it_is_taken);
+    RUN_TEST(test_a_latched_press_is_taken_only_once);
+    RUN_TEST(test_no_press_means_nothing_to_take);
+    RUN_TEST(test_a_press_too_short_for_the_debounce_is_not_latched);
+    RUN_TEST(test_two_presses_before_a_read_are_still_one_decision);
     RUN_TEST(test_debounce_adopts_a_level_without_reporting_an_edge);
     RUN_TEST(test_debounce_waits_out_the_window_before_believing_a_press);
     RUN_TEST(test_debounce_reports_a_press_once);

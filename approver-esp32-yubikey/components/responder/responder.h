@@ -202,6 +202,12 @@ bool RequestPending();
 // LED, which is the only way that class of bug is ever found.
 bool Busy();
 
+// **A tap on BOOT chose `deny` and the key has not signed it yet** (§10.18.5) — the
+// window between the two things a deny costs. The light has a colour for it
+// (§10.17) because without one nothing changes when the button is pressed, and an
+// operator who cannot see that the tap landed touches the key and gets an `allow`.
+bool DenyPending();
+
 // What is on the desk right now, for `request` on the console. Null when nothing
 // is pending. **Valid only until the next tick** — the caller prints it and lets
 // it go.

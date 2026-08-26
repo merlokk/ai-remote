@@ -98,6 +98,7 @@ void GatherState(indicator::Inputs *out) {
     out->subscribed = approvals.subscribed;
     out->request_pending = responder::RequestPending();
     out->signing = responder::Busy();
+    out->deny_pending = responder::DenyPending();
 
     out->fido_present = fido::Present();
     out->fido_enrolled = fido::Enrolled();

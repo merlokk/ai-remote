@@ -23,6 +23,14 @@ namespace fido {
 namespace usb {
 namespace {
 
+// How long to wait for the key's reply to a request we just cancelled, and how
+// long each read inside that budget waits. A YubiKey answers a cancel in single
+// digit milliseconds; the budget is generous because the cost of getting this
+// wrong is the *next* exchange reading somebody else's answer.
+constexpr uint32_t kDrainMs = 250;
+constexpr uint32_t kDrainReadMs = 50;
+
+
 constexpr const char *TAG = "fido-usb";
 
 // The library's own event pump, and this driver's. Both are stack-only loops;
@@ -409,6 +417,52 @@ bool ReadPacket(uint8_t *packet, uint32_t wait_ms) {
     return true;
 }
 
+// **A cancelled request still gets an answer, and somebody has to collect it.**
+// A key told `CTAPHID_CANCEL` abandons the request and replies to it with
+// `CTAP2_ERR_KEEPALIVE_CANCEL` (0x2D). Left in the pipe, that reply is what the
+// *next* exchange reads as its own — and the next exchange on this device is the one
+// that matters: a tap on BOOT cancels the request for an `allow`, the request for a
+// signed `deny` goes out immediately after, and the first thing it read back was the
+// allow's `0x2D`. Fourteen milliseconds, `Gate::kCancelled`, and a red light that
+// existed for seventeen (§10.18.5). The deny path had never worked, and this is why.
+//
+// Bounded, and a failure to drain is not reported: the exchange being abandoned has
+// already failed, and the caller is being told about the cancel, not about this.
+void DrainAfterCancel(uint32_t cid) {
+    ctaphid::Reader reader;
+    reader.Reset();
+    const uint32_t deadline = NowMs() + kDrainMs;
+    uint8_t packet[ctaphid::kPacketSize];
+    while (static_cast<int32_t>(deadline - NowMs()) > 0) {
+        if (!ReadPacket(packet, kDrainReadMs)) {
+            if (!runtime.info.present) {
+                return;
+            }
+            continue;
+        }
+        const ctaphid::Reader::Result result = reader.Feed(packet, sizeof(packet), cid);
+        if (result == ctaphid::Reader::Result::kComplete ||
+            result == ctaphid::Reader::Result::kError) {
+            return;
+        }
+    }
+    ESP_LOGW(TAG, "the cancelled request was not answered within %u ms - the next exchange "
+                  "may read its reply",
+             static_cast<unsigned>(kDrainMs));
+}
+
+// Sends `CTAPHID_CANCEL` and collects what it produces. Both cancel sites go
+// through here so that neither can forget the second half.
+void CancelAndDrain(uint32_t cid) {
+    uint8_t packet[ctaphid::kPacketSize];
+    ctaphid::Writer cancel;
+    cancel.Begin(cid, ctaphid::kCmdCancel, nullptr, 0);
+    if (cancel.Next(packet, sizeof(packet))) {
+        WritePacket(packet);
+    }
+    DrainAfterCancel(cid);
+}
+
 // The exchange, with the lock already held and the channel already open.
 esp_err_t Transact(uint32_t cid, uint8_t command, const uint8_t *request, size_t request_length,
                    uint8_t *response, size_t response_capacity, size_t *response_length,
@@ -439,6 +493,16 @@ esp_err_t Transact(uint32_t cid, uint8_t command, const uint8_t *request, size_t
         // Never wait longer than a keep-alive interval, so that the caller's
         // cancel hook is offered the chance to fire even on a key that has gone
         // quiet.
+        //
+        // **300 ms is a floor as well as a ceiling, and that is worth knowing.**
+        // Shortening it looks free and is not: `ReadPacket` submits a fresh IN
+        // transfer on every call and abandons the previous one when it times out, so
+        // a wait short enough to expire before the key answers re-submits a transfer
+        // that is still queued. Tried at 10 ms — to poll the deny button faster —
+        // this became `the key could not be reached` sixty milliseconds into every
+        // exchange, with the key never lighting up. Whatever needs to be sampled
+        // faster than this has to be sampled somewhere else; `buttons` grew a poller
+        // of its own for exactly that reason.
         uint32_t wait = static_cast<uint32_t>(left);
         if (wait > 300) {
             wait = 300;
@@ -452,11 +516,7 @@ esp_err_t Transact(uint32_t cid, uint8_t command, const uint8_t *request, size_t
             // Nothing yet. Offer the caller a chance to give up, the same as a
             // keep-alive would, so that a cancelled request stops asking.
             if (keep_alive != nullptr && !keep_alive(0, keep_alive_context)) {
-                ctaphid::Writer cancel;
-                cancel.Begin(cid, ctaphid::kCmdCancel, nullptr, 0);
-                if (cancel.Next(packet, sizeof(packet))) {
-                    WritePacket(packet);
-                }
+                CancelAndDrain(cid);
                 *fault = Fault::kCancelled;
                 return ESP_FAIL;
             }
@@ -481,11 +541,7 @@ esp_err_t Transact(uint32_t cid, uint8_t command, const uint8_t *request, size_t
         if (reader.Command() == ctaphid::kCmdKeepAlive) {
             const uint8_t status = reader.Length() > 0 ? reader.Data()[0] : 0;
             if (keep_alive != nullptr && !keep_alive(status, keep_alive_context)) {
-                ctaphid::Writer cancel;
-                cancel.Begin(cid, ctaphid::kCmdCancel, nullptr, 0);
-                if (cancel.Next(packet, sizeof(packet))) {
-                    WritePacket(packet);
-                }
+                CancelAndDrain(cid);
                 *fault = Fault::kCancelled;
                 return ESP_FAIL;
             }
@@ -501,6 +557,20 @@ esp_err_t Transact(uint32_t cid, uint8_t command, const uint8_t *request, size_t
             }
             ESP_LOGW(TAG, "the key answered CTAPHID_ERROR %02x (%s)", code,
                      ctaphid::ErrorName(code));
+            // **One of these has a fix and it is not on this device**, so it gets its
+            // own sentence rather than being filed under "the key could not be
+            // reached". `CHANNEL_BUSY` means the key is still holding a transaction
+            // on *another* channel — most often this board's own, from before a
+            // reset: reflash while a request is waiting for a fingertip and the key
+            // goes on waiting for a channel that no longer has anybody on it. It
+            // frees itself when its own user-presence timeout expires, and unplugging
+            // it is instant. Two runs were spent chasing this as a firmware bug
+            // because the log said the key was unreachable.
+            if (code == ctaphid::kErrChannelBusy) {
+                ESP_LOGW(TAG, "the key is mid-transaction on another channel - it was probably "
+                              "left waiting by a reset. unplug it and plug it back in, or wait "
+                              "for its own timeout");
+            }
             *fault = Fault::kKeyError;
             return ESP_FAIL;
         }
