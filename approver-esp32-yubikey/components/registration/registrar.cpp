@@ -5,7 +5,7 @@
 #include <ctime>
 
 #include "cJSON.h"
-#include "device_key.h"
+#include "crypto.h"
 #include "esp_log.h"
 #include "fido.h"
 #include "esp_random.h"

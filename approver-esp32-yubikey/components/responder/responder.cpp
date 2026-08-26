@@ -9,7 +9,7 @@
 #include "approval.h"
 #include "board.h"
 #include "config.h"
-#include "device_key.h"
+#include "crypto.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "fido.h"
@@ -705,14 +705,17 @@ Blocker WhyNot(const nats::Status &bus) {
     //
     // Enrolment comes first now, and not only in the ordering: since §10.18 the
     // enrolment *is* the signing key, so "no key" and "not enrolled" are the same
-    // sentence and there is one of them. `crypto::Ready()` is still checked, because
-    // §6's reply verification is Ed25519 and a device that cannot verify a handler's
-    // signature must not register — but it is no longer what signs a verdict.
+    // sentence and there is one of them.
     if (!fido::Enrolled()) {
         return Blocker::kNotEnrolled;
     }
+    // **And this one is about the handler's signature, not ours.** It was
+    // `kNoKey` — this board having no identity — and there is no identity to have
+    // any more (§10.6). What it asks now is whether libsodium passes its own vector,
+    // because a device that cannot check §6's reply cannot know whose key it pinned,
+    // and pinning the wrong one is worse than not registering.
     if (!crypto::Ready()) {
-        return Blocker::kNoKey;
+        return Blocker::kCannotVerify;
     }
     if (!registration::Registered()) {
         return Blocker::kNotRegistered;
@@ -793,8 +796,8 @@ const char *BlockerText(Blocker blocker) {
     switch (blocker) {
         case Blocker::kNone:
             return "nothing";
-        case Blocker::kNoKey:
-            return "this device has no key - see 'keys'";
+        case Blocker::kCannotVerify:
+            return "libsodium cannot verify - see 'keys selftest'";
         case Blocker::kNotRegistered:
             return "this device is not registered - see 'register'";
         case Blocker::kNoBus:

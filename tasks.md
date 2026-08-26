@@ -14,15 +14,17 @@ repoint every citation.
 **And those citations name this file, deliberately.** These numbers are *not* part
 of the global scheme of root §2 — where §2 is the repository map itself — so a bare
 `§2.5` in another document reads as a subsection of that map. They are written
-`tasks.md §2.5`, which is the rule root §2 now states next to this file. Four gaps so far: **§2.9**, the clock screen's two unbuilt
+`tasks.md §2.5`, which is the rule root §2 now states next to this file. Five gaps so far: **§2.9**, the clock screen's two unbuilt
 promises, struck from §10.8.2 rather than built; **§2.10**, the two shipped config
 files disagreeing about the access point's key, which they no longer do;
 **§2.12**, three smaller loose ends — a runner for the parity vectors, a way into
-the ESP32 host suite from `scripts/`, and a screenshot no document referenced; and
-**§2.14**, the ESP32-S3 never having spoken to a security key — which it has now,
+the ESP32 host suite from `scripts/`, and a screenshot no document referenced; **§2.14**, the ESP32-S3 never having spoken to a security key — which it has now,
 on **2026-08-26**: enumerated, enrolled, and answering real requests with
-signatures `hook.verify_reply` calls trusted, allow and deny alike
-(`approver-esp32-yubikey/status.md` is row by row).
+signatures `hook.verify_reply` calls trusted, allow and deny alike; and **§2.13**,
+that board's vestigial Ed25519 identity, **deleted** the same day along with the
+seed it kept in unencrypted NVS — which the firmware now erases where an older
+build left one, so there is no private key on that flash at all
+(`approver-esp32-yubikey/protocol.md` §10.6).
 
 Two things this file is **not**: a list of decisions (those live in the section
 that owns them), and a second `approver-esp32/status.md` (that file is row-by-row
@@ -71,12 +73,17 @@ found. Nothing here is a new proposal.
 The largest open item **on the C6 board**. Its cost is now stated correctly in the
 docs — what is unfinished is the operation itself.
 
-**It no longer applies to `approver-esp32-yubikey/`.** That device stopped signing
-with a key of its own: the verdict is an ECDSA signature the security key makes,
-and the private half is reconstructed inside the authenticator rather than kept
-anywhere on the board (§10.18). Its §10.6 is now a table of what is *absent*. What
-is left there is §2.13 below — an Ed25519 identity that signs nothing and whose
-removal would take the last private key off that board's flash.
+**It no longer applies to `approver-esp32-yubikey/`, and there is nothing left of it
+there.** That device stopped signing with a key of its own — the verdict is an ECDSA
+signature the security key makes, and the private half is reconstructed inside the
+authenticator rather than kept anywhere on the board (§10.18) — and its Ed25519
+identity has since been deleted outright, seed included. Its §10.6 is a table of what
+is *absent*.
+
+So this item is now about **one board**, and the asymmetry is worth stating plainly:
+the C6 keeps a signing key in flash because it is the thing that signs, and the S3
+does not have one to keep. Burning an eFuse key is still the open decision here, and
+it is still a decision rather than code.
 
 - No eFuse key is burned, so the Ed25519 seed is **32 unencrypted bytes in NVS**
   (`approver` namespace) and `esptool read_flash` gives up the signing key.
@@ -230,27 +237,6 @@ What is open is therefore narrower and more concrete than "measure it":
   `--max_payload=65536` bounds the megabyte case; a ~15 KB publish is under that
   bound and drops this responder's socket just as effectively (§10.10's scenario,
   no malformed frame needed).
-
-### 2.13 The ESP32-S3's Ed25519 identity signs nothing and is still derived (§10.6, §10.18)
-
-Small, and it is the tail of the change that made the security key the signer.
-
-- `components/crypto` still generates a seed at first boot and keeps it in
-  **unencrypted NVS**, exactly as §2.1 describes for the other board — except that
-  on this one it now signs nothing at all.
-- What still needs libsodium there is `crypto::Verify`, for §6's reply (the server
-  key is Ed25519 by fixed protocol and mbedTLS has no EdDSA), plus base64. Neither
-  needs an identity: `Verify` is static and takes the key it is checking.
-- So the removal is: the seed, the eFuse route, `Sign`, `ProveKey`, `keys forget
-  now`, the `device_key` input to the light, and one `Blocker` in the responder
-  that can never fire. What it buys is that there is then **no private key on that
-  board at all**.
-- Deliberately not done in the same change as the signer swap: that one had to be
-  provable end to end, and deleting a working identity underneath it would have
-  made a failure ambiguous. **That condition is now met** — the swap is proven both
-  ways, allow and deny, against `hook.verify_reply` (2026-08-26) — so nothing is
-  holding this back any more. With §2.14 gone this is the largest open item on that
-  board, and the only one whose product is a deletion.
 
 ### 2.11 Battery and sleep (§10.13)
 

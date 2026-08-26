@@ -30,7 +30,7 @@ indicator::Inputs Working() {
     in.restore_window = false;
     in.fault = false;
     in.storage_mounted = true;
-    in.device_key = true;
+    in.can_verify = true;
     in.wifi_link = true;
     in.internet = true;
     in.bus_connected = true;
@@ -85,7 +85,7 @@ void test_indicator_everything_between_power_and_the_bus_is_one_yellow(void) {
     // internet and bus are a stack with one action behind all of them; five
     // rhythms would be five things to memorise for one thing to do.
     const indicator::State stack[] = {
-        indicator::State::kNoStorage,  indicator::State::kNoDeviceKey,
+        indicator::State::kNoStorage,  indicator::State::kNoVerifier,
         indicator::State::kNoWifi,     indicator::State::kNoInternet,
         indicator::State::kNoBus,
     };
@@ -104,16 +104,16 @@ void test_indicator_the_stack_is_ranked_bottom_up(void) {
     // router is off would be a lie by omission.
     indicator::Inputs in = Working();
     in.storage_mounted = false;
-    in.device_key = false;
+    in.can_verify = false;
     in.wifi_link = false;
     in.bus_connected = false;
     in.registered = false;
     TEST_ASSERT_TRUE(indicator::Decide(in) == indicator::State::kNoStorage);
 
     in.storage_mounted = true;
-    TEST_ASSERT_TRUE(indicator::Decide(in) == indicator::State::kNoDeviceKey);
+    TEST_ASSERT_TRUE(indicator::Decide(in) == indicator::State::kNoVerifier);
 
-    in.device_key = true;
+    in.can_verify = true;
     TEST_ASSERT_TRUE(indicator::Decide(in) == indicator::State::kNoWifi);
 
     in.wifi_link = true;

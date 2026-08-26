@@ -35,7 +35,7 @@
 #include "board.h"
 #include "buttons.h"
 #include "config.h"
-#include "device_key.h"
+#include "crypto.h"
 #include "esp_app_desc.h"
 #include "esp_chip_info.h"
 #include "esp_console.h"
@@ -309,6 +309,8 @@ int CmdCat(int argc, char **argv) {
 // `buttons watch` runs for this long unless told otherwise, and no longer than
 // the cap — the REPL task is blocked while it runs, so a watch that outlives the
 // operator's attention is a console that looks hung.
+constexpr uint32_t kConsoleStackBytes = 10240;
+
 constexpr uint32_t kWatchDefaultSeconds = 10;
 constexpr uint32_t kWatchMaxSeconds = 120;
 
@@ -1476,19 +1478,20 @@ int CmdNats(int argc, char **argv) {
 }
 
 void PrintKeysUsage() {
-    printf("usage: keys              this device's identity, and whether it can sign\n");
-    printf("       keys selftest     run the signature check again, now\n");
-    printf("       keys forget now   delete the saved key; a new one is made at the next boot\n");
+    printf("usage: keys              what this device is to the handler, and whether it can\n");
+    printf("                         check the handler's replies\n");
+    printf("       keys selftest     run libsodium's verify check again, now\n");
 }
 
-// **What this device is on the bus, and whether it can prove it.** The whole
-// value of the readout is that "connected" and "able to answer" are different
-// facts, and a device that is one and not the other looks identical from
-// outside — the same argument the link indicator makes on the clock.
+// **Not "this device's key" any more, because there is not one.** §10.18 moved the
+// signer into the security key — `key` is the command that prints what this device
+// signs as — and what is left here is the other half of being able to answer: the
+// `key_id` the handler knows this board by, the handler key it has pinned, and
+// whether libsodium can still check a signature made by it.
 //
-// The public key is printed in full because §10.7 has an operator compare it by
-// eye, once, against what the handler prints at startup. The private half is not
-// printed, cannot be printed, and does not exist outside RAM.
+// `keys forget now` is gone with the seed it deleted (§10.6). What invalidates a
+// registration on this board is `key forget now` — the enrolment — and that command
+// says so.
 int CmdKeys(int argc, char **argv) {
     if (argc == 2 && (strcmp(argv[1], "help") == 0 || strcmp(argv[1], "-h") == 0 ||
                       strcmp(argv[1], "--help") == 0)) {
@@ -1497,49 +1500,26 @@ int CmdKeys(int argc, char **argv) {
     }
 
     if (argc == 2 && strcmp(argv[1], "selftest") == 0) {
-        const bool library = crypto::SelfTest();
-        printf("library    %s\n",
-               library ? "passed - signatures match the host's" : "FAILED - do not trust this build");
-
-        // The second half, and it is a different question: the library being
-        // right says nothing about the key this particular device derived.
-        char proof[crypto::kSignatureB64Size];
-        if (!crypto::Ready()) {
-            printf("this key   no key to check\n");
-            return library ? 0 : 1;
+        // One question now, where there used to be two. The second was "and does
+        // the key this device derived work" — there is no such key.
+        const bool ok = crypto::SelfTest();
+        printf("verifier   %s\n", ok ? "passed - a real signature verifies and a tampered one "
+                                       "does not"
+                                     : "FAILED - do not trust this build");
+        if (!ok) {
+            printf("           §6 replies cannot be checked, so this device will not register\n");
         }
-        const bool own = crypto::ProveKey(proof, sizeof proof);
-        printf("this key   %s\n", own ? "passed - it signs and its own public key verifies it"
-                                      : "FAILED");
-        if (own) {
-            printf("message    %s\n", crypto::kProofMessage);
-            printf("signature  %s\n", proof);
-            printf("public key %s\n", crypto::PublicKeyBase64());
-        }
-        return (library && own) ? 0 : 1;
+        return ok ? 0 : 1;
     }
 
-    // **A confirmation word, because this one cannot be undone from here.** What
-    // is lost is a registration, and getting it back means a fresh token minted on
-    // the host.
-    if (argc >= 2 && strcmp(argv[1], "forget") == 0) {
-        if (argc != 3 || strcmp(argv[2], "now") != 0) {
-            printf("this deletes the saved signing key. the next boot makes a new one, so this\n");
-            printf("device becomes a different responder and needs a new registration token.\n");
-            printf("type 'keys forget now' if that is what you want.\n");
-            return 1;
-        }
-        const esp_err_t err = crypto::ForgetStoredSeed();
-        if (err != ESP_OK) {
-            printf("not forgotten: %s\n", esp_err_to_name(err));
-            return 1;
-        }
-        // Deliberately not a reboot: the key already in RAM keeps working, so
-        // nothing breaks mid-session. The change lands at the next boot, and
-        // saying so is better than surprising somebody with one.
-        printf("forgotten. this session still signs with the old key; the next boot makes a new\n");
-        printf("one. nothing was published either way - there is no registration yet.\n");
-        return 0;
+    if (argc == 2 && strcmp(argv[1], "forget") == 0) {
+        // Answered rather than refused as an unknown word: an operator typing this
+        // is holding an old instruction, and the useful reply names the command
+        // that does what they meant.
+        printf("there is no saved key to forget: this device holds no private key at all\n");
+        printf("(§10.6). what a registration is bound to is the security key's enrolment —\n");
+        printf("'key forget now' is the one that invalidates it.\n");
+        return 1;
     }
 
     if (argc != 1) {
@@ -1552,33 +1532,9 @@ int CmdKeys(int argc, char **argv) {
     // device has never registered as, printed by the one command an operator reads
     // to find out what it *is*.
     printf("key id     %s\n", protocol::kKeyId);
-    printf("key type   ed25519\n");
-    printf("state      %s\n", crypto::StateText());
-
-    if (crypto::Ready()) {
-        // The block number only means something on the route that has one, so it
-        // is added here rather than baked into the driver's own sentence.
-        if (crypto::EfuseBlock() >= 0) {
-            printf("source     %s (chip key block %d)\n", crypto::SourceText(),
-                   crypto::EfuseBlock());
-        } else {
-            printf("source     %s\n", crypto::SourceText());
-        }
-        printf("public key %s\n", crypto::PublicKeyBase64());
-    } else {
-        printf("source     %s\n", crypto::SourceText());
-        printf("public key none\n");
-    }
-
-    // **The fallback says so, every time it is asked.** A key in flash and a key
-    // that cannot be read at all look identical from outside, and only one of them
-    // is what this device set out to have. Saying it once in a boot log is not
-    // enough; this is the readout somebody looks at.
-    if (crypto::KeyIsInFlash()) {
-        printf("            this is the fallback: the key is saved on the device and a flash\n");
-        printf("            dump gives it away. burning a key into the chip is what fixes it,\n");
-        printf("            and it changes this device's identity when it happens.\n");
-    }
+    printf("signs as   see 'key' - an ECDSA P-256 key derived from the security key (§10.18)\n");
+    printf("private    none on this device\n");
+    printf("verifier   %s\n", crypto::StateText());
 
     // **The other half of being able to answer**, and it is a separate fact from
     // having a key: a device with a key and no registration is one the handler
@@ -1921,7 +1877,7 @@ int CmdLed(int argc, char **argv) {
             indicator::State::kBooting,     indicator::State::kRestoreWindow,
             indicator::State::kSigning,     indicator::State::kPending,
             indicator::State::kFault,       indicator::State::kNoStorage,
-            indicator::State::kNoDeviceKey, indicator::State::kNoWifi,
+            indicator::State::kNoVerifier, indicator::State::kNoWifi,
             indicator::State::kNoInternet,  indicator::State::kNoBus,
             indicator::State::kNotRegistered, indicator::State::kNotEnrolled,
             indicator::State::kNoFidoKey,   indicator::State::kWatching,
@@ -2453,15 +2409,18 @@ esp_err_t Init() {
     repl_config.max_cmdline_length = 256;
     repl_config.max_history_len = kHistoryLength;
 
-    // **Room for a signature, because one command runs one.** `keys selftest`
-    // reaches `crypto_sign`, which needs 4,112 bytes of stack on its own; the
-    // REPL's default 4 KB is less than that, and the first version of that
-    // command panicked here with a stack protection fault rather than printing
-    // an answer. The console is not where a *decision* gets signed — that
-    // belongs to a task of its own — but a self-test the operator can run is
-    // worth the 8 KB this costs, and the number is `crypto::kSignStackBytes`
-    // plus what the deepest ordinary command already uses.
-    repl_config.task_stack_size = crypto::kSignStackBytes + 4096;
+    // **Room for a curve operation, because several commands run one.** The REPL's
+    // default 4 KB is not enough for the deepest thing an operator can type here:
+    // `key selftest` runs the ARKG derivation's ECDH and point addition through
+    // PSA, and `key enrol` and `key test` verify ECDSA signatures on the same task.
+    //
+    // The number is unchanged from when the reason was different — it was
+    // `crypto::kSignStackBytes + 4096`, sized for a `crypto_sign` that used 4,112
+    // bytes and panicked here with a stack protection fault when it had less.
+    // §10.18 took signing off this board, so that constant is gone; the size stays,
+    // because what replaced it is not shallower and this is not the place to find
+    // out by guessing.
+    repl_config.task_stack_size = kConsoleStackBytes;
 
     // **UART, not USB Serial/JTAG, and this is the one line where this file most
     // differs from the sibling board's** (§10.1, §10.18.4). That board has one

@@ -23,8 +23,9 @@ largest item there is a *removal*.
 |-------|-------|------|
 | Boot, PSRAM, flash | **runs** | 8 MB octal PSRAM detected, 16 MB flash, 8.5 MB free heap |
 | SPIFFS + `config.json` | **runs** | mounts, parses, saves, reloads, restores |
-| Ed25519 identity (§10.6) | **runs**, and **signs nothing** | derived at boot, self-test passes. Since §10.18 the verdict is signed by the security key; what libsodium is still for is verifying §6's *reply* |
-| — its custody | **moot, and owed** | the seed is still in unencrypted NVS and no longer protects anything. Deleting the identity is owed work (below) |
+| Ed25519 identity (§10.6) | **deleted** | there is no key of this device's own. What is left of libsodium verifies §6's *reply* — one call — and does base64; a fresh registration on the board proves it still works |
+| — its custody | **settled by removal** | the seed was 32 bytes of private key in unencrypted NVS protecting nothing. `crypto::Init` erases it, and did: one `W crypto: erased the 32-byte Ed25519 seed…` on this board. **There is now no private key on this flash of any kind** |
+| The verifier self-test | **runs** | a real signature verifies and a one-bit-flipped one does not. A failure keeps the device off `approvals.*` (`Blocker::kCannotVerify`), because a board that cannot check §6's reply cannot know whose key it pinned |
 | ARKG derivation (§10.18.2) | **runs** | `components/arkg`, 3,921 bytes. The five pure steps are host-tested against numbers Python produced, and the two curve steps agree with Python **on this chip** — `key selftest`, 661–670 ms |
 | Console on UART0 (§10.7) | **runs** | all 16 commands answer |
 | WS2812 on GPIO48 (§10.17) | **runs** | UART1 at 3.33 Mbaud, inverted; 0 write failures over thousands of frames |
@@ -90,7 +91,6 @@ refused every one of them in three milliseconds among them. They are listed unde
 
 | | Why it is owed |
 |---|---|
-| **Deleting the Ed25519 identity** | since §10.18 it signs nothing, and what is left of `components/crypto` — `Verify` for §6's reply, and base64 — needs no seed. Removing it takes the last private key off this board's flash, along with `keys forget now`, one blocker in the responder that can never fire, and a `device_key` input to the light. **The largest open item here** |
 | **A key that does not advertise `previewSign`** | the refusal is written and `key info` prints the line, but the key on this desk advertises it, so only the readout has been seen. Needs a second, ordinary key |
 | **A re-enrolment, to see `STALE`** | the binding of §10.18.1 is checked at every boot and has only ever agreed. Producing a disagreement costs an enrolment and then a fresh token |
 | **An allow from Claude Code itself** | every request so far came from `tools/test_request.py`, which sends the bytes `hook.py` sends. What has not happened is the request arriving from a live session's `PermissionRequest` |

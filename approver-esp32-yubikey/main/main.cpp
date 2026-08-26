@@ -20,7 +20,7 @@
 #include "board.h"
 #include "config.h"
 #include "console.h"
-#include "device_key.h"
+#include "crypto.h"
 #include "esp_app_desc.h"
 #include "esp_log.h"
 #include "esp_ota_ops.h"
@@ -74,7 +74,7 @@ void GatherState(indicator::Inputs *out) {
     out->restore_window = g_restore_window;
 
     out->storage_mounted = storage::Mounted();
-    out->device_key = crypto::Ready();
+    out->can_verify = crypto::Ready();
     out->registered = registration::Registered();
 
     const wifimgr::Snapshot wifi = wifimgr::Get();
@@ -105,9 +105,10 @@ void GatherState(indicator::Inputs *out) {
 
     // **What counts as a fault, and it is deliberately short.** Not "something is
     // missing" — the ranking below already has a colour for each of those — but
-    // "something that should work did not". A key that fails its self-test is the
-    // one that matters: a device that cannot sign will take requests off the queue
-    // group and answer none of them.
+    // "something that should work did not". libsodium failing its own vector is the
+    // one that matters: §6's reply could not be checked, so this device cannot
+    // safely learn whose handler it is talking to — and it will not register at all
+    // (`responder::Blocker::kCannotVerify`).
     out->fault = !crypto::Ready() && storage::Mounted() && config::Loaded();
 }
 
@@ -194,19 +195,21 @@ extern "C" void app_main(void) {
     // the compiled-in default.
     led::SetBrightness(config::Get().led.percent, config::Get().led.idle_percent);
 
-    // **The identity, and it is this early because everything above the bus has to
-    // be able to ask about it** (§10.6). It depends on nothing — no filesystem, no
-    // radio — so the first console prompt finds the answer already there, and a
-    // device that cannot sign says so from its first log line rather than from its
-    // first request.
+    // **The verifier — and there is no identity here any more** (§10.6). This used
+    // to derive an Ed25519 key for this board to sign with; §10.18 moved the signer
+    // into the security key, so what this call now does is bring libsodium up, check
+    // it against a vector Python produced, and **erase the seed an older firmware
+    // left in NVS**. That erase is the point: it takes the last private key off this
+    // board's flash.
     //
-    // The failure paths are silent by design (§10.10): a self-test that fails or an
-    // eFuse with no key burned leaves `crypto::Ready()` false, and nothing above may
-    // publish a decision without it.
+    // Still this early, and for a reason that survived the change: it depends on
+    // nothing — no filesystem, no radio — and everything above the bus has to be
+    // able to ask whether §6's reply can be checked before it registers.
     //
-    // **This is also why the main task's stack is 8 KB** — `crypto_sign` uses 4,112
-    // bytes of it and the framework's default is 3,584. `sdkconfig.defaults` carries
-    // that number and where it came from.
+    // The failure path is silent by design (§10.10): a self-test that fails leaves
+    // `crypto::Ready()` false, and `responder::WhyNot` will not let the device onto
+    // `approvals.*` without it. A board that cannot verify the handler cannot know
+    // whose key it pinned.
     crypto::Init();
 
     // And what the key is *for*: `registration.json`, if there is one (§10.7). It

@@ -10,7 +10,7 @@
 #include "cJSON.h"
 #include "cbor.h"
 #include "ctaphid_frames.h"
-#include "device_key.h"
+#include "crypto.h"
 #include "esp_log.h"
 #include "esp_random.h"
 #include "psa/crypto.h"

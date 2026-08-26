@@ -29,7 +29,7 @@ built around them.
 | `pending` | **white** | fast (200/200 ms) | full | **a request is waiting for you** |
 | `fault` | red | fast | full | something that should work did not |
 | `no-storage` | **yellow** | fast | full | the filesystem would not mount |
-| `no-device-key` | **yellow** | fast | full | libsodium is not usable — §6's reply could not be verified |
+| `no-verifier` | **yellow** | fast | full | libsodium fails its own vector — §6's reply could not be checked |
 | `no-wifi` | **yellow** | fast | full | no link |
 | `no-internet` | **yellow** | fast | full | associated, and nothing answers |
 | `no-bus` | **yellow** | fast | full | no NATS connection |
@@ -81,7 +81,7 @@ comes up red has a firmware that is running. It is also the answer to "did it
 reset" from across a room.
 
 **Five states share one yellow, and that is the design rather than a shortcut.**
-Storage, key, Wi-Fi, internet and bus are a *stack*: each makes the next possible,
+Storage, the verifier, Wi-Fi, internet and bus are a *stack*: each makes the next possible,
 and the operator has one thing to do about all of them — plug the device into a
 network that has the bus on it. Five yellows told apart by blink rate would be
 five things to memorise for one action. What is lost is diagnosis at a glance, and

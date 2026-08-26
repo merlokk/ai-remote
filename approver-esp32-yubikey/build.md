@@ -134,17 +134,24 @@ be 64 KB aligned and an off-by-one there is a silent reflash away from confusing
 Measured on this build, `idf.py size` and `idf.py size-components`:
 
 ```
-Total image size: 1,298,215 bytes
-Smallest app partition: 2,621,440 bytes — 50% free
+Total image size: 1,284,987 bytes
+Smallest app partition: 2,621,440 bytes — 51% free
 Bootloader: 21,056 bytes — 36% free
 ```
+
+**13,228 bytes smaller than the line above used to say**, and the change that did it
+was a deletion: §10.6's Ed25519 identity, the eFuse route through the HMAC unit, the
+seed generated from SAR-ADC entropy and kept in NVS, `Sign`, and `ProveKey`. Three
+ESP-IDF components left the dependency line with them — `esp_security`, `efuse` and
+`bootloader_support` — which is most of where the bytes were. libsodium itself stays
+for one verify.
 
 The largest archives, and none of them is a surprise:
 
 | Archive | Bytes | What |
 |---------|-------|------|
 | `libnet80211.a` | 150,629 | the Wi-Fi MAC |
-| `libespressif__libsodium.a` | 135,955 | Ed25519, and now only to *verify* (§10.6) |
+| `libespressif__libsodium.a` | 135,955 | Ed25519, and now **only** to verify — one call, plus base64 (§10.6). The largest thing this firmware links for the smallest surface, and the reason is fixed protocol: §6's server key is Ed25519 and mbedTLS has no EdDSA |
 | `libtfpsacrypto.a` | 111,117 | mbedTLS/PSA, linked for `esp-tls` and used by §10.18 |
 | `libesp_stdio.a` | 108,533 | mostly `.rodata` — `printf` and its tables |
 | `liblwip.a` | 108,305 | TCP/IP |
@@ -199,8 +206,9 @@ without a **new** one-time token minted on the host, because the old one is spen
 
 **And since §10.18 the enrolment is the identity**, so losing `fido.json` is
 losing the signing key: the device comes back with the same `key_id` and *no* key,
-and needs `key enrol` before `register` will even run. The Ed25519 seed in NVS
-survives a `flash` and is not what signs anything (§10.6).
+and needs `key enrol` before `register` will even run. There is no Ed25519 seed to
+survive a `flash` any more: §10.6's identity is deleted and the firmware erases the
+seed an older build left in NVS.
 
 `idf.py app-flash` has none of these consequences and is what the edit-build-run
 loop should use.

@@ -44,8 +44,8 @@ State Decide(const Inputs &in) {
     if (!in.storage_mounted) {
         return State::kNoStorage;
     }
-    if (!in.device_key) {
-        return State::kNoDeviceKey;
+    if (!in.can_verify) {
+        return State::kNoVerifier;
     }
     if (!in.wifi_link) {
         return State::kNoWifi;
@@ -101,8 +101,8 @@ const char *StateName(State state) {
             return "fault";
         case State::kNoStorage:
             return "no-storage";
-        case State::kNoDeviceKey:
-            return "no-device-key";
+        case State::kNoVerifier:
+            return "no-verifier";
         case State::kNoWifi:
             return "no-wifi";
         case State::kNoInternet:
@@ -139,7 +139,7 @@ const char *StateText(State state) {
             return "something failed - see `status` on the console";
         case State::kNoStorage:
             return "the storage partition would not mount";
-        case State::kNoDeviceKey:
+        case State::kNoVerifier:
             return "no device key - see `keys`";
         case State::kNoWifi:
             return "no Wi-Fi link - see `wifi`";
@@ -229,7 +229,7 @@ Look LookOf(State state) {
         // words, and every transition between them is a log line. The light says
         // *not yet*; the console says *why*.
         case State::kNoStorage:
-        case State::kNoDeviceKey:
+        case State::kNoVerifier:
         case State::kNoWifi:
         case State::kNoInternet:
         case State::kNoBus:

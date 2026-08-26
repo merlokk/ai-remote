@@ -1,23 +1,25 @@
-# The device's identity (CLAUDE.md §10.6) — an Ed25519 key, derived per boot from
-# an eFuse key through the HMAC unit where one is burned, and from a seed kept in
-# NVS where one is not. `device_key.h` says which route shipped and what the
-# second one costs.
+# Checking the handler's signature, and base64 (CLAUDE.md §10.6). **There is no
+# key in here.** This component used to hold the board's Ed25519 identity — an
+# eFuse route through the HMAC unit and a stored-seed fallback in NVS — and §10.18
+# took the signer into the security key, so what is left is one verify and two
+# base64 calls. `crypto.h` says what that removal bought.
 #
-# `esp_security` is where `esp_hmac.h` lives on this framework version, `efuse`
-# is what answers whether a key block was burned for it, and
-# `espressif__libsodium` is §10.4's Ed25519 — mbedTLS has no EdDSA at all, which
-# is why this is the one component in the firmware that adds a crypto library.
+# `espressif__libsodium` is §10.4's Ed25519 and stays for exactly one reason: §6's
+# reply is signed by the handler and the handler's key is Ed25519 by fixed
+# protocol, while mbedTLS has no EdDSA at all. It is still the one component in
+# this firmware that adds a crypto library, and it is now the only thing it is
+# added for.
 #
-# `nvs_flash` and `bootloader_support` are §10.6's **fallback**, and they are the
-# reason this component's dependency line is longer than the design called for:
-# with no eFuse key burned the seed is generated once — with the SAR-ADC entropy
-# source of `bootloader_random.h`, because the radio is not up this early — and
-# kept in NVS. That is the one namespace this firmware puts there, against
-# §10.15's rule, with the exception argued in `device_key.h`.
+# `nvs_flash` is no longer here to *store* anything. It is here to **erase**: the
+# seed an older firmware left in NVS is a private key belonging to nothing, and the
+# firmware that stopped using it is the one that removes it. `esp_security`,
+# `efuse` and `bootloader_support` went with the routes that needed them — the HMAC
+# unit, the eFuse purpose lookup, and the SAR-ADC entropy the seed was generated
+# from before the radio was up.
 #
-# **Nothing about approvals is in here** (§10.14.2). It signs bytes; what those
+# **Nothing about approvals is in here** (§10.14.2). It checks bytes; what those
 # bytes mean is `components/protocol`'s subject, and the split is what keeps that
 # half of §7 testable on the host with no board.
-idf_component_register(SRCS "device_key.cpp"
+idf_component_register(SRCS "crypto.cpp"
                     INCLUDE_DIRS "."
-                    REQUIRES esp_security efuse nvs_flash bootloader_support espressif__libsodium)
+                    REQUIRES nvs_flash espressif__libsodium)

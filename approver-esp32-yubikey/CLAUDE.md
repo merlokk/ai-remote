@@ -146,12 +146,14 @@ file on SPIFFS with the restore that puts it back, the Wi-Fi radio with a manage
 above it, the bus, and a console on the CH343P bridge with a command per piece of
 it ([`commands.md`](commands.md) is the list).
 
-And one thing that is **written and not yet needed**: `components/crypto` still
-derives an Ed25519 identity at boot, which since §10.18 signs nothing. What it is
-still for is verifying the *handler's* reply (§6's server key is Ed25519 by fixed
-protocol) and base64. Removing the identity — and with it the seed in unencrypted
-NVS that §10.6 called strictly worse — is owed work, and [`status.md`](status.md)
-lists it as such.
+And one thing that is **no longer there at all**: `components/crypto` used to derive
+an Ed25519 identity at boot, which since §10.18 signed nothing. It has been deleted
+— the seed, the eFuse route, `Sign`, and the seed's 32 bytes in unencrypted NVS,
+which the firmware now **erases** on any board that has them. What is left of
+libsodium verifies the *handler's* reply (§6's server key is Ed25519 by fixed
+protocol) and provides base64, and neither ever needed a key of ours. **There is no
+private key on this board of any kind** (§10.6), which is the sentence the whole
+design was for.
 
 Read §10.3 before anything else: it is the one part of this that changes
 something outside this folder.

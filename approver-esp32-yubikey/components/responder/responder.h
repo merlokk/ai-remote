@@ -113,7 +113,7 @@ inline constexpr size_t kPendingDecisions = 2;
 // (§10.7). Ordered by what somebody would fix first.
 enum class Blocker : uint8_t {
     kNone,
-    kNoKey,
+    kCannotVerify,
     kNotRegistered,
     kNoBus,
     // **No key enrolled** (§10.18) — a device that could never say `allow`, or

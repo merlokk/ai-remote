@@ -49,7 +49,12 @@ struct Inputs {
     bool fault = false;
 
     bool storage_mounted = false;
-    bool device_key = false;   // §10.6 — an Ed25519 identity exists
+    // **Whether the handler's signature can be checked** (§10.6). It used to be
+    // `device_key` — whether this board had an Ed25519 identity — and since §10.18
+    // there is no such key: what libsodium is still for is verifying §6's *reply*,
+    // and a board that cannot do that must not register, because it cannot know
+    // whose key it pinned. The light's meaning did not change when the name did.
+    bool can_verify = false;
     bool wifi_link = false;    // associated with an access point
     bool internet = false;     // and the reachability check agrees (§10.9)
     bool bus_connected = false;
@@ -94,7 +99,7 @@ enum class State : uint8_t {
     kPending,
     kFault,
     kNoStorage,
-    kNoDeviceKey,
+    kNoVerifier,
     kNoWifi,
     kNoInternet,
     kNoBus,
