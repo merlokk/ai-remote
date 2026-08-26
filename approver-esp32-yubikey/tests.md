@@ -34,7 +34,7 @@ uses.
 | Suite | Why it exists |
 |-------|---------------|
 | `led` | the encoding is the one thing whose only other verification method is *looking at a desk*. A single wrong bit is an LED that is the wrong colour, and one of the tests decodes a frame back by hand — because a table whose entries were transposed still emits only the four legal characters |
-| `indicator` | a fifteen-way ranking that could otherwise only be checked by unplugging things. It pins the order, the two deliberate rule-breaks in it, and **that no two states look alike** — with one emitter, a shared appearance is a state the operator cannot see |
+| `indicator` | a sixteen-way ranking that could otherwise only be checked by unplugging things. It pins the order, the two deliberate rule-breaks in it, and **that no two states look alike** — with one emitter, a shared appearance is a state the operator cannot see |
 | `ctaphid` | a sequence number, a length that arrives before the data, and a buffer whose fill rate a device on the other end of a cable controls. A *real* key will never send a malformed frame, which is precisely why the malformed paths need a test |
 | `cbor` | every length in a CTAP2 response is a number the key chose. Also the writer: CTAP2 requires canonical CBOR, and a canonicity bug looks like a key that mysteriously will not talk to this device |
 | `ctap2` | that the requests are bytes a real key accepts — including **`up: true`, said out loud**, which is the single most important byte this firmware sends — and that a malformed answer never reaches the verifier |

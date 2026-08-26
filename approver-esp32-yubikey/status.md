@@ -104,7 +104,6 @@ refused every one of them in three milliseconds among them. They are listed unde
 | **A clock** | no RTC (no I²C bus for one) and no SNTP: §7's `ts` is echoed from the request, nothing else here reads a wall-clock time, and there is nowhere to show one (§10.13) |
 | **A web configuration site** | the way in on this board is the CH343P bridge and the console on it, which is a socket rather than a network service. A second surface would be one more thing to keep away from a verdict (§10.10 rule 4) |
 | **OTA** | the partition table has two slots and nothing uses them |
-| **A user manual** | one document for whoever is *holding* the device rather than changing it: the light, the two gestures, and first-time setup. It was waiting on the key working, and the key works — so this is now simply owed, and the sibling board's `user-manual.md` is the shape to copy |
 
 ## Known differences from the committed tree
 

@@ -85,7 +85,7 @@ stack      1636 B free
 flapping, and it is the cheapest way to see that from a console.
 
 ### `led test`
-Walks all fifteen states' colours, 1.5 s each, naming each one as it goes. It
+Walks all sixteen states' colours, 1.5 s each, naming each one as it goes. It
 goes through `SetFor`, so **the device is unaffected** — the ranking is untouched
 and the next tick puts the real colour back. Safe with a request pending, which is
 exactly when somebody wants to know what a colour looks like.

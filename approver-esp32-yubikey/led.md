@@ -11,7 +11,7 @@ request waiting — and precisely one of them gets the light.
 
 That ranking is `components/indicator/indicator_policy.cpp`, it has no ESP-IDF in
 it, and §10.11's host tier runs every branch of it. That is deliberate: a
-fifteen-way decision that could only be checked by unplugging things and watching
+sixteen-way decision that could only be checked by unplugging things and watching
 a desk would be a decision nobody ever checked.
 
 ## 10.17.1 What each state looks like

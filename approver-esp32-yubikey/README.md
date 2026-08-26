@@ -113,4 +113,9 @@ softened. Under it: [`hardware.md`](hardware.md), [`led.md`](led.md),
 [`tests.md`](tests.md), [`build.md`](build.md), [`commands.md`](commands.md),
 [`status.md`](status.md), [`working-with-code.md`](working-with-code.md).
 
+And one that is for neither arriving nor changing:
+[`user-manual.md`](user-manual.md), written for whoever is **holding** the device —
+the two sockets, the one light, the gesture that approves and the two that refuse,
+with photographs of the real board.
+
 This file is for arriving; those are the authoritative ones.

@@ -46,7 +46,7 @@ single button on the sibling board does not have.
 **And nothing here shows anything.** There is no display of any kind, so there is
 nothing to render a request, a session's spending or a session's activity on, and
 this device subscribes to no subject but `approvals.*`. It has one output, and its
-whole vocabulary is §10.17's fifteen states.
+whole vocabulary is §10.17's sixteen states.
 
 **There is also no clock**, for the same reason: no RTC — the board has no I²C bus
 for one (§10.13) — and no SNTP, because a time that is only right once a server has
@@ -83,6 +83,7 @@ status summary below, whose long form is [`status.md`](status.md).
 | [`commands.md`](commands.md) | every console command the device answers and what each one does. Design documents describe why; that one describes what you can type |
 | [`status.md`](status.md) | the row-by-row state of every piece — what runs on the board, what is written and untried, what is still a design. No decisions in it, and the fastest-moving file here |
 | [`working-with-code.md`](working-with-code.md) | the mechanics: where ESP-IDF is installed on this machine, how to get a shell that has `idf.py`, which COM port is which, and how to drive the console from a script |
+| [`user-manual.md`](user-manual.md) | the only document here written for whoever is **holding** the device rather than changing it: the two sockets, the one light, the gesture that approves and the two that refuse, first-time setup, and a troubleshooting table keyed on what the light is doing. Three photographs of the real board in [`images/`](images/) carry the states words are worst at — green at rest, white with the key asking, red with the deny waiting to be signed. **It decides nothing** |
 | [`README.md`](README.md) | the short form, for somebody arriving rather than working here: what the device is, the four hardware facts, build and flash, first-time setup and what the light means. **It owns no section and decides nothing** — every line in it is a summary of one of the files above, which stay authoritative |
 
 ## Status: a working responder with no signing key yet
@@ -140,7 +141,7 @@ no longer the enrolled one — is still real and still enforced at every boot
 (§10.18.1); it just is not what this device is showing.
 
 Below the key, what runs: the WS2812 on GPIO48 driven off a UART (§10.17.3), a
-fifteen-state ranking that decides what a single emitter says about a device
+sixteen-state ranking that decides what a single emitter says about a device
 that is several things at once (§10.17), the BOOT button as a deny, the settings
 file on SPIFFS with the restore that puts it back, the Wi-Fi radio with a manager
 above it, the bus, and a console on the CH343P bridge with a command per piece of
