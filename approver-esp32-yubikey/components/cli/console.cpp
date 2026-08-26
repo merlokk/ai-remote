@@ -1489,7 +1489,11 @@ int CmdKeys(int argc, char **argv) {
         return 1;
     }
 
-    printf("key id     approver-esp32\n");
+    // **`protocol::kKeyId`, not a literal.** This said `approver-esp32` — the
+    // sibling board's id, inherited with the file — which is an identity this
+    // device has never registered as, printed by the one command an operator reads
+    // to find out what it *is*.
+    printf("key id     %s\n", protocol::kKeyId);
     printf("key type   ed25519\n");
     printf("state      %s\n", crypto::StateText());
 
