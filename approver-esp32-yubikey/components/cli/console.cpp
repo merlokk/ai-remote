@@ -1918,6 +1918,12 @@ void PrintKeyUsage() {
 // returns when the touch never came, and "operation denied" reads like a device
 // that refused rather than a human who was not there (§10.10 rule 2 — that is a
 // nothing, not a deny).
+// How long the two console commands that need a fingertip wait for one, and so how
+// long their prompt is shown. It matches the `30000` they pass to `fido::Sign` and
+// `fido::Enrol` — a prompt that outlived the wait would be asking for a touch
+// nothing is listening for.
+inline constexpr uint32_t kConsoleTouchMs = 30000;
+
 void PrintKeyFailure(fido::usb::Fault fault, uint8_t status) {
     if (status != 0) {
         printf("the key said no — %s (CTAP %02x)\n", ctap2::StatusName(status), status);
@@ -2052,11 +2058,13 @@ int CmdKey(int argc, char **argv) {
             printf("this device is already enrolled — enrolling again replaces %s,\n", fido::kPath);
             printf("and the old credential stays on whatever key holds it.\n");
         }
-        printf("touch the key…\n");
+        printf("touch the key… (the light is blue and fast while it waits)\n");
         fflush(stdout);
         fido::usb::Fault fault = fido::usb::Fault::kNone;
         uint8_t status = 0;
+        indicator::ShowTouchPrompt(kConsoleTouchMs);
         const esp_err_t err = fido::Enrol(30000, &fault, &status);
+        indicator::EndTouchPrompt();
         if (err != ESP_OK) {
             printf("not enrolled: ");
             PrintKeyFailure(fault, status);
@@ -2088,15 +2096,21 @@ int CmdKey(int argc, char **argv) {
         uint8_t challenge[32];
         esp_fill_random(challenge, sizeof(challenge));
 
-        printf("touch the key…\n");
+        printf("touch the key… (the light is blue and fast while it waits)\n");
         fflush(stdout);
         fido::usb::Fault fault = fido::usb::Fault::kNone;
         uint8_t status = 0;
         const int64_t started = esp_timer_get_time();
         uint8_t signature[ctap2::kMaxSignatureSize];
         size_t signature_length = 0;
+        // **The console is not where somebody is looking** (§10.17). A real request
+        // has `pending` for this; a command typed into a serial port had nothing,
+        // and guessing when to put a finger on the key is how a wait that ends in
+        // `CTAP 0x27` gets read as a broken device.
+        indicator::ShowTouchPrompt(kConsoleTouchMs);
         const fido::Gate gate = fido::Sign(challenge, 30000, nullptr, nullptr, signature,
                                            sizeof(signature), &signature_length, &fault, &status);
+        indicator::EndTouchPrompt();
         const int64_t took_ms = (esp_timer_get_time() - started) / 1000;
 
         printf("%s — %s\n", fido::GateName(gate), fido::GateText(gate));

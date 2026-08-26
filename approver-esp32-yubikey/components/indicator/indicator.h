@@ -57,11 +57,27 @@ void OnGather(Gatherer gatherer);
 // stale by half a second.
 void Poke();
 
-// **The one thing that is pushed rather than polled** (§10.17): a verdict is an
-// event, not a state, and by the time the next tick came round the device would
-// already be idle again with nothing to show. Green for an allow, red for a
-// deny, both at full brightness for `kVerdictFlashMs`.
+// **Pushed rather than polled** (§10.17): a verdict is an event, not a state, and
+// by the time the next tick came round the device would already be idle again with
+// nothing to show. Green for an allow, red for a deny, both at full brightness for
+// `kVerdictFlashMs`.
 void ShowVerdict(bool allowed);
+
+// **The touch prompt**, and the second thing that is pushed: blue and fast, while
+// a *console* command is waiting for a fingertip on the security key.
+//
+// A real request needs none of this — the ranking already shows `pending`, white
+// and fast, and that light means "touch the key" (§10.17). What had no light at all
+// was `key enrol` and `key test`, which ask for a touch from a console the operator
+// may not be looking at, on a device whose only output was still reporting whatever
+// it happens to be. Blue because `signing` is blue too, so the pair reads in order:
+// **flashing** is "I need you", **solid** is "got it".
+//
+// `duration_ms` should be the wait the caller is about to make; `EndTouchPrompt` is
+// what the caller owes it afterwards, because a light still asking for a fingertip
+// after one arrived is a light that lies.
+void ShowTouchPrompt(uint32_t duration_ms);
+void EndTouchPrompt();
 
 // What the ranking last decided, for `status` and for one log line when it
 // changes.

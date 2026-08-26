@@ -114,6 +114,14 @@ void ShowVerdict(bool allowed) {
                 kVerdictFlashMs);
 }
 
+void ShowTouchPrompt(uint32_t duration_ms) {
+    // Fast rather than solid: this is a question, and the one state on this device
+    // that is already fast for the same reason is `pending` (§10.17).
+    led::SetFor(led::colour::kBlue, led::Effect::kFastBlink, duration_ms);
+}
+
+void EndTouchPrompt() { led::EndFor(); }
+
 State Current() { return runtime.current; }
 
 uint32_t Transitions() { return runtime.transitions; }

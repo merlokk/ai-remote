@@ -22,6 +22,7 @@ Three states, and the middle one is the one to watch:
 | ARKG derivation (§10.18.2) | **written** | `components/arkg`, 3,921 bytes. The five pure steps are host-tested against numbers Python produced; **the two curve steps have never run on this chip** — `key selftest` is the command and nobody has typed it |
 | Console on UART0 (§10.7) | **runs** | all 16 commands answer |
 | WS2812 on GPIO48 (§10.17) | **runs** | UART1 at 3.33 Mbaud, inverted; 0 write failures over thousands of frames |
+| The touch prompt (§10.17) | **runs** | blue and fast while `key enrol` / `key test` wait for a fingertip, and gone the moment the key answers rather than waited out |
 | The state ranking (§10.17) | **runs** | transitions observed for `booting → no-wifi → no-bus → not-enrolled → not-registered → pending` |
 | BOOT button | **partly** | it **reads** (`buttons` is correct). The press → verdict path is untested |
 | Wi-Fi (§10.9) | **runs** | joins, DHCP, reachability check |
@@ -42,11 +43,16 @@ Three states, and the middle one is the one to watch:
 signing key from that authenticator's seed key and holds it in `fido.json`. It
 signs as `AmHB+df5hQGLvelUF0QGzq/HuWCTKp+/DMie41ByjGvP` (p256).
 
-**What has still never happened is an assertion.** Everything above is the
-`makeCredential` half of §10.18; the `getAssertion` half — a request, a touch, the
-five checks, a signature on the wire — has not been run once, and that is where the
-five checks and PSA verification live. So the device can now *have* a key without
-yet having proved it can *use* it.
+**And the key has signed.** `key test` was run twice against the real key: an
+assertion came back, all five checks of §10.18.3 passed, and the verdict signature
+verified against the **derived** public key — which is the one equality this whole
+design rests on, and the thing nothing on the host side could have checked for it.
+Two DER signatures of different lengths (70 and 71 bytes) both parsed, so PSA's
+DER→raw conversion has been exercised on real variable-length output.
+
+**What has still never happened is a verdict on the wire.** Everything above is the
+key working; nothing has yet gone `request → touch → signed reply → hook`. That
+needs a registration, which this device does not currently have.
 
 | Piece | State | Note |
 |-------|-------|------|
@@ -54,16 +60,16 @@ yet having proved it can *use* it.
 | Interface selection | **runs** | picked interface 1 (`in 0x84, out 0x04`) out of a YubiKey's three. This was the row expected to go wrong first, and it did not |
 | CTAPHID framing | **runs** | INIT, a channel, and several CBOR exchanges against a real key with `0 framing` errors. 16 host tests underneath it |
 | CBOR | **runs** | parsed a real `getInfo` and a real `makeCredential` response. 20 host tests underneath it |
-| CTAP2 requests/responses | **partly** | `getInfo` and `makeCredential` are real. `getAssertion` has never been sent |
+| CTAP2 requests/responses | **runs** | `getInfo`, `makeCredential` and `getAssertion`, all against the real key |
 | `previewSign` — `generateKey` | **runs** | **a real key produced one**, and the draft's shape was read correctly: a 34-byte key handle and a seed key that both parsed. This was the row most likely to be a misreading of the draft |
-| `previewSign` — the assertion signature | **written** | still one reading of a draft, and still the first thing to compare a real answer against |
-| The five checks (§10.18.3) | **written** | rp hash, user presence, credential match, the assertion's own ECDSA, and the verdict's against the derived key. Nothing has reached them |
+| `previewSign` — the assertion signature | **runs** | a real key produced one, in the place the draft said it would: inside the authenticator data's extension outputs. Both readings of the draft — `generateKey` and this — turned out right |
+| The five checks (§10.18.3) | **run, and passed** | rp hash, user presence, credential match, the assertion's own ECDSA, and the verdict's against the derived key. The last one is the equality the design rests on: the key this chip derived is one the authenticator can reconstruct the private half of |
 | The `previewSign` advertisement check | **runs** | `getInfo`'s extension list is parsed, `key info` prints it, and `key enrol` refuses a key that does not advertise it rather than spending a touch on a `makeCredential` that fails with a status naming no cause |
 | `key info` / `key enrol` | **run** | both against the real key |
-| `key test` | **written** | the one command that would exercise an assertion, and it has not been typed |
+| `key test` | **runs** | twice: 7.2 s and 17.1 s, both `approved`, both verified. The seconds are the human walking over |
 | `key selftest` | **runs** | on the chip, against Python's vector, in **661–670 ms** |
 | `fido.json` (format 2) | **runs** | written by a real enrolment, and re-read at the next boot into the same `signs as` — including across an `app-flash` |
-| PSA ECDSA verification | **written** | the DER→raw conversion is the part most likely to be wrong first, and nothing has reached it either |
+| PSA ECDSA verification | **runs** | the DER→raw conversion, against real signatures of 70 **and** 71 bytes — the variable length that made it the part most likely to be wrong first |
 | The registration↔enrolment binding | **partly** | the boot comparison runs. The **stale** path has not been seen, because there is no `registration.json` on the device to be stale |
 
 ## Owed, and known

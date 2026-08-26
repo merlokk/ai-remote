@@ -94,10 +94,13 @@ enrolled, so all four layers under §10.18 (CTAPHID, CBOR, CTAP2 with `previewSi
 and the ARKG derivation) have run against real hardware, and this device holds a
 signing key derived from that authenticator.
 
-**What has never happened is an assertion.** Nothing has yet asked the key to
-*sign* anything, so the five checks and the verdict on the wire are still unrun.
-The device is registered with nobody at the moment and deliberately stays off
-`approvals.*` rather than taking requests it cannot answer.
+**And it has signed.** `key test` asked the key for a signature over a random
+challenge: it came back, all five checks passed, and the verdict verified against
+the derived public key — the one equality nothing on the host side could check.
+
+**What has never happened is a verdict on the wire.** The device is registered with
+nobody at the moment and deliberately stays off `approvals.*` rather than taking
+requests it cannot answer, so no request has yet gone all the way to `hook.py`.
 
 [`status.md`](status.md) is row by row and is the file to trust.
 

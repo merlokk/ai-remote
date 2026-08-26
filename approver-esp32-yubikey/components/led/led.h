@@ -86,6 +86,10 @@ void SetIdle(Rgb colour, Effect effect);
 // follows it is not this caller's business.
 void SetFor(Rgb colour, Effect effect, uint32_t duration_ms);
 
+// End a `SetFor` now instead of waiting it out. For the caller that put up a
+// prompt and has just got its answer — see `Animator::EndFor`.
+void EndFor();
+
 void Off();
 
 Status Get();

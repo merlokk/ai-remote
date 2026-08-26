@@ -117,6 +117,17 @@ void Animator::SetFor(Rgb colour, Effect effect, uint8_t percent, uint32_t durat
     phase_at_ms_ = now_ms;
 }
 
+void Animator::EndFor(uint32_t now_ms) {
+    if (!overriding_) {
+        return;
+    }
+    overriding_ = false;
+    // The phase restarts with the state underneath, the same way an override that
+    // expires on its own restarts it in `FrameAt` — otherwise a breath would
+    // resume mid-cycle at whatever the prompt's blink had left behind.
+    phase_at_ms_ = now_ms;
+}
+
 Rgb Animator::FrameAt(uint32_t now_ms, uint32_t *next_ms) {
     uint32_t next = 1000;
 

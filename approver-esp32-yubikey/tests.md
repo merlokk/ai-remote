@@ -190,6 +190,8 @@ that did not say so would be a list nobody could act on.
 | **`key selftest` on the chip** | the ARKG derivation's two curve steps against the committed vector: **agrees with Python, 661–670 ms** |
 | **enumeration and enrolment against a real key** | a YubiKey 5 (`1050:0407`, `OTP+FIDO+CCID`) on the OTG port: claimed on interface 1 of three, `CTAPHID_INIT`, `getInfo`, and a `makeCredential` with `generateKey` that came back with a 34-byte key handle and a seed key the device derived its signing key from. `fido.json` written, and re-read into the same key across a reflash |
 | **a touch that never came** | the key answers `CTAP 0x27`, nothing is enrolled, and nothing is published. It cost two attempts to recognise, which is why the console now names the cause instead of printing the transport's `ok` |
+| **an assertion, and the equality under the whole design** | `key test`, twice: `getAssertion` with `previewSign`, all five checks of §10.18.3, and the verdict signature verifying against the **derived** public key — so the key this chip derived is one the authenticator can reconstruct the private half of. Two DER signatures of different lengths (70, 71 bytes) both parsed, which is PSA's DER→raw on real variable-length output |
+| **the touch prompt** | blue and fast while a console command waits, gone the moment the key answers rather than waited out (§10.17) |
 | **the `previewSign` advertisement check** | `getInfo`'s extension list is parsed and `key enrol` refuses a key without it before spending a touch. The key on this desk **does** advertise it, so what is proven here is the parse and the readout, not the refusal |
 | **the spin** | **found a bug**: the first gate refused instantly with no key, nothing decided the request, and the task re-took it several hundred times a second. Fixed in two places (`WaitForKey`, `g_abandoned_nonce`) and re-checked: 700 bytes of console output over 25 seconds of waiting |
 
@@ -197,7 +199,6 @@ that did not say so would be a list nobody could act on.
 
 | | What it needs | What it would check |
 |---|---|---|
-| **an assertion — the other half of §10.18** | the key that is already on the desk, and `key test` | everything the enrolment did not reach: `getAssertion` with `signByCredential`, the assertion's own ECDSA, the `previewSign` signature inside the authenticator data, PSA's DER→raw conversion, and §10.18.3's five checks. **This is the largest unrun thing left**, and unlike the rows below it needs nothing that is not already here |
 | **a key that does not advertise `previewSign`** | a second, ordinary key | the refusal path in `key enrol`. The key on this desk advertises it, so only the readout has been seen |
 | **that the derived key is the key** | a security key, and the handler | the property nothing else can check: enrol, register, and have `hook.verify_reply` accept a real reply. Everything in tiers 1 and 2 is one side of that equality |
 | **the deny button** | a finger **and a key** | `request test`, tap BOOT, then touch the key to sign the deny (§10.18.5), expect a red flash. The button *reads* correctly (`buttons` shows `BOOT GPIO0 released raw released`) — what is untested is the path from a press to a signed verdict, and so is walking away after the tap, which must produce **no reply** |

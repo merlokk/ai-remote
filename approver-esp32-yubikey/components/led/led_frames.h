@@ -133,6 +133,17 @@ class Animator {
     void SetFor(Rgb colour, Effect effect, uint8_t percent, uint32_t duration_ms,
                 uint32_t now_ms);
 
+    // **End a running override now**, falling back to the state underneath.
+    // A no-op when nothing is overriding.
+    //
+    // This exists because not every override is a flash. A verdict has a duration
+    // of its own and must not be cut short — that is why `Set` deliberately does
+    // not do it. A prompt is the other kind: "touch the key now" is true only
+    // until the key is touched, and a light still asking after the answer arrived
+    // is a light that lies (§10.17). So ending one early is its own call, made by
+    // the caller that put the prompt up.
+    void EndFor(uint32_t now_ms);
+
     // What to put on the wire now. `next_ms` is filled with how long this frame
     // is good for; a caller may sleep that long, and must not sleep longer.
     Rgb FrameAt(uint32_t now_ms, uint32_t *next_ms);

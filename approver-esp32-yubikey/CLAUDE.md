@@ -104,10 +104,16 @@ Python **on the chip** (`key selftest`, 661–670 ms), and `fido.json` holds a k
 this device signs as. [`status.md`](status.md) is row by row and it is the file to
 read before believing anything here is more finished than it says.
 
-**What has never happened is an assertion.** All of the above is the
-`makeCredential` half. Nothing has yet asked the key to *sign* anything — so
-§10.18.3's five checks, PSA's ECDSA verification and the verdict on the wire are
-still written and unrun, and this device has a key it has not proved it can use.
+**And the key has signed.** `key test` was run twice against it: an assertion came
+back, §10.18.3's five checks all passed, and the fifth — the verdict signature
+against the **derived** public key — is the equality this whole design rests on.
+Nothing on the host side could have checked it: it says the key this chip derived
+is one the authenticator can reconstruct the private half of.
+
+**What has never happened is a verdict on the wire.** No request has gone
+`request → touch → signed reply → hook`, because this device is not registered
+with anybody at the moment. That is the last unrun thing, and it needs a token
+rather than a design.
 
 Because of that the device is, right now, in the state its own light calls
 `not-registered` — magenta — and **it is deliberately not on `approvals.*` while

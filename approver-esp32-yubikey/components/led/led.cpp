@@ -275,6 +275,17 @@ void SetFor(Rgb colour, Effect effect, uint32_t duration_ms) {
     }
 }
 
+void EndFor() {
+    if (!Lock()) {
+        return;
+    }
+    state.animator.EndFor(NowMs());
+    Unlock();
+    if (state.task != nullptr) {
+        xTaskAbortDelay(state.task);
+    }
+}
+
 void Off() { Set(colour::kOff, Effect::kSolid); }
 
 Status Get() {

@@ -38,10 +38,29 @@ built around them.
 | `watching` | cyan | beacon (100 ms / 2 s) | idle | connected, not yet on `approvals.*` |
 | `ready` | **green** | breathe (~9 s) | idle | nothing to do, and able to do it |
 
-And one that is not a state at all: **a verdict flashes for 1.5 s** — green solid
-for an allow, red solid for a deny — over whatever is underneath, and then the
-ranking comes back. It is pushed rather than polled, because a verdict is an event
-and by the next tick the device is already idle again.
+And two that are not states at all, both pushed over whatever is underneath rather
+than polled:
+
+* **a verdict flashes for 1.5 s** — green solid for an allow, red solid for a deny —
+  and then the ranking comes back. Pushed because a verdict is an event, and by the
+  next tick the device is already idle again;
+* **a touch prompt is blue and fast** while a *console* command waits for a
+  fingertip on the security key (`key enrol`, `key test`). It ends the moment the
+  key answers, rather than being waited out.
+
+**The prompt exists because the console is not where anybody is looking.** A real
+request needs none of it: `pending` is already white and fast, and that light means
+touch the key. But `key enrol` and `key test` ask for a touch from a serial port
+while the light goes on reporting whatever the device happens to be — so the
+operator guesses when to put a finger on the key, and a wait that ends in
+`CTAP 0x27` reads as a broken device rather than as a touch that never came
+(§10.18.1). This cost two attempts before it was a light.
+
+Blue, because `signing` is blue too, and the pair then reads in order: **flashing**
+is "I need you", **solid** is "got it". And it is the one override that can be
+ended early — a flash must finish being seen, but a light still asking for a
+fingertip after one arrived is a light that lies, which is why `led::EndFor` exists
+and `led::Set` deliberately does not do it.
 
 ### The three decisions in that table
 

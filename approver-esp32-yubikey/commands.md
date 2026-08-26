@@ -216,10 +216,24 @@ The key is new, so the allowlist entry naming the old one is worthless (§10.18.
 
 ### `key test`
 Asks the key to sign a **random** challenge — the whole approval path except the
-request. It needs a touch, it verifies both signatures (§10.18.3), and it
-**approves nothing**: the bytes it signed belong to no request, so they are not a
-decision about anything. It is the one command that answers "would this device
-approve, if it were asked" without asking it.
+request. It needs a touch, it runs all five checks (§10.18.3), and it **approves
+nothing**: the bytes it signed belong to no request, so they are not a decision
+about anything. It is the one command that answers "would this device approve, if it
+were asked" without asking it.
+
+```
+> key test
+touch the key… (the light is blue and fast while it waits)
+approved — the key confirmed this request
+signed and verified in 7232 ms, 71 bytes: MEUCIQCJnLsn…
+nothing was approved: this challenge belongs to no request, so the
+bytes it signed are not a decision about anything (§10.18).
+```
+
+**The light is blue and fast while it waits**, and goes back the moment the key
+answers — the same for `key enrol` (§10.17). The time is the human's, not the
+device's: a signature takes tens of milliseconds and the rest is somebody walking
+over to the key.
 
 ### `key selftest`
 **Needs no key on the port**, and it is the one part of §10.18 that can be checked

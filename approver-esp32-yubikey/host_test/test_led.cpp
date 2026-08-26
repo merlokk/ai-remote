@@ -238,6 +238,52 @@ void test_led_a_state_change_under_a_running_override_is_what_it_falls_back_to(v
     TEST_ASSERT_TRUE(a.FrameAt(1000, &next) == led::colour::kCyan);
 }
 
+void test_led_an_override_can_be_ended_early(void) {
+    // **The one caller that needs this is a prompt rather than a flash.** A verdict
+    // has a duration of its own and must not be cut short; "touch the key now" is
+    // true only until the key is touched, and a light still asking for a fingertip
+    // after the fingertip arrived is a light that lies. So ending one early is an
+    // explicit call and not a `Set` (§10.17).
+    led::Animator a;
+    a.Set(led::colour::kMagenta, led::Effect::kNormBlink, 100, 0);
+    a.SetFor(led::colour::kBlue, led::Effect::kFastBlink, 100, 30000, 0);
+
+    uint32_t next = 0;
+    TEST_ASSERT_TRUE(a.FrameAt(0, &next) == led::colour::kBlue);
+    TEST_ASSERT_TRUE(a.Overriding());
+
+    a.EndFor(500);
+    TEST_ASSERT_FALSE(a.Overriding());
+    // And the state underneath is back at once, not at the end of the 30 s.
+    TEST_ASSERT_TRUE(a.FrameAt(500, &next) == led::colour::kMagenta);
+}
+
+void test_led_ending_an_override_that_is_not_running_changes_nothing(void) {
+    // The console calls this after every wait, including the ones that never put
+    // a prompt up — so it has to be a no-op rather than a reset of the phase.
+    led::Animator a;
+    a.Set(led::colour::kGreen, led::Effect::kSolid, 100, 0);
+    a.EndFor(100);
+    TEST_ASSERT_FALSE(a.Overriding());
+
+    uint32_t next = 0;
+    TEST_ASSERT_TRUE(a.FrameAt(200, &next) == led::colour::kGreen);
+}
+
+void test_led_a_prompt_ended_early_does_not_resurrect(void) {
+    // Ended means ended: the original duration must not bring it back on a later
+    // frame, which is what would happen if `EndFor` only moved a deadline.
+    led::Animator a;
+    a.Set(led::colour::kGreen, led::Effect::kSolid, 100, 0);
+    a.SetFor(led::colour::kBlue, led::Effect::kFastBlink, 100, 30000, 0);
+    a.EndFor(10);
+
+    uint32_t next = 0;
+    TEST_ASSERT_TRUE(a.FrameAt(20, &next) == led::colour::kGreen);
+    TEST_ASSERT_TRUE(a.FrameAt(5000, &next) == led::colour::kGreen);
+    TEST_ASSERT_FALSE(a.Overriding());
+}
+
 void test_led_times_survive_the_millisecond_wrap(void) {
     // `uint32_t` milliseconds wrap at ~49 days and are only ever subtracted.
     const uint32_t before_wrap = 0xFFFFFF00u;
@@ -271,5 +317,8 @@ void RegisterLedTests(void) {
     RUN_TEST(test_led_breathe_walks_the_ramp_and_reaches_both_ends);
     RUN_TEST(test_led_an_override_expires_and_the_state_underneath_comes_back);
     RUN_TEST(test_led_a_state_change_under_a_running_override_is_what_it_falls_back_to);
+    RUN_TEST(test_led_an_override_can_be_ended_early);
+    RUN_TEST(test_led_ending_an_override_that_is_not_running_changes_nothing);
+    RUN_TEST(test_led_a_prompt_ended_early_does_not_resurrect);
     RUN_TEST(test_led_times_survive_the_millisecond_wrap);
 }
