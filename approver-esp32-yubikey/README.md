@@ -79,21 +79,25 @@ worth memorising:
 | **white, fast** | a request is waiting for you — touch the key |
 | **green, breathing** | connected, registered, enrolled, nothing to do |
 | yellow, fast | no storage, no key, no Wi-Fi, no internet or no bus — plug it into a network that has the bus |
-| magenta | not registered — `register <token>` |
-| cyan, fast | nothing enrolled — `key enrol` |
+| cyan, fast | nothing enrolled — `key enrol`. Shown **before** the one below, because enrolment comes first |
+| magenta | enrolled, not registered — `register <token>` |
 | red | solid at boot; blinking is a fault |
 
 [`led.md`](led.md) is the full table and the reasoning under it.
 
 ## Status
 
-**The loop runs up to the key.** Boot, filesystem, Wi-Fi, NATS, registration, the
-request queue and every failure path have been done on the board on this desk.
-**No FIDO authenticator has ever been plugged in**, so the four layers under
-§10.18 — CTAPHID, CBOR, CTAP2 with `previewSign`, and the ARKG derivation — are
-compiled, host-tested against numbers Python produced, and unrun on hardware.
-Until a key is enrolled this device has no way to sign at all, and it deliberately
-stays off `approvals.*` rather than taking requests it cannot answer.
+**The loop runs up to the signature.** Boot, filesystem, Wi-Fi, NATS, the request
+queue and every failure path have been done on the board on this desk — and so has
+the enrolment: a YubiKey 5 on the OTG port was enumerated, interrogated and
+enrolled, so all four layers under §10.18 (CTAPHID, CBOR, CTAP2 with `previewSign`,
+and the ARKG derivation) have run against real hardware, and this device holds a
+signing key derived from that authenticator.
+
+**What has never happened is an assertion.** Nothing has yet asked the key to
+*sign* anything, so the five checks and the verdict on the wire are still unrun.
+The device is registered with nobody at the moment and deliberately stays off
+`approvals.*` rather than taking requests it cannot answer.
 
 [`status.md`](status.md) is row by row and is the file to trust.
 

@@ -78,6 +78,23 @@ the hook rejects, which is worse than not answering because it is invisible.
 `key enrol` says all of this at the moment it happens, in three lines, and so
 does the boot log.
 
+### The key has to advertise it first
+
+**`getInfo` is asked before the touch is spent**, and a key whose `extensions` list
+does not contain `previewSign` is refused there. This is not politeness: the
+signing key is *derived* from that extension, so a key without it has nothing to
+derive from and no change on this side can help.
+
+It is also the difference between a diagnosis and an afternoon. A key that does not
+support the extension does not say so when asked for a credential — it fails the
+`makeCredential` with a CTAP status that names no cause, which from the desk is
+indistinguishable from a broken cable, a wrong interface or a firmware bug. The
+`getInfo` costs nothing and no touch, so the refusal is free and it names the
+reason. `key info` prints the same line at any time.
+
+A key that will not answer `getInfo` **at all** is not refused here — that is a
+cable problem and not a wrong key, so it is left to the enrolment to report.
+
 ### One `makeCredential`, one touch, two keys
 
 Enrolment is a single `authenticatorMakeCredential` carrying
@@ -156,6 +173,13 @@ that can never be used again.
 What is lost is **user verification**; what is kept is **user presence**, which is
 the property this gate is built on. A key enrolled without UV still will not
 answer until it is touched.
+
+**And when it is not touched, the key refuses the request rather than timing out.**
+A YubiKey answers `CTAP 0x27`, whose spec wording is "operation denied" — which
+reads like a device that objected, when what happened is that nobody was there. The
+console says so in as many words, because the difference matters: it is a
+**nothing**, not a deny (§10.10 rule 2), and it is the failure an operator meets
+first.
 
 ## 10.18.2 The derivation
 

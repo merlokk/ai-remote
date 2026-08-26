@@ -170,6 +170,19 @@ void test_indicator_not_enrolled_is_its_own_state(void) {
     TEST_ASSERT_TRUE(indicator::Decide(in) == indicator::State::kNotEnrolled);
 }
 
+void test_indicator_enrolment_outranks_registration(void) {
+    // **Both missing, and only one of them can be fixed first.** `register`
+    // refuses without an enrolment, because what §6 registers is the key derived
+    // from it (§10.18.1) — so a light saying `not-registered` to somebody who has
+    // enrolled nothing is sending them to mint a one-time token they cannot
+    // spend yet. The bottom-up rule is what settles it: the enrolment is the
+    // lower rung.
+    indicator::Inputs in = Working();
+    in.registered = false;
+    in.fido_enrolled = false;
+    TEST_ASSERT_TRUE(indicator::Decide(in) == indicator::State::kNotEnrolled);
+}
+
 void test_indicator_enrolment_outranks_presence(void) {
     // An enrolment is permanent and its absence means *never*; a key in a pocket
     // is a fifteen-second problem the gate waits out. So the permanent one is
@@ -271,6 +284,7 @@ void RegisterIndicatorTests(void) {
     RUN_TEST(test_indicator_pending_is_the_loudest_thing_this_device_does);
     RUN_TEST(test_indicator_signing_outranks_a_pending_request);
     RUN_TEST(test_indicator_not_enrolled_is_its_own_state);
+    RUN_TEST(test_indicator_enrolment_outranks_registration);
     RUN_TEST(test_indicator_enrolment_outranks_presence);
     RUN_TEST(test_indicator_a_missing_key_always_matters);
     RUN_TEST(test_indicator_connected_but_not_subscribed_is_not_ready);

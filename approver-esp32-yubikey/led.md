@@ -32,8 +32,8 @@ built around them.
 | `no-wifi` | **yellow** | fast | full | no link |
 | `no-internet` | **yellow** | fast | full | associated, and nothing answers |
 | `no-bus` | **yellow** | fast | full | no NATS connection |
-| `not-registered` | magenta | 500/500 ms | full | run `register <token>` |
 | `not-enrolled` | cyan | fast | full | **no signing key at all** — run `key enrol` (§10.18) |
+| `not-registered` | magenta | 500/500 ms | full | run `register <token>` |
 | `no-fido-key` | cyan | 500/500 ms | idle | plug a key into the OTG port |
 | `watching` | cyan | beacon (100 ms / 2 s) | idle | connected, not yet on `approvals.*` |
 | `ready` | **green** | breathe (~9 s) | idle | nothing to do, and able to do it |
@@ -60,11 +60,19 @@ it is not lost far: `status` on the console names the exact rung, `led` prints i
 in words, and every transition between them is a log line. **The light says *not
 yet*; the console says *why*.**
 
-**Past the bus the differences matter again**, which is why `not-registered`,
-`not-enrolled` and `no-fido-key` get colours of their own. Each has a *different*
-thing for the operator to do — mint a token, enrol a key, or find the one in their
+**Past the bus the differences matter again**, which is why `not-enrolled`,
+`not-registered` and `no-fido-key` get colours of their own. Each has a *different*
+thing for the operator to do — enrol a key, mint a token, or find the one in their
 pocket — and unlike the yellow stack, none of them is fixed by the action that
 fixes the others.
+
+**And those first two are in that order because the bottom-up rule puts them
+there.** `register` refuses without an enrolment — what §6 registers is the key
+derived from it (§10.18.1) — so a device that had neither and said
+`not-registered` would send an operator to mint a token they cannot spend, and the
+token is one-time. `not-enrolled` is therefore what a brand-new device shows
+first, and `test_indicator_enrolment_outranks_registration` is what keeps it that
+way.
 
 ### Two rules the table obeys
 

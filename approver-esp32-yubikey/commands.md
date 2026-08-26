@@ -156,10 +156,25 @@ A `suspicious` line appears only when it is not zero — assertions that did not
 verify, and credentials that were not the enrolled one. Neither is ever routine.
 
 ### `key info`
-`authenticatorGetInfo`. No touch needed. Prints versions, options, and — the one
-that matters — whether the key has a **PIN** set: this device cannot enter one
-(§10.18), so a key that insists on one cannot be used here, and it is better to
-find that out now than in the middle of an approval.
+`authenticatorGetInfo`. No touch needed.
+```
+versions   FIDO_2_1 U2F_V2
+options    rk yes, up yes, uv no
+previewSign yes — this key can be enrolled
+pin        not set
+aaguid     f4ce5fc057d346f5a736efb7d5bc63b5
+maxmsg     1536 bytes
+```
+Two of those lines decide whether the key can be used here at all, and they are
+different kinds of no:
+
+* **`previewSign`** is the harder one. The signing key is *derived* from that
+  extension (§10.18), so a key that does not advertise it has nothing to derive
+  from — and no firmware update on this side can change that. `key enrol` refuses
+  such a key rather than spending a touch on a `makeCredential` whose failure
+  arrives as a CTAP status naming no cause;
+* **`pin`** is the softer one: this device has no way to enter one, so a key that
+  insists on it cannot be used here — but a PIN can be removed.
 
 ### `key enrol`
 One `authenticatorMakeCredential` carrying `previewSign.generateKey`, one touch,
@@ -167,6 +182,26 @@ and `fido.json` is written: a credential, an ARKG seed key, and the key this dev
 derives from it. **This is where the signing key comes from** (§10.18), so it comes
 *before* `register` — which refuses with a sentence saying so if nothing is
 enrolled.
+
+**A key that does not advertise `previewSign` is refused before the touch**, using
+the `getInfo` that costs nothing:
+```
+> key enrol
+this key does not advertise previewSign, so it cannot be enrolled here.
+the signing key is derived from that extension (§10.18) — without it
+there is nothing to derive from. `key info` lists what this key does.
+```
+
+And when the touch simply never comes, the key refuses the request itself:
+```
+> key enrol
+touch the key…
+not enrolled: the key said no — operation denied (CTAP 27)
+           the usual cause is that nobody touched it in time
+```
+That is the failure worth recognising on sight, because the spec's wording for it
+names no cause and reads like a broken device. It is a **nothing**, not a deny
+(§10.10 rule 2).
 
 A failure changes nothing — the same ordering `registration.json` uses. A *success*
 changes a great deal, and the reply says so:
@@ -195,7 +230,7 @@ handle.
 
 ```
 > key selftest
-the curve agrees with Python: AmNqT1p2… (41 ms)
+the curve agrees with Python: A6AM+XYnrD8w… (670 ms)
 ```
 
 A failure means no security key would ever have worked here: the device would

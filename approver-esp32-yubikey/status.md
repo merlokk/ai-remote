@@ -22,37 +22,49 @@ Three states, and the middle one is the one to watch:
 | ARKG derivation (§10.18.2) | **written** | `components/arkg`, 3,921 bytes. The five pure steps are host-tested against numbers Python produced; **the two curve steps have never run on this chip** — `key selftest` is the command and nobody has typed it |
 | Console on UART0 (§10.7) | **runs** | all 16 commands answer |
 | WS2812 on GPIO48 (§10.17) | **runs** | UART1 at 3.33 Mbaud, inverted; 0 write failures over thousands of frames |
-| The state ranking (§10.17) | **runs** | transitions observed for `booting → no-wifi → no-bus → not-registered → not-enrolled → pending` |
+| The state ranking (§10.17) | **runs** | transitions observed for `booting → no-wifi → no-bus → not-enrolled → not-registered → pending` |
 | BOOT button | **partly** | it **reads** (`buttons` is correct). The press → verdict path is untested |
 | Wi-Fi (§10.9) | **runs** | joins, DHCP, reachability check |
 | NATS (§10.5) | **runs** | connects, subscribes, publishes; reconnect re-subscribes |
-| Registration (§10.7) | **ran, and is now stale** | a real token, real handler, verified reply, key pinned — but it registered an **Ed25519** key, and this firmware signs with the enrolled P-256 one. The device says `registered STALE` and stays off the subject until `key enrol` + a fresh token (§10.18.1) |
+| Registration (§10.7) | **ran once, and there is none now** | a real token, real handler, verified reply, key pinned — but it registered an **Ed25519** key, from before §10.18 moved the signer. `registration.json` is no longer on the device (it says so at boot), so the state is `registered no` rather than `STALE`, and the device stays off `approvals.*` until a fresh token registers the **enrolled** key (§10.18.1) |
 | Request queue + TTL | **runs** | `request test` queues, lights, expires with no reply |
 | The gate's failure paths (§10.18) | **runs** | no key → waits → expires → **no reply**, and no spin |
 | The not-enrolled blocker | **runs** | refuses to subscribe, and says why |
+| The enrolment→registration ordering | **runs** | with nothing enrolled the light says `not-enrolled`, not `not-registered` — the enrolment is the lower rung because `register` refuses without one (§10.17) |
 | Signing + publishing a verdict | **written** | and it is no longer the sibling board's code: the signature comes out of the key and this device only base64s it and publishes. **Nothing has ever got past the gate here**, so it has never run |
 | A signed **deny** (§10.18.5) | **written** | the button chooses it and the key has to sign it — a second touch. Never run, and the "walk away after the tap" path (no reply) is the one to check first |
 
 ## The key (§10.18)
 
-**This is the half that has never met hardware — and since §10.18 it is also the
-half that holds the signing key.** No FIDO authenticator has been plugged into the
-OTG port, so this device currently has no way to sign anything at all.
+**This half has met hardware now, and the enrolment is real.** A YubiKey 5
+(`1050:0407`, `OTP+FIDO+CCID`, aaguid `f4ce5fc0…`) has been on the OTG port, and on
+**2026-08-26** it was enumerated, interrogated and enrolled: this device derived a
+signing key from that authenticator's seed key and holds it in `fido.json`. It
+signs as `AmHB+df5hQGLvelUF0QGzq/HuWCTKp+/DMie41ByjGvP` (p256).
+
+**What has still never happened is an assertion.** Everything above is the
+`makeCredential` half of §10.18; the `getAssertion` half — a request, a touch, the
+five checks, a signature on the wire — has not been run once, and that is where the
+five checks and PSA verification live. So the device can now *have* a key without
+yet having proved it can *use* it.
 
 | Piece | State | Note |
 |-------|-------|------|
-| CTAPHID framing | **written** | 16 host tests, including every malformed path a real key would never produce |
-| CBOR | **written** | 20 host tests, including the hostile shapes |
-| CTAP2 requests/responses | **written** | 20 host tests against hand-built bytes |
-| `previewSign` on the wire | **written** | both requests and both answers, host-tested against responses the vector generator builds in the draft's shape. **No real key has produced one** — those bytes are one reading of a draft, and the first thing to compare a real answer against |
-| The five checks (§10.18.3) | **written** | rp hash, user presence, credential match, the assertion's own ECDSA, and the verdict's against the derived key |
-| USB host: install, daemon, client | **partly** | `usb_host_install` succeeds at boot and the two tasks run. **Nothing has ever been enumerated** |
-| Interface selection | **written** | the endpoint-shape heuristic, unrun. A YubiKey has three interfaces and this is where it would first go wrong |
-| `key info` / `key enrol` / `key test` | **written** | the console commands exist and answer "nothing on the OTG port" |
-| `key selftest` | **written, and runnable today** | needs no key. It is the only row in this table that can move without hardware |
-| `fido.json` (format 2) | **written** | load, save, forget, and the boot re-derivation that checks the file still produces the registered key. Never written by a real enrolment |
-| PSA ECDSA verification | **written** | the DER→raw conversion is the part most likely to be wrong first |
-| The registration↔enrolment binding | **written** | `registration.json` records the key it was made for and the two are compared at boot (§10.18.1). Never exercised by a real re-enrolment |
+| USB host: install, daemon, client | **runs** | enumerated a real composite device; `1 attached, 1 claimed, 0 rejected` |
+| Interface selection | **runs** | picked interface 1 (`in 0x84, out 0x04`) out of a YubiKey's three. This was the row expected to go wrong first, and it did not |
+| CTAPHID framing | **runs** | INIT, a channel, and several CBOR exchanges against a real key with `0 framing` errors. 16 host tests underneath it |
+| CBOR | **runs** | parsed a real `getInfo` and a real `makeCredential` response. 20 host tests underneath it |
+| CTAP2 requests/responses | **partly** | `getInfo` and `makeCredential` are real. `getAssertion` has never been sent |
+| `previewSign` — `generateKey` | **runs** | **a real key produced one**, and the draft's shape was read correctly: a 34-byte key handle and a seed key that both parsed. This was the row most likely to be a misreading of the draft |
+| `previewSign` — the assertion signature | **written** | still one reading of a draft, and still the first thing to compare a real answer against |
+| The five checks (§10.18.3) | **written** | rp hash, user presence, credential match, the assertion's own ECDSA, and the verdict's against the derived key. Nothing has reached them |
+| The `previewSign` advertisement check | **runs** | `getInfo`'s extension list is parsed, `key info` prints it, and `key enrol` refuses a key that does not advertise it rather than spending a touch on a `makeCredential` that fails with a status naming no cause |
+| `key info` / `key enrol` | **run** | both against the real key |
+| `key test` | **written** | the one command that would exercise an assertion, and it has not been typed |
+| `key selftest` | **runs** | on the chip, against Python's vector, in **661–670 ms** |
+| `fido.json` (format 2) | **runs** | written by a real enrolment, and re-read at the next boot into the same `signs as` — including across an `app-flash` |
+| PSA ECDSA verification | **written** | the DER→raw conversion is the part most likely to be wrong first, and nothing has reached it either |
+| The registration↔enrolment binding | **partly** | the boot comparison runs. The **stale** path has not been seen, because there is no `registration.json` on the device to be stale |
 
 ## Owed, and known
 

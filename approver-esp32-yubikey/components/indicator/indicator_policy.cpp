@@ -52,13 +52,18 @@ State Decide(const Inputs &in) {
     if (!in.bus_connected) {
         return State::kNoBus;
     }
-    if (!in.registered) {
-        return State::kNotRegistered;
-    }
-    // Enrolment first, because it is the one with a command that fixes it and
-    // the one that keeps this device off `approvals.*` entirely.
+    // **Enrolment before registration, and this is the bottom-up rule rather
+    // than an exception to it.** `register` refuses without an enrolment,
+    // because what §6 registers is the key derived from it (§10.18.1): so an
+    // unenrolled device that reported `not-registered` would be sending an
+    // operator to mint a one-time token they cannot spend yet, and the token
+    // would be spent by the time they found out. It is also the state that
+    // keeps this device off `approvals.*` entirely.
     if (!in.fido_enrolled) {
         return State::kNotEnrolled;
+    }
+    if (!in.registered) {
+        return State::kNotRegistered;
     }
     if (!in.fido_present) {
         return State::kNoFidoKey;
@@ -213,16 +218,18 @@ Look LookOf(State state) {
         // in a key, or wait a tick. That is what earns them colours of their own
         // where the five above share one.
 
-        // Registration is the one missing piece with a command that fixes it,
-        // and it is the state a new device spends its first minutes in.
+        // Registration is a missing piece with a command that fixes it — and the
+        // *second* one a new device asks for, because an enrolment has to come
+        // first (§10.18.1) and outranks it above.
         case State::kNotRegistered:
             return {led::colour::kMagenta, led::Effect::kNormBlink, false};
 
         // **Cyan, fast, at full brightness — the one cyan that is asking for
-        // something.** A device that is registered and not enrolled is not on
-        // `approvals.*` at all (`responder::Blocker::kNotEnrolled`), so this is
-        // as stuck as a device gets without anything being broken, and it is
-        // one console command away from being fixed.
+        // something.** A device with nothing enrolled is not on `approvals.*` at
+        // all (`responder::Blocker::kNotEnrolled`) and cannot even be registered,
+        // so this is as stuck as a device gets without anything being broken —
+        // and it is one console command away from being fixed. It is also what a
+        // brand-new device shows first.
         case State::kNotEnrolled:
             return {led::colour::kCyan, led::Effect::kFastBlink, false};
 

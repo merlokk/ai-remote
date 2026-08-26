@@ -1906,6 +1906,29 @@ void PrintKeyUsage() {
     printf("       key forget now     delete %s; the credential stays on the key\n", fido::kPath);
 }
 
+// **The cause, not the layer it travelled through.** A key that answers a request
+// with a refusal leaves the transport at `Fault::kNone` — whose name is `"ok"` — so
+// printing the fault first put the word `ok` on a line reporting a failure and left
+// the CTAP status, which held the whole answer, looking like an aside. When the key
+// spoke, what it said *is* the cause; the transport gets to explain only the
+// failures it caused itself.
+//
+// `kErrOperationDenied` earns a second line because it is the one an operator will
+// actually meet, and its spec wording does not say what happened: it is what a key
+// returns when the touch never came, and "operation denied" reads like a device
+// that refused rather than a human who was not there (§10.10 rule 2 — that is a
+// nothing, not a deny).
+void PrintKeyFailure(fido::usb::Fault fault, uint8_t status) {
+    if (status != 0) {
+        printf("the key said no — %s (CTAP %02x)\n", ctap2::StatusName(status), status);
+        if (status == ctap2::kErrOperationDenied) {
+            printf("           the usual cause is that nobody touched it in time\n");
+        }
+        return;
+    }
+    printf("%s\n", fido::usb::FaultName(fault));
+}
+
 int CmdKey(int argc, char **argv) {
     if (argc == 1) {
         if (!fido::Ready()) {
@@ -1968,17 +1991,21 @@ int CmdKey(int argc, char **argv) {
         uint8_t status = 0;
         const esp_err_t err = fido::Info(&info, &fault, &status);
         if (err != ESP_OK) {
-            printf("no answer: %s", fido::usb::FaultName(fault));
-            if (status != 0) {
-                printf(" (CTAP %02x, %s)", status, ctap2::StatusName(status));
-            }
-            printf("\n");
+            printf("no answer: ");
+            PrintKeyFailure(fault, status);
             return 1;
         }
         printf("versions   %s%s%s\n", info.fido21 ? "FIDO_2_1 " : (info.fido2 ? "FIDO_2_0 " : ""),
                info.u2f ? "U2F_V2" : "", (!info.fido2 && !info.u2f) ? "none this device knows" : "");
         printf("options    rk %s, up %s, uv %s\n", info.option_rk ? "yes" : "no",
                info.option_up ? "yes" : "no", info.option_uv ? "yes" : "no");
+        // **The line that decides whether this key is usable here at all**
+        // (§10.18). Printed next to the PIN because it is the harder no: a PIN can
+        // be removed, and a firmware without `previewSign` cannot be talked into
+        // having it.
+        printf("previewSign %s\n",
+               info.sign_extension ? "yes — this key can be enrolled"
+                                   : "no — this key cannot be enrolled here (§10.18)");
         // **A PIN is the one thing that would stop this working** (§10.18): this
         // device has one button and cannot enter one, so a key that insists on
         // one is a key it cannot use. Said here rather than discovered mid-approval.
@@ -2003,6 +2030,24 @@ int CmdKey(int argc, char **argv) {
             printf("nothing on the OTG port\n");
             return 1;
         }
+        // **Asked before anything is spent.** A key without `previewSign` answers
+        // a `makeCredential` with a CTAP status that names no cause, which reads
+        // from the desk like a device that is broken rather than a key that is the
+        // wrong one. `getInfo` costs no touch, so the refusal is free — and a key
+        // that will not even answer `getInfo` is left to the enrolment to report,
+        // because that is a cable problem and not a wrong key.
+        {
+            ctap2::Info advertised;
+            fido::usb::Fault info_fault = fido::usb::Fault::kNone;
+            uint8_t info_status = 0;
+            if (fido::Info(&advertised, &info_fault, &info_status) == ESP_OK &&
+                !advertised.sign_extension) {
+                printf("this key does not advertise previewSign, so it cannot be enrolled here.\n");
+                printf("the signing key is derived from that extension (§10.18) — without it\n");
+                printf("there is nothing to derive from. `key info` lists what this key does.\n");
+                return 1;
+            }
+        }
         if (fido::Enrolled()) {
             printf("this device is already enrolled — enrolling again replaces %s,\n", fido::kPath);
             printf("and the old credential stays on whatever key holds it.\n");
@@ -2013,11 +2058,8 @@ int CmdKey(int argc, char **argv) {
         uint8_t status = 0;
         const esp_err_t err = fido::Enrol(30000, &fault, &status);
         if (err != ESP_OK) {
-            printf("not enrolled: %s", fido::usb::FaultName(fault));
-            if (status != 0) {
-                printf(" (CTAP %02x, %s)", status, ctap2::StatusName(status));
-            }
-            printf("\n");
+            printf("not enrolled: ");
+            PrintKeyFailure(fault, status);
             return 1;
         }
         const fido::Enrolment &e = fido::Current();
@@ -2059,11 +2101,8 @@ int CmdKey(int argc, char **argv) {
 
         printf("%s — %s\n", fido::GateName(gate), fido::GateText(gate));
         if (gate != fido::Gate::kApproved) {
-            printf("transport  %s", fido::usb::FaultName(fault));
-            if (status != 0) {
-                printf(" (CTAP %02x, %s)", status, ctap2::StatusName(status));
-            }
-            printf("\n");
+            printf("transport  ");
+            PrintKeyFailure(fault, status);
             return 1;
         }
         // **This is the whole approval path except the request.** The key made a

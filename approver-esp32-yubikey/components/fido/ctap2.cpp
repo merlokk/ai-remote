@@ -69,6 +69,29 @@ void ReadVersions(const uint8_t *in, size_t size, Info *out) {
     }
 }
 
+// Walks the `extensions` array of a `getInfo` response, looking for the one name
+// this firmware cares about. **The whole array is walked** — `previewSign` is
+// nowhere in particular in it, and a scan that stopped early would report a
+// usable key as unusable.
+void ReadExtensions(const uint8_t *in, size_t size, Info *out) {
+    cbor::Item array;
+    if (!cbor::Decode(in, size, &array) || array.type != cbor::Type::kArray) {
+        return;
+    }
+    size_t offset = array.header;
+    for (uint64_t i = 0; i < array.value; i++) {
+        if (offset >= size) {
+            return;
+        }
+        if (TextEquals(in + offset, size - offset, kSignExtension)) {
+            out->sign_extension = true;
+        }
+        if (!cbor::Skip(in, size, &offset)) {
+            return;
+        }
+    }
+}
+
 void ReadOption(const uint8_t *options, size_t size, const char *name, bool *out) {
     const uint8_t *value = nullptr;
     size_t left = 0;
@@ -488,6 +511,12 @@ bool ParseInfo(const uint8_t *response, size_t size, Info *out, uint8_t *status)
 
     if (cbor::MapFind(body, body_size, 1, &value, &left)) {
         ReadVersions(value, left, out);
+    }
+    // Key 2 is optional, and a key that omits it has advertised nothing rather
+    // than answered badly — so its absence leaves the flag false and is not a
+    // parse failure.
+    if (cbor::MapFind(body, body_size, 2, &value, &left)) {
+        ReadExtensions(value, left, out);
     }
     if (cbor::MapFind(body, body_size, 3, &value, &left)) {
         const uint8_t *aaguid = nullptr;

@@ -176,6 +176,136 @@ void test_ctap2_an_empty_response_is_a_failure(void) {
     TEST_ASSERT_FALSE(ctap2::ParseAssertion(nullptr, 0, &assertion, &status));
 }
 
+// --- getInfo, and the one thing it has to answer -------------------------
+//
+// **`previewSign` is what decides whether a key can be used here at all** (§10.18).
+// Without it the derivation has nothing to derive from, and a key that does not
+// advertise it must be refused by `key enrol` rather than discovered by a
+// `makeCredential` that comes back with a CTAP error naming no cause.
+
+// A `getInfo` body: status 0x00, then a map of
+//   1: versions, 2: extensions, 3: aaguid, 4: options, 5: maxMsgSize.
+// `extensions` is a text array of `count` names.
+size_t MakeInfo(uint8_t *out, const char *const *extensions, size_t count) {
+    size_t n = 0;
+    out[n++] = 0x00;         // CTAP status: ok
+    out[n++] = 0xa5;         // map(5)
+
+    out[n++] = 0x01;         // 1: versions
+    out[n++] = 0x81;         // array(1)
+    out[n++] = 0x68;         // text(8)
+    std::memcpy(out + n, "FIDO_2_1", 8);
+    n += 8;
+
+    out[n++] = 0x02;                                     // 2: extensions
+    out[n++] = static_cast<uint8_t>(0x80 | count);       // array(count), count < 24
+    for (size_t i = 0; i < count; i++) {
+        const size_t len = std::strlen(extensions[i]);
+        out[n++] = static_cast<uint8_t>(0x60 | len);      // text(len), len < 24
+        std::memcpy(out + n, extensions[i], len);
+        n += len;
+    }
+
+    out[n++] = 0x03;         // 3: aaguid
+    out[n++] = 0x50;         // bytes(16)
+    std::memset(out + n, 0x77, 16);
+    n += 16;
+
+    out[n++] = 0x04;         // 4: options
+    out[n++] = 0xa2;         // map(2)
+    out[n++] = 0x62;         // text(2)
+    std::memcpy(out + n, "rk", 2);
+    n += 2;
+    out[n++] = 0xf5;         // true
+    out[n++] = 0x62;         // text(2)
+    std::memcpy(out + n, "up", 2);
+    n += 2;
+    out[n++] = 0xf5;         // true
+
+    out[n++] = 0x05;         // 5: maxMsgSize
+    out[n++] = 0x19;         // uint16
+    out[n++] = 0x06;
+    out[n++] = 0x00;         // 1536
+    return n;
+}
+
+void test_ctap2_getinfo_reads_what_the_key_says_about_itself(void) {
+    const char *const ext[] = {"credProtect", "previewSign"};
+    const size_t size = MakeInfo(buffer, ext, 2);
+
+    ctap2::Info info;
+    uint8_t status = 0xff;
+    TEST_ASSERT_TRUE(ctap2::ParseInfo(buffer, size, &info, &status));
+    TEST_ASSERT_EQUAL_UINT8(0, status);
+    TEST_ASSERT_TRUE(info.fido2);
+    TEST_ASSERT_TRUE(info.fido21);
+    TEST_ASSERT_TRUE(info.option_rk);
+    TEST_ASSERT_TRUE(info.option_up);
+    TEST_ASSERT_FALSE(info.option_uv);
+    TEST_ASSERT_FALSE(info.client_pin_set);
+    TEST_ASSERT_EQUAL_UINT64(1536, info.max_message_size);
+    TEST_ASSERT_NOT_NULL(info.aaguid);
+    TEST_ASSERT_EQUAL_UINT8(0x77, info.aaguid[0]);
+}
+
+void test_ctap2_getinfo_finds_the_sign_extension(void) {
+    // Not first in the list, because a scan that only ever looks at element zero
+    // passes every test written with a one-element array.
+    const char *const ext[] = {"credProtect", "hmac-secret", "previewSign"};
+    const size_t size = MakeInfo(buffer, ext, 3);
+
+    ctap2::Info info;
+    uint8_t status = 0xff;
+    TEST_ASSERT_TRUE(ctap2::ParseInfo(buffer, size, &info, &status));
+    TEST_ASSERT_TRUE_MESSAGE(info.sign_extension, "previewSign was advertised and not seen");
+}
+
+void test_ctap2_getinfo_without_the_sign_extension_says_so(void) {
+    // **The case this device is refused on**, and the one a stock key produces.
+    const char *const ext[] = {"credProtect", "hmac-secret"};
+    const size_t size = MakeInfo(buffer, ext, 2);
+
+    ctap2::Info info;
+    uint8_t status = 0xff;
+    TEST_ASSERT_TRUE(ctap2::ParseInfo(buffer, size, &info, &status));
+    TEST_ASSERT_FALSE_MESSAGE(info.sign_extension, "a key without previewSign looked usable");
+}
+
+void test_ctap2_getinfo_with_no_extensions_at_all_is_not_a_parse_failure(void) {
+    // Key 2 is optional. A key that omits it is answerable — and unusable here.
+    const uint8_t info_body[] = {
+        0x00,                                                        // status
+        0xa1, 0x01, 0x81, 0x68, 'F', 'I', 'D', 'O', '_', '2', '_', '0',
+    };
+    ctap2::Info info;
+    uint8_t status = 0xff;
+    TEST_ASSERT_TRUE(ctap2::ParseInfo(info_body, sizeof(info_body), &info, &status));
+    TEST_ASSERT_TRUE(info.fido2);
+    TEST_ASSERT_FALSE(info.fido21);
+    TEST_ASSERT_FALSE(info.sign_extension);
+}
+
+void test_ctap2_getinfo_a_prefix_is_not_the_extension(void) {
+    // `TextEquals` compares lengths as well as bytes. A key advertising `preview`
+    // has not advertised `previewSign`, and matching on a prefix would enrol
+    // against a key that cannot sign.
+    const char *const ext[] = {"preview", "previewSignature"};
+    const size_t size = MakeInfo(buffer, ext, 2);
+
+    ctap2::Info info;
+    uint8_t status = 0xff;
+    TEST_ASSERT_TRUE(ctap2::ParseInfo(buffer, size, &info, &status));
+    TEST_ASSERT_FALSE(info.sign_extension);
+}
+
+void test_ctap2_getinfo_a_ctap_error_is_not_an_answer(void) {
+    const uint8_t denied[] = {ctap2::kErrOperationDenied};
+    ctap2::Info info;
+    uint8_t status = 0;
+    TEST_ASSERT_FALSE(ctap2::ParseInfo(denied, sizeof(denied), &info, &status));
+    TEST_ASSERT_EQUAL_UINT8(ctap2::kErrOperationDenied, status);
+}
+
 // Authenticator data with no attested credential: rpIdHash(32) flags(1) count(4).
 void MakeAuthData(uint8_t *out, uint8_t flags) {
     std::memset(out, 0x33, ctap2::kRpIdHashSize);
@@ -357,6 +487,12 @@ void test_ctap2_every_status_has_a_name(void) {
 
 void RegisterCtap2Tests(void) {
     RUN_TEST(test_ctap2_getinfo_is_one_byte);
+    RUN_TEST(test_ctap2_getinfo_reads_what_the_key_says_about_itself);
+    RUN_TEST(test_ctap2_getinfo_finds_the_sign_extension);
+    RUN_TEST(test_ctap2_getinfo_without_the_sign_extension_says_so);
+    RUN_TEST(test_ctap2_getinfo_with_no_extensions_at_all_is_not_a_parse_failure);
+    RUN_TEST(test_ctap2_getinfo_a_prefix_is_not_the_extension);
+    RUN_TEST(test_ctap2_getinfo_a_ctap_error_is_not_an_answer);
     RUN_TEST(test_ctap2_getassertion_starts_with_the_command_and_a_four_key_map);
     RUN_TEST(test_ctap2_getassertion_asks_for_user_presence_out_loud);
     RUN_TEST(test_ctap2_getassertion_carries_the_challenge_verbatim);

@@ -229,6 +229,13 @@ struct Info {
     bool option_uv = false;           // …and user verification
     bool client_pin_set = false;      // a PIN exists on this key
     uint64_t max_message_size = 0;
+
+    // **`previewSign` is in the key's `extensions` list** — the one field here
+    // that decides whether this key can be used on this device at all (§10.18).
+    // Without it there is no ARKG derivation and so no signing key, and
+    // `key enrol` refuses rather than sending a `makeCredential` whose failure
+    // arrives as a CTAP status naming no cause.
+    bool sign_extension = false;
 };
 
 // Parses a `CTAPHID_CBOR` response body — **status byte included**, because the

@@ -96,27 +96,36 @@ put on it appears as a white flashing light, waits for a fingertip, expires with
 that has been done on the board on this desk, against the real handler and the
 real NATS server.
 
-**What has not been done on hardware is the key itself, and that is now most of
-the design.** No FIDO authenticator has been plugged into the OTG port, so
-§10.18's four layers — CTAPHID framing, CBOR, CTAP2 with `previewSign`, and the
-ARKG derivation — are **written, compiled, host-tested against numbers Python
-produced, and never once spoken to a real device.** The derivation's two
-curve operations have not been run on the chip either: `key selftest` is the
-command that does it, and it has not been typed on the board yet.
-[`status.md`](status.md) is row by row about which is which, and it is the file to
-read before believing anything in this paragraph is more finished than it says.
+**The key has met hardware, and this device now holds a signing key derived from
+a real one.** A YubiKey 5 on the OTG port was enumerated, interrogated and
+enrolled: §10.18's four layers — CTAPHID framing, CBOR, CTAP2 with `previewSign`,
+and the ARKG derivation — all ran, the derivation's two curve operations agree with
+Python **on the chip** (`key selftest`, 661–670 ms), and `fido.json` holds a key
+this device signs as. [`status.md`](status.md) is row by row and it is the file to
+read before believing anything here is more finished than it says.
+
+**What has never happened is an assertion.** All of the above is the
+`makeCredential` half. Nothing has yet asked the key to *sign* anything — so
+§10.18.3's five checks, PSA's ECDSA verification and the verdict on the wire are
+still written and unrun, and this device has a key it has not proved it can use.
 
 Because of that the device is, right now, in the state its own light calls
-`not-enrolled` — cyan, flashing — and **it is deliberately not on `approvals.*`
-while it is**: with nothing enrolled there is no signing key at all, so it must
-not take requests out of a queue group away from responders that can answer them
-(§6's "Multiple clients", and `responder::Blocker::kNotEnrolled` is where that is
+`not-registered` — magenta — and **it is deliberately not on `approvals.*` while
+it is**: it must not take requests out of a queue group away from responders that
+can answer them (§6's "Multiple clients", and `responder::Blocker` is where that is
 enforced). That rule was added after the first registration, when the device did
-exactly that.
+exactly that. The rung below it, `not-enrolled`, is where a device with no key at
+all sits — **and it is the lower of the two on purpose**, because `register`
+refuses without an enrolment (§10.18.1), so telling an operator to mint a one-time
+token first would cost them the token.
 
-**And the registration made before §10.18 is stale by construction** — it names an
-Ed25519 key this firmware no longer signs with. The device says so at boot and the
-console says `registered STALE`; the fix is `key enrol` and then a fresh token.
+**And there is no registration at all on the device now.** The one made before
+§10.18 named an Ed25519 key this firmware no longer signs with, and
+`registration.json` is no longer there either — the device says so at boot and the
+console says `registered no`. The enrolment is done, so what is left is one fresh
+token: `register <token>`. The `STALE` path — a registration naming a key that is
+no longer the enrolled one — is still real and still enforced at every boot
+(§10.18.1); it just is not what this device is showing.
 
 Below the key, what runs: the WS2812 on GPIO48 driven off a UART (§10.17.3), a
 fifteen-state ranking that decides what a single emitter says about a device
