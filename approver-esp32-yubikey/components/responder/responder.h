@@ -74,7 +74,20 @@ inline constexpr uint32_t kTaskStackBytes = 12288;
 // indirectly (they are static in `fido.cpp`), assembles §7's bytes, and runs **two**
 // ECDSA P-256 verifications per approval — the assertion's and the verdict's — which
 // is the deepest stack in this firmware.
-inline constexpr uint32_t kGateStackBytes = 8192;
+//
+// **12 KB because 8 KB was measured, not guessed at, and it was thin.** The first
+// real end-to-end approval left `1280` bytes of 8192 free — 15 %, on the one path
+// in this firmware that must not fail, where a crash is a request nobody answers.
+// At 12288 the same path leaves `5360`, so the peak is **6,928 bytes** and the two
+// measurements agree to within 16: this is a real number and not a fluctuation.
+//
+// The figure is a true high-water mark — `uxTaskGetStackHighWaterMark` is sampled
+// after the gate returns, so it covers the publish too — and the 4 KB comes out of
+// the ~187 KB of internal RAM this board has spare. **Internal, not the PSRAM**: a
+// task stack is the one thing that must not live there (§10.13), whatever
+// `CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM` allows. `request` prints the
+// low-water mark against this number, which is how the 1280 was found.
+inline constexpr uint32_t kGateStackBytes = 12288;
 
 // Above the LED and the indicator, below the USB client. A decision waiting to be
 // signed is more urgent than the next frame of a breath and less urgent than the

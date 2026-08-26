@@ -138,4 +138,18 @@ are not in tension: everything this code owns is static, and what asks for heap 
 other people's — the Wi-Fi driver's TX buffers, lwIP's pools, the USB Host
 Library's transfer descriptors, cJSON while it parses. On a board without PSRAM
 those compete for a couple of hundred kilobytes of internal RAM; here there are
-eight megabytes behind them.
+eight megabytes behind them. It is also why `status` reports eight and a half
+megabytes of heap on a device that asks for none of it.
+
+**What it must not hold is a task stack, and that is a trap rather than a rule you
+would guess.** `CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM` exists and on this
+target it defaults to **on**, so `xTaskCreateStatic` will accept a stack in PSRAM
+without a word — and its own help says why that is not an invitation: *"only for
+tasks where the stack is never accessed while the cache is disabled"*. The cache is
+disabled on every flash write, and this firmware writes three files (`config.json`,
+`fido.json`, `registration.json`); a task whose stack lives in PSRAM cannot even be
+switched to while that is happening. So the static stacks in `responder.h` and
+everywhere else stay in internal RAM, and growing one spends the RAM that is
+actually scarce rather than the eight megabytes that are not. There are ~187 KB of
+internal RAM free at boot, which is what makes that affordable — §10.14.1's
+no-heap rule is what keeps it true.
