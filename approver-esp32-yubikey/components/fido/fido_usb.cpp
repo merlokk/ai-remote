@@ -24,10 +24,10 @@ namespace usb {
 namespace {
 
 // How long to wait for the key's reply to a request we just cancelled, and how
-// long each read inside that budget waits. A YubiKey answers a cancel in single
-// digit milliseconds; the budget is generous because the cost of getting this
-// wrong is the *next* exchange reading somebody else's answer.
-constexpr uint32_t kDrainMs = 250;
+// long each read inside that budget waits. The cost of getting this wrong is the
+// *next* exchange reading somebody else's answer, so it is generous — and 250 ms
+// was not: a real cancel on the board ran out of it and said so.
+constexpr uint32_t kDrainMs = 1000;
 constexpr uint32_t kDrainReadMs = 50;
 
 
@@ -426,8 +426,16 @@ bool ReadPacket(uint8_t *packet, uint32_t wait_ms) {
 // allow's `0x2D`. Fourteen milliseconds, `Gate::kCancelled`, and a red light that
 // existed for seventeen (§10.18.5). The deny path had never worked, and this is why.
 //
-// Bounded, and a failure to drain is not reported: the exchange being abandoned has
-// already failed, and the caller is being told about the cancel, not about this.
+// Bounded, and a failure to drain is not reported to the caller: the exchange being
+// abandoned has already failed, and the caller is being told about the cancel. It is
+// logged, though, because what it predicts is the *next* exchange going wrong.
+//
+// **A `CTAPHID_KEEPALIVE` is a complete message and is not the answer.** The key
+// sends one every ~100 ms while it waits for a fingertip, so a drain that stopped at
+// the first whole message would routinely swallow a keepalive, report success, and
+// leave the reply it came for exactly where it was. This is the same mistake the
+// drain exists to fix, one layer along — found by the warning below firing on a
+// cancel that came from the request's deadline rather than from the button.
 void DrainAfterCancel(uint32_t cid) {
     ctaphid::Reader reader;
     reader.Reset();
@@ -441,8 +449,15 @@ void DrainAfterCancel(uint32_t cid) {
             continue;
         }
         const ctaphid::Reader::Result result = reader.Feed(packet, sizeof(packet), cid);
-        if (result == ctaphid::Reader::Result::kComplete ||
-            result == ctaphid::Reader::Result::kError) {
+        if (result == ctaphid::Reader::Result::kComplete) {
+            if (reader.Command() == ctaphid::kCmdKeepAlive) {
+                // Still waiting on the finger it has already been told to forget.
+                reader.Reset();
+                continue;
+            }
+            return;
+        }
+        if (result == ctaphid::Reader::Result::kError) {
             return;
         }
     }
