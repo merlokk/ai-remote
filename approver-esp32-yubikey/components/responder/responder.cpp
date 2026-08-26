@@ -378,6 +378,15 @@ bool RunGate(const ui::Request &request) {
     const config::Data &settings = config::Get();
     const nats::Status bus = nats::Get();
 
+    // **Any press made before this request existed is discarded.** The latch has no
+    // expiry — that is exactly what makes it work, since the gate collects a tap
+    // whenever it next gets a chance (§10.18.5) — so a tap on BOOT while the desk was
+    // empty would otherwise be picked up by the first keep-alive of the *next*
+    // request and deny something nobody was ever shown. That is the same rule
+    // `g_card.Press`'s 300 ms guard keeps from the other side: a finger that was
+    // already down when the request appeared did not decide this one.
+    board::Buttons().TakePress(board::button::kBootIndex);
+
     GateWatch watch;
     watch.connects = bus.connects;
     // **`ui::EffectiveTtlMs`, not `request.ttl_ms`.** A request off the wire has no
