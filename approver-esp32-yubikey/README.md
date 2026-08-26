@@ -69,6 +69,33 @@ Enrolment comes first: the key being registered *is* the enrolment's, so a
 re-enrolment invalidates the registration and needs a fresh token.
 [`commands.md`](commands.md) is every command the device answers.
 
+## Or from a phone, with no cable
+
+There is a configuration site on the device (§10.16, [`web.md`](web.md)) — the
+sibling board's, ported. On a board with no screen and no keyboard it is the only
+way in that does not need the UART cable, which is why `auto` is its default: the
+server comes up **while this device is its own access point**, which is exactly
+when somebody has no other way to reach it.
+
+```
+web                             # what was asked for, what is running, and the address
+web on                          # up whenever there is a network
+web login <user> <password>     # basic auth over the whole site. not TLS
+config save                     # or it is gone at the next restart
+```
+
+Seven pages: the state of the device, the whole console dump, Wi-Fi (with a
+scanner), the bus address, and a restart. **It can never approve anything** — the
+only path to an `allow` is a fingertip on the key, and the write path refuses the
+gate's settings, the light's brightness and its own password by name.
+
+**It runs on the board**: every endpoint, refusal, action and the credential gate
+have been exercised over the LAN, and `web cycle 20` says there is no heap leak on
+this chip (+0 bytes over twenty rounds). Note that the pages live in the SPIFFS
+image, so a device flashed with `app-flash` has the server and not the site — which
+is the one part of §10.16 still unverified, because a full flash costs the key
+enrolment. [`status.md`](status.md) says what has and has not been tried.
+
 ## The light
 
 Fifteen states, ranked — one emitter can only say one thing at a time. The ones
@@ -110,8 +137,9 @@ verifier Claude Code would use — called the reply **`TRUSTED`**.
 device is in the protocol, what it needs on the LAN, and the rules that may not be
 softened. Under it: [`hardware.md`](hardware.md), [`led.md`](led.md),
 [`key.md`](key.md), [`protocol.md`](protocol.md), [`firmware.md`](firmware.md),
-[`tests.md`](tests.md), [`build.md`](build.md), [`commands.md`](commands.md),
-[`status.md`](status.md), [`working-with-code.md`](working-with-code.md).
+[`web.md`](web.md), [`tests.md`](tests.md), [`build.md`](build.md),
+[`commands.md`](commands.md), [`status.md`](status.md),
+[`working-with-code.md`](working-with-code.md).
 
 And one that is for neither arriving nor changing:
 [`user-manual.md`](user-manual.md), written for whoever is **holding** the device —

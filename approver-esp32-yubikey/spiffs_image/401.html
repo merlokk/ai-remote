@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#0b0d0c">
+<title>locked</title>
+<style>html,body{margin:0;background:#0b0d0c;color:#d6ded8;
+font:16px/1.5 system-ui,-apple-system,sans-serif}
+body{padding:0 16px 40px}</style>
+</head>
+<body data-page="none">
+<div class="wrap center">
+<p class="big">401</p>
+<h1>This device wants a password</h1>
+
+<p class="lead">
+  A user name and password are set on the device, and nothing here is served
+  without them &mdash; the pages and the status readouts included. Your browser
+  should have asked; if you dismissed the box, reload this page to get it back.
+</p>
+
+<p class="lead">
+  Forgotten them? They live in <code>config.json</code> on the device, and
+  <code>web login &lt;user&gt; &lt;password&gt;</code> on the console sets a new
+  pair &mdash; that is the CH343P socket, the one a security key does
+  <em>not</em> plug into. There is no way to change them from here, on purpose.
+</p>
+
+<nav>
+  <a class="btn" href="/">
+    <span class="grow"><span class="name">Try again</span>
+      <span class="sub">reload the front page and enter the pair</span></span>
+    <span class="chev">&rsaquo;</span>
+  </a>
+</nav>
+
+<footer>
+  approver-esp32-yubikey
+</footer>
+</div>
+<script src="/app.js"></script>
+</body>
+</html>

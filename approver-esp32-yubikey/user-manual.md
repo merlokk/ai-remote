@@ -33,6 +33,7 @@ permission, not by this board's own firmware, and not by anything on the network
 - [Walking away](#walking-away)
 - [What the light means](#what-the-light-means)
 - [Setting it up the first time](#setting-it-up-the-first-time)
+- [Setting it up from a phone](#setting-it-up-from-a-phone)
 - [When it will not approve anything](#when-it-will-not-approve-anything)
 - [Living with it](#living-with-it)
 - [Where the rest of it is](#where-the-rest-of-it-is)
@@ -211,6 +212,56 @@ reply signed by anything else.
 
 When it is done, the light breathes green.
 
+## Setting it up from a phone
+
+**Two of those lines can be done without the cable.** The device serves a small
+web page — one column, big targets, meant for a phone held in one hand — and the
+Wi-Fi network and the bus address can both be set on it.
+
+It is off unless there is a network to serve on, and by default it comes up
+**only while the device is being its own access point**: that is the state you are
+in when the device cannot reach a network, which is exactly when you need a way in
+and have no other.
+
+So, with no cable:
+
+1. wait for the light to go **yellow** and an access point called
+   **`approver-yubikey`** to appear. The password is in the shipped settings —
+   `approver-yubikey-ap` — and it is worth changing;
+2. join it with a phone, and open **`http://192.168.4.1/`**;
+3. **Wi-Fi** → pick your network from *See what is on the air*, type the password,
+   **Apply and save**;
+4. **Bus** → the address of the machine running the bus, **Apply and save**.
+
+The device then joins your network, the light goes green or magenta, and **the page
+goes away with the access point** — that is what the default means, and it is not a
+fault. To have it on your own network too, type `web on` on the console followed by
+`config save`; the address to open is then the one `web` prints.
+
+If you ever lose the network again, the access point comes back on its own: the
+device walks its list of remembered networks and raises its own after two full
+passes with nothing answering. The page is there again with it.
+
+**Three things the page cannot do**, and they are the point rather than omissions:
+
+| | |
+|---|---|
+| **it cannot approve anything** | there is no button on it that produces a verdict, and there is no way to add one: the only path to an `allow` is a fingertip on the key. Somebody who reaches this page has reached your settings, not your approvals |
+| **it cannot enrol or register** | those are the two steps that need a touch and a one-time token, and they stay on the console |
+| **it cannot change what the light says, or how long a request waits for you** | those are settings a page could use to make the device quietly useless — a request that expires instantly, or a light too dim to notice. They are refused by name |
+
+**Put a password on it.** Anyone on the same network can reach the page otherwise,
+and the settings it can change include *which bus this device listens to*:
+
+```
+web login <user> <password>
+config save
+```
+
+It is a lock, not encryption — the password crosses the network readable, so it is
+protection against whoever finds the address rather than against whoever is
+watching the wire.
+
 ## When it will not approve anything
 
 Start with the light, then ask the console. `devstatus` prints every readout at
@@ -248,8 +299,9 @@ in flash.
 *different* signing key, which invalidates the registration by construction.
 
 **The console cannot approve anything**, and neither can anything on the network.
-There is no web page on this device and no command that produces a verdict; the only
-route to an `allow` is a fingertip on the key.
+There *is* a web page on this device — the one above, for settings — and neither it
+nor any console command produces a verdict; the only route to an `allow` is a
+fingertip on the key.
 
 ## Where the rest of it is
 
@@ -258,6 +310,7 @@ route to an `allow` is a fingertip on the key.
 | the design, and why | [`CLAUDE.md`](CLAUDE.md) — the map. §10.10 is the list of rules that may not be softened |
 | the security key, in detail | [`key.md`](key.md) — what it signs, how the key is derived, and the five checks an answer has to pass |
 | the light, in full | [`led.md`](led.md) — all sixteen states and the reasoning |
+| the page, in detail | [`web.md`](web.md) — what it serves, what it refuses, and what a password on it does and does not buy |
 | every console command | [`commands.md`](commands.md) |
 | the hardware | [`hardware.md`](hardware.md) — the board, the two sockets, and what is *not* on it |
 | what actually works today | [`status.md`](status.md) — row by row, and the fastest-moving file here |

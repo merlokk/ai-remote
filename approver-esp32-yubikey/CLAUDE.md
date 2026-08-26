@@ -43,10 +43,16 @@ single button on the sibling board does not have.
 `lib/crypto.py` has verified since §8.7, and this device is indistinguishable from
 `responder_yubikey.py` to everything that checks it.
 
-**And nothing here shows anything.** There is no display of any kind, so there is
-nothing to render a request, a session's spending or a session's activity on, and
-this device subscribes to no subject but `approvals.*`. It has one output, and its
-whole vocabulary is §10.17's sixteen states.
+**And nothing here shows anything, on the device.** There is no display of any
+kind, so there is nothing to render a request, a session's spending or a session's
+activity on, and this device subscribes to no subject but `approvals.*`. It has one
+output, and its whole vocabulary is §10.17's sixteen states.
+
+What it does have is a **page**, on a phone: §10.16's configuration site, which is
+the sibling board's server on hardware that needs it more — with no glass and no
+keyboard, the alternative to it was a cable. It reports state and writes two
+sections of `config.json`, and the one thing it will never do is ask the key for a
+touch (§10.10 rule 4).
 
 **There is also no clock**, for the same reason: no RTC — the board has no I²C bus
 for one (§10.13) — and no SNTP, because a time that is only right once a server has
@@ -63,6 +69,12 @@ folder. Where this device genuinely differs, the section is new and its number i
 new with it: **§10.17** is the light and **§10.18** is the key, and neither exists
 next door.
 
+**§10.16 goes the other way and is worth naming for it**: the configuration site
+keeps its number because it is the same component, ported rather than rewritten —
+the same whitelist, the same gate, the same desired-state reconciler, and the two
+crashes and one double free that shaped them did not have to be re-learned here.
+[`web.md`](web.md) lists the six things that do differ and then stops.
+
 Project-wide rules — TDD, the dependency allowlist — stay in
 [`../CLAUDE.md`](../CLAUDE.md).
 
@@ -78,6 +90,7 @@ status summary below, whose long form is [`status.md`](status.md).
 | [`key.md`](key.md) | **§10.18** the security key: that it is the *signer*, the ARKG derivation that gives it a key to sign with, enrolment and what it costs the registration, the five checks an answer has to pass, why a deny needs a touch, and why there is no PIN |
 | [`protocol.md`](protocol.md) | **§10.5** the NATS client and the subset of it this device uses; **§10.6** key custody, as designed and as shipped; **§10.7** registration, and the console it is driven from |
 | [`firmware.md`](firmware.md) | **§10.9** Wi-Fi, the radio and the manager above it; **§10.14** the language, no heap, and the layer that comes first; **§10.15** where the configuration lives and the button that puts it back |
+| [`web.md`](web.md) | **§10.16** the configuration site: why on this board it is the only way in that needs no cable, the six things that differ from the board next door, the whitelist that keeps an ARKG enrolment off a LAN, the two sections of the settings file a network may not touch, the password on the door, and the numbers |
 | [`tests.md`](tests.md) | **§10.11** the three tiers — host, parity vectors, device — what each pins, and what is still owed |
 | [`build.md`](build.md) | **§10.4** the dependency set, including the one new component this board adds and the argument for it; **§10.12** the build, the target, the partition table and the size numbers |
 | [`commands.md`](commands.md) | every console command the device answers and what each one does. Design documents describe why; that one describes what you can type |
@@ -146,6 +159,31 @@ that is several things at once (§10.17), the BOOT button as a deny, the setting
 file on SPIFFS with the restore that puts it back, the Wi-Fi radio with a manager
 above it, the bus, and a console on the CH343P bridge with a command per piece of
 it ([`commands.md`](commands.md) is the list).
+
+**And one thing that is new: §10.16's configuration site.** The sibling board's
+`esp_http_server`, its whitelist, its basic-auth gate and its write path, ported —
+plus the seven pages and the `app.js` they share. On this device it is the only way
+in that needs no cable, which is why it was worth having: there is no glass here to
+type an SSID on. It costs 56,576 bytes of the image (49 % of the slot still free)
+and 11,064 bytes of heap while it is up.
+
+**It runs, on the board, and it found a bug on the way.** All three API endpoints,
+the whitelist refusing `fido.json` as an indistinguishable 404, the write path
+refusing the gate's own settings *by name*, both halves of the reboot guard, and
+eight ways of getting the credential wrong — all over the LAN. `web cycle 20` then
+answered §10.16's founding question on this chip for the first time: **+0 bytes over
+twenty rounds**, so there is no leak on an S3 either. The bug was the one constant
+the port could not inherit — a 4 KB task stack that `/api/devstatus` left 116 bytes
+of, because *this* board's dump includes the key readouts — and it rebooted the
+device several requests after the dump that caused it. [`status.md`](status.md) has
+why that was hard to see and [`web.md`](web.md) has the numbers.
+
+**What has not happened is an actual page.** The site lives in the SPIFFS image, so
+serving HTML needs a full `idf.py flash`, and on this board that erases `fido.json`
+and costs a `key enrol` with the key in hand (§10.18.1). Everything behind the pages
+is verified; the markup is checked from the host by
+`tests/test_esp32_web_pages.py`, which now reads both boards' sites from one copy of
+the rules.
 
 And one thing that is **no longer there at all**: `components/crypto` used to derive
 an Ed25519 identity at boot, which since §10.18 signed nothing. It has been deleted
@@ -231,12 +269,31 @@ sibling board keeps, plus one that is this device's own.
    a decision is made and checked before the reply goes out. A reply into an inbox
    that no longer exists is worse than silence, because it looks like an answer.
 
-4. **Nothing that can reach a verdict may be reachable from the network.** There
-   is no web server on this device and no console over the bus. And since §10.18
-   there is exactly **one** way to produce an `allow`: a fingertip on a security
-   key. `approval.requireKey` — the setting that used to open a second way — was
-   deleted with the signing key it belonged to (§10.18.6), because a device that
-   holds no private key cannot be told to approve without one.
+4. **Nothing that can reach a verdict may be reachable from the network.** Since
+   §10.18 there is exactly **one** way to produce an `allow`: a fingertip on a
+   security key. `approval.requireKey` — the setting that used to open a second
+   way — was deleted with the signing key it belonged to (§10.18.6), because a
+   device that holds no private key cannot be told to approve without one.
+
+   **This rule used to be enforced by there being no server at all, and it is not
+   any more**: §10.16's configuration site is on this device, and it is the only
+   way in that needs no cable. What holds the rule up now is narrower and written
+   down in three places rather than assumed:
+
+   * the site's write path is a **whitelist of two sections**, `wifi` and `nats`,
+     and `approval` — the timeout a request waits for a touch, and whether BOOT
+     may deny — is refused *by name*. So is `led`, so a network cannot turn the
+     light off on a device whose only user interface is that light. Two host tests
+     are that rule rather than this paragraph;
+   * the site can never ask the key for anything. `components/web` does not
+     require `responder` or `fido` and cannot reach the gate; the counters, the
+     key's two booleans and the light's word arrive as a struct `main` fills;
+   * and there is still **no console over the bus**, which is the half of this rule
+     that has not changed.
+
+   The one thing the site *can* do to this device is restart it, behind a
+   confirmation word — which takes nothing away that does not come back by itself,
+   and cannot produce a verdict.
 
 5. **The device does not subscribe unless it could actually answer.** §6's queue
    group means each request reaches exactly *one* responder, so a device that

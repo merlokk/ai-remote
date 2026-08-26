@@ -115,7 +115,10 @@ take from it is narrower than "do not duplicate": **a page with its own `<script
 block cannot fail safely on this site**, because the shared tag is what it takes
 down with it, so every page here carries markup and one script reference and
 nothing else. `tests/test_esp32_web_pages.py` is that rule as five assertions
-read straight off the files that get flashed (§10.11).
+read straight off the files that get flashed (§10.11) — and it now reads
+**both boards'** sites from one copy of the rules, since
+[`approver-esp32-yubikey/`](../approver-esp32-yubikey/web.md) serves this same site
+on hardware with no glass.
 
 Four rules it keeps, and each of them is the panel's rule rather than a new one:
 

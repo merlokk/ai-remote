@@ -45,6 +45,14 @@ inline constexpr size_t kMaxNetworks = 4;
 inline constexpr size_t kSsidSize = 33;      // 32 bytes + terminator
 inline constexpr size_t kPasswordSize = 65;  // 64 bytes + terminator
 
+// The configuration site's own credential (§10.16). **Sized like the Wi-Fi pair
+// above rather than by a fresh argument**: 32 bytes is more name than anybody
+// types into a phone with one thumb, and 64 is the ceiling a WPA key already has
+// here — so the longest thing this device can be asked for is a known 97 bytes,
+// which is what `web::kMaxCredentialSize` is built from.
+inline constexpr size_t kWebUserSize = 33;
+inline constexpr size_t kWebPasswordSize = 65;
+
 inline constexpr size_t kUrlSize = 64;
 
 // "255.255.255.255" plus the terminator. Addresses are kept as **text**, the
@@ -135,6 +143,53 @@ struct Wifi {
     uint8_t ap_channel;
 };
 
+// What the operator asked the configuration web server to be (§10.16). Not what
+// is running — the server comes up only when there is a TCP/IP stack for it to
+// live in, and `web::ShouldRun` is where that is decided.
+//
+// **`kAuto` is the default, and it is the cheap one**: the server exists for a
+// device that cannot reach a network and has raised its own access point, which
+// is exactly when somebody needs a way in and has no other. On a working client
+// link `auto` keeps it down and the heap it costs stays free.
+enum class WebMode : uint8_t {
+    kOff = 0,
+    kOn,    // whenever there is a network
+    kAuto,  // only while this device is an access point
+};
+
+struct Web {
+    WebMode mode;
+
+    // **May the page write anything.** The settings pages of §10.16 put the Wi-Fi
+    // records and the bus address behind a form, and anybody who can reach the
+    // server can submit it — §10.3 already puts the trust boundary at the router,
+    // and this is the one switch that lets a device on a network its owner does
+    // not trust serve the read-only half and refuse the rest.
+    //
+    // **True by default**, because a configuration site that cannot configure
+    // anything is not what it was asked for; the honest cost is written down in
+    // §10.16, and TLS with credentials stays the real fix.
+    bool write;
+
+    // **The credential the site asks for, and the switch is the pair itself**
+    // (§10.16, `web_auth.h`): both set is a locked site, either half missing is
+    // an open one. There is no third boolean beside them for the reason
+    // `Wifi::active` has none — two fields that can disagree is one bug report
+    // nobody can read.
+    //
+    // **Empty by default**, so a device flashed with the shipped `config.json`
+    // serves to whoever can reach it, exactly as this board did before the server
+    // existed. Basic authentication is not TLS and `web_auth.h` says so where the
+    // comparison lives.
+    //
+    // Neither field is reachable from the site itself — the whitelist of
+    // `web_settings.h` accepts `wifi` and `nats` and refuses everything else by
+    // name, so a form cannot lock this device or unlock it. The console and
+    // `config.json` are the two ways in, and that is deliberate.
+    char user[kWebUserSize];
+    char password[kWebPasswordSize];
+};
+
 // Named after what it is rather than after its role: there is exactly one bus
 // here and it is NATS (§10.3), so `nats.url` reads as an address and `bus.url`
 // read as an abstraction with one implementation.
@@ -215,6 +270,7 @@ struct Approval {
 
 struct Data {
     Wifi wifi;
+    Web web;
     InternetCheck internet;
     Nats nats;
     Led led;

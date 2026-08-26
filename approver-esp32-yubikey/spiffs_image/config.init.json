@@ -1,4 +1,10 @@
 {
+    "web": {
+        "mode": "auto",
+        "write": true,
+        "user": "",
+        "password": ""
+    },
     "wifi": {
         "active": false,
         "mode": "client",

@@ -68,6 +68,33 @@ milliseconds a derivation takes. `CONFIG_MBEDTLS_ECP_C` and
 defaults — TLS needs them — so the curve arithmetic is bytes that were in the image
 before this component existed.
 
+### The dependency §10.16 did *not* add either
+
+The configuration web server (§10.16) needs an HTTP server, a place to keep pages
+and a base64 encoder for its credential, and there is an obvious way to get all
+three wrong: add a server component, a template library, and a crypto library for
+the encoder.
+
+**None of that happened, and two of the three are worth a line each.**
+
+`esp_http_server` is **in-tree** — it arrives with ESP-IDF, the same status cJSON
+and libsodium had on v5.5.x — so it is not a new entry on root §1's list. It costs
+**11,117 bytes**, and it is the whole of what was added to the dependency line:
+`components/web`'s `REQUIRES` is otherwise components this firmware already had.
+
+And the base64 encoder is **twenty lines of table lookup in `web_auth.cpp`**, not
+mbedTLS and not libsodium. That is not thrift: the credential is *encoded and never
+decoded* (`web_auth.h` argues why that direction is safer — a device with no decoder
+has none of a decoder's parsing bugs), and keeping the encoder local is what lets
+the one comparison standing between a network and this device's settings compile in
+the host tier with a bare C++ compiler. Neither crypto library is on that
+component's line, and neither is in the host build.
+
+**The pages are files, not code.** Seven HTML documents and one `app.js`, 41,893
+bytes on a partition with ~9.8 MB free, served off SPIFFS by name — no template
+engine, no build step, no framework, for the same reason this firmware has no image
+decoder.
+
 ### The transitive one nobody signed off in advance
 
 `debsahu/espidf-nats` requires `espressif/esp_websocket_client` unconditionally,
@@ -134,14 +161,38 @@ be 64 KB aligned and an off-by-one there is a silent reflash away from confusing
 Measured on this build, `idf.py size` and `idf.py size-components`:
 
 ```
-Total image size: 1,284,987 bytes
-Smallest app partition: 2,621,440 bytes — 51% free
+Total image size: 1,341,563 bytes
+Smallest app partition: 2,621,440 bytes — 49% free
 Bootloader: 21,056 bytes — 36% free
 ```
 
-**13,228 bytes smaller than the line above used to say**, and the change that did it
-was a deletion: §10.6's Ed25519 identity, the eFuse route through the HMAC unit, the
-seed generated from SAR-ADC entropy and kept in NVS, `Sign`, and `ProveKey`. Three
+**56,576 bytes larger than the line above used to say**, and the change that did it
+was §10.16's configuration web server — the sibling board's site, ported. Where it
+went:
+
+| | Bytes |
+|---|---|
+| `libweb.a` | **13,482**, of which **3,517 is `.bss`** — a 512-byte chunk buffer, a 1 KB JSON document, a 1,281-byte body buffer, the scan table and a 156-byte header buffer. §10.14.1 as a column again: nothing in it allocates |
+| `libesp_http_server.a` | **11,117**, and **in-tree** — it arrives with ESP-IDF and is not a new entry on root §1's list, which is why §10.4 below did not have to grow |
+| `liblwip.a` | 108,305 → **112,103**, **+3,798** — the listening-socket paths the linker could previously discard. The largest single share of the total that is not this component's own code |
+| `libcli.a` | 20,339 → **21,970**, +1,631 for `web`, `web login` and two readout rows |
+| `libconfig.a` | 8,814 → **9,260**, +446 for the four `web` fields, their parse and their write |
+| the site itself | **41,893 bytes** of SPIFFS in eight files, on a partition with ~9.8 MB free. Not in the image at all |
+
+The rest is `esp_netif`, socket and TLS-adjacent code the linker keeps once
+something listens.
+
+**And the running cost, which is not in the image at all**, measured on the board
+over the LAN: **11,064 bytes** of internal heap while the server is up — of which
+**8,192 is the task stack**, so the server itself is about 2.9 KB — and **+0 bytes
+over twenty start/stop rounds**, spread 64. There is no leak on esp32s3.
+[`web.md`](web.md) §10.16 has the table, the second run, and the stack overflow that
+made that 8,192 a measured number rather than the 4,096 it was ported with.
+
+**Before that, the line said 1,284,987 bytes and 51 % free**, which was itself
+**13,228 bytes smaller** than the version before it — and that change was a
+deletion: §10.6's Ed25519 identity, the eFuse route through the HMAC unit, the seed
+generated from SAR-ADC entropy and kept in NVS, `Sign`, and `ProveKey`. Three
 ESP-IDF components left the dependency line with them — `esp_security`, `efuse` and
 `bootloader_support` — which is most of where the bytes were. libsodium itself stays
 for one verify.
@@ -164,9 +215,10 @@ And this project's own, which is the interesting half:
 | `libespressif__usb.a` | 35,354 | 17 |
 | `libfido.a` | 34,732 | **14,804** — the 2 KB CTAPHID buffer, a 1,152-byte request buffer sized from §10.18's ceilings, the enrolment |
 | `libnats.a` | 33,032 | 10,496 |
-| `libcli.a` | 20,339 | 5,248 |
+| `libcli.a` | 21,970 | 5,248 |
+| `libweb.a` | 13,482 | 3,517 — §10.16's five buffers, and no more than five |
 | `libwifimgr.a` | 8,968 | 4,499 — one task stack |
-| `libconfig.a` | 8,814 | 5,066 |
+| `libconfig.a` | 9,260 | 5,166 |
 | `libprotocol.a` | 6,633 | 0 |
 | `libwifi.a` | 5,456 | 1,472 |
 | `libled.a` | 5,333 | 2,660 — one task stack |

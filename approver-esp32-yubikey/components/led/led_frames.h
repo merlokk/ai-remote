@@ -59,10 +59,10 @@ inline constexpr Rgb kMagenta{255, 0, 255};
 // that a state can change its mind about which one it uses without renaming an
 // enumerator.
 //
-// The four blink rates and the breath are the house firmware's of §10.14.4 —
-// E:\projects\Zesec.ModuleX.Firmware.v3, main/led.cpp — carried over numbers and
-// all, because they were chosen against a real emitter on a real desk and
-// re-deriving them from nothing would be re-deriving them worse.
+// The four blink rates and the breath are the house firmware's of §10.14.4,
+// carried over numbers and all, because they were chosen against a real emitter
+// on a real desk and re-deriving them from nothing would be re-deriving them
+// worse.
 enum class Effect : uint8_t {
     kSolid = 0,  // on, and staying on
     kBeacon,     // 100 ms in every 2 s — present, and not asking for anything

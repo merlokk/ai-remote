@@ -37,14 +37,14 @@ never confused with a broken build:
 
 | Tier | Command | Result |
 |------|---------|--------|
-| Python | `.venv\Scripts\python.exe -m pytest -q` | **453 passed, 40 skipped** — **with NATS up and the `yubikey` extra installed**; no YubiKey, no board, no browser. Both halves of that are load-bearing and the row used to say "no NATS", which the numbers contradict: with the broker down the same suite is **425 passed, 68 skipped**, the 28 being exactly the `requires_nats` tier, and without the extra the three `fido2` files do not collect at all (161 tests). Which is why CI's own numbers are lower than this row and are not written down anywhere — see `.github/workflows/tests.yml` |
+| Python | `.venv\Scripts\python.exe -m pytest -q` | **499 passed, 40 skipped** — **with NATS up and the `yubikey` extra installed**; no YubiKey, no board, no browser. Both halves of that are load-bearing and the row used to say "no NATS", which the numbers contradict: with the broker down the same suite was **425 passed, 68 skipped** when 453 was the number above, the 28 being exactly the `requires_nats` tier (nobody has re-measured the broker-down figure since; on the same 28 it would be 471/68), and without the extra the three `fido2` files do not collect at all (161 tests). Which is why CI's own numbers are lower than this row and are not written down anywhere — see `.github/workflows/tests.yml` |
 | Rust | `cargo test -q` (in `statusline/`) | **59 passed** across four binaries |
 | Rust format | `cargo fmt --check` | clean |
 | Node | `npm test` (in `approver-web/`) | **38 passed** |
 | Browser tier | `scripts\web-approval.cmd` | **16 passed** in ~35s (needs NATS and `agent-browser`) |
 | Host tier (ESP32) | `scripts\esp32-host-tests.cmd` | **727 passed, 0 failures** — run rather than counted, which is the honest form of this row: the 688 it held before was a `RUN_TEST` grep, and §10.16's gate plus §10.9's AP assertion added 27 tests on top of what that grep saw. The last three arrived by being *found*: `test_pmic.cpp` defined them and `RegisterPmicTests()` never called `RUN_TEST` on them, so they had never run since the commit that wrote them — 727 definitions against 724 registrations, invisible in a green suite |
 | Parity vectors (ESP32) | `scripts\make-vectors.cmd --check` | up to date |
-| Host tier (ESP32-S3 + key) | `scripts\esp32yk-host-tests.cmd` | **379 passed, 0 failures** — up 21 since this row was written, and every one of the 21 exists because tier 3 found a defect first: the `getInfo` extension list, the button latch, `deny-pending`, ending an LED override early, and `ui::EffectiveTtlMs` |
+| Host tier (ESP32-S3 + key) | `scripts\esp32yk-host-tests.cmd` | **462 passed, 0 failures** — up 83 since the last number here, and all 83 arrived at once with §10.16's site: the URL whitelist (including that `fido.json` is not a page), the basic-auth gate, and the write path with its two §10.10 refusals. The 21 before those exist because tier 3 found a defect first: the `getInfo` extension list, the button latch, `deny-pending`, ending an LED override early, and `ui::EffectiveTtlMs` |
 | ARKG vectors (ESP32-S3) | `scripts\esp32yk-make-vectors.cmd --check` | up to date |
 | Markdown links | every relative link in every tracked `.md` | all resolve |
 
@@ -130,6 +130,32 @@ Note that registering several browsers does not touch it: two browsers are two
 keys, not two identities with different rights.
 
 ### 2.4 The ESP32 web server: authentication done, the interface half is not (§10.16, §10.3)
+
+**And it is now two boards, not one.** §10.16 has been ported to
+`approver-esp32-yubikey/` — the same server, whitelist, gate and write path, with
+the realm changed and the battery gauge replaced by the security key and the light.
+Everything below applies to both, and one item is *sharper* on the second board: it
+has no glass and no keyboard, so this site is the only way in that does not need the
+UART cable, which makes "a listener that does not exist on that interface" a more
+attractive fix there than a page nobody can reach.
+
+That port has run on the board and is not owed anything here: every endpoint, the
+whitelist, the write path's refusals, both halves of the reboot guard and eight ways
+of getting the credential wrong were exercised over the LAN, and `web cycle 20`
+answered §10.16's founding question on an S3 for the first time — **+0 bytes over
+twenty rounds**, so no leak on either chip. It cost one bug, and the bug is the kind
+worth knowing about a port: a 4 KB task stack that was correct next door left
+**116 bytes** here, because this board's `/api/devstatus` includes the key readouts.
+Its [`status.md`](approver-esp32-yubikey/status.md) has why that took three failed
+reproductions to pin down.
+
+**One thing that board still owes**, and it is verification rather than design: **no
+HTML page has been served by it.** The site lives in the SPIFFS image, so a full
+`idf.py flash` is needed, and on that board a full flash erases `fido.json` and
+costs a `key enrol` with the security key in hand. Everything behind the pages is
+verified and the markup is checked from the host, so what is left is the browser and
+a phone.
+
 
 **The authentication half is closed.** HTTP basic auth is on every route of the
 site — the pages, both API reads, the forms, the actions and the reboot — off until

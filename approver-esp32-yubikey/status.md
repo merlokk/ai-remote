@@ -27,7 +27,12 @@ largest item there is a *removal*.
 | — its custody | **settled by removal** | the seed was 32 bytes of private key in unencrypted NVS protecting nothing. `crypto::Init` erases it, and did: one `W crypto: erased the 32-byte Ed25519 seed…` on this board. **There is now no private key on this flash of any kind** |
 | The verifier self-test | **runs** | a real signature verifies and a one-bit-flipped one does not. A failure keeps the device off `approvals.*` (`Blocker::kCannotVerify`), because a board that cannot check §6's reply cannot know whose key it pinned |
 | ARKG derivation (§10.18.2) | **runs** | `components/arkg`, 3,921 bytes. The five pure steps are host-tested against numbers Python produced, and the two curve steps agree with Python **on this chip** — `key selftest`, 661–670 ms |
-| Console on UART0 (§10.7) | **runs** | all 16 commands answer |
+| Console on UART0 (§10.7) | **runs** | all 17 commands answer — 16 before §10.16 added `web` |
+| Web server (§10.16) | **runs** | ported from the sibling board: the server, the whitelist, the basic-auth gate, the write path and the seven pages. In the image at **+56,576 bytes** (49 % of the slot free), `libweb.a` 13,482 of which 3,517 is `.bss`. Served over the LAN at `192.168.11.190`: all three API endpoints, every refusal, every action, the reboot guard and the credential — `web.md` lists them one by one. **It found a bug first, and the bug was a stack** — see below |
+| — the 4 KB task stack | **fixed, and it rebooted the board** | `/api/devstatus` runs the console's whole dump on the server's task, and on this board that dump includes `key` and `keys` — readouts the console gives *itself* 12 KB for. It left **116 bytes of 4,096**. The dump *succeeded*; the panic came several requests later, because a FreeRTOS canary is checked at a context switch rather than at the overrun. Three attempts to reproduce it from the request that seemed to trigger it all passed. `kTaskStackBytes` is now **8,192** against a measured peak of **3,980** |
+| — the leak question | **answered on this chip** | `web cycle 20`: **+0 bytes end to end**, spread **64**, one −64/+64 pair in rounds 10–11 and seventeen rounds flat to the byte. A second run: −112, spread 140, flat from round 16 — a first-run settling, the same shape the sibling recorded. **No leak on esp32s3.** Cost while up: **11,064 bytes**, of which 8,192 is the task stack |
+| — `/api/devstatus` on this libc | **runs** | 3,309–3,353 bytes, all nine sections. The `funopen` cookie and the global-`stdout` swap were inherited unchecked and behave |
+| — its pages, on this device | **not flashed** | the site lives in the SPIFFS image, so serving it needs a full `idf.py flash` — which erases `fido.json` and costs a `key enrol` with the key in hand (§10.18.1). `app-flash` gives a running server with no pages, which is why `/` is a 404 on the board right now. A decision with a physical price, and it has not been taken |
 | WS2812 on GPIO48 (§10.17) | **runs** | UART1 at 3.33 Mbaud, inverted; 0 write failures over thousands of frames |
 | `pending` ending with the gate (§10.17) | **runs** | the light stops asking when the gate does, not when the request expires — those are 30 s apart, and the difference was half a minute of white asking for a fingertip with nowhere to put it |
 | The touch prompt (§10.17) | **runs** | blue and fast while `key enrol` / `key test` wait for a fingertip, and gone the moment the key answers rather than waited out |
@@ -95,6 +100,7 @@ refused every one of them in three milliseconds among them. They are listed unde
 | **A re-enrolment, to see `STALE`** | the binding of §10.18.1 is checked at every boot and has only ever agreed. Producing a disagreement costs an enrolment and then a fresh token |
 | **An allow from Claude Code itself** | every request so far came from `tools/test_request.py`, which sends the bytes `hook.py` sends. What has not happened is the request arriving from a live session's `PermissionRequest` |
 | **`scripts/esp32yk-approval.cmd`** | the end-to-end script. Everything it would drive now works by hand |
+| **A page served by this board** | everything *behind* the pages now runs on the board — the endpoints, the refusals, the gate, the leak measurement — and the markup is checked from the other side by `tests/test_esp32_web_pages.py`. What is left is the one thing needing a full flash, which costs the enrolment: an actual HTML page over the wire, and a phone doing the first-time setup on it |
 | **Waiting out a `CHANNEL_BUSY` key in firmware** | a reset taken while the key is waiting for a fingertip leaves it holding a transaction for a channel that no longer exists, and everything after that gets `0x06`. It is **not permanent** — measured at about **34 s** from when the stale request started (busy at 8.4 s into a run, free at 42.9 s) — and unplugging the key is instant, so the device says both. A retry loop in `Exchange` was written, recovered correctly, and **rebooted the board about one run in two**, ~1.3 s after the first `0x06`; it is reverted. The suspect is this file's documented weakness — `ReadPacket` re-submits a transfer that may still be in flight — and that is what has to be fixed before the retry comes back |
 
 ## Not built at all
@@ -103,7 +109,6 @@ refused every one of them in three milliseconds among them. They are listed unde
 |---|---|
 | **Any display at all** | there is no panel on this board (§10.1), so nothing renders anything — and nothing subscribes to a subject whose only consumer would be a readout. One WS2812 is the whole interface (§10.17) |
 | **A clock** | no RTC (no I²C bus for one) and no SNTP: §7's `ts` is echoed from the request, nothing else here reads a wall-clock time, and there is nowhere to show one (§10.13) |
-| **A web configuration site** | the way in on this board is the CH343P bridge and the console on it, which is a socket rather than a network service. A second surface would be one more thing to keep away from a verdict (§10.10 rule 4) |
 | **OTA** | the partition table has two slots and nothing uses them |
 
 ## Known differences from the committed tree
@@ -120,6 +125,36 @@ have been found any other way.** The host tier has no light, no clock, no finger
 no key; the vector tier has no time in it at all. That is the argument for tier 3
 written as evidence rather than as a claim, and it is why this section is the longest
 one here.
+
+### The web server: a stack that was fine on the other board
+
+**§10.16 was ported and the port was wrong in exactly one constant**, and it took
+the board to say so. `web::kTaskStackBytes` came across as the sibling's 4,096, and
+`/api/devstatus` — which runs the console's whole dump on the server's own task, by
+design (§10.7) — left **116 bytes of it**. The sibling's dump leaves 1,756; the
+difference is that this board's dump includes `key` and `keys`, and the console
+gives *itself* 12 KB for those.
+
+**Three things about how it failed are worth keeping**, because each one would have
+sent a reader in the wrong direction:
+
+1. **the dump succeeded.** 3,339 bytes, `200`, every section present. If the check
+   had been "does `/api/devstatus` work", this would have passed;
+2. **the reboot came several requests later.** A FreeRTOS stack canary is checked at
+   a context switch, not at the write that overran the guard, so the corruption and
+   the panic are minutes of wall-clock apart in tester time. What was visible from
+   the host was a `POST /api/settings` dropping its connection — pointing at the
+   write path, which was innocent;
+3. **it did not reproduce.** Three attempts — the exact document twice, then the
+   whole six-request sequence on one keep-alive connection — all passed cleanly.
+   The diagnosis came from asking the device `web` and reading
+   `stack 116 byte(s) never used, of 4096`, which is the readout existing for
+   exactly this and the only reason this was found rather than filed as a one-off.
+
+8,192 now, against a measured peak of 3,980. **The general lesson is narrower than
+"raise the stack"**: a ported component's constants are only as valid as the
+hardware they were measured on, and the one number in §10.16 that is about *this
+board's other subsystems* rather than about HTTP is the one that had to change.
 
 ### Closing the loop: the allow
 

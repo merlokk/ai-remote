@@ -284,6 +284,47 @@ esp_err_t Parse(const char *json, Data *out) {
         CopyString(nats, "url", out->nats.url, sizeof(out->nats.url));
     }
 
+    // The configuration web server (§10.16). **Three spellings and nothing
+    // else**, and an unknown one is left at the default rather than guessed — the
+    // same call the Wi-Fi mode above makes, and for the same reason: a device that
+    // read "yes" as "on" would be a device serving pages nobody asked it to.
+    const cJSON *web = cJSON_GetObjectItemCaseSensitive(root, "web");
+    if (cJSON_IsObject(web)) {
+        const cJSON *mode = cJSON_GetObjectItemCaseSensitive(web, "mode");
+        if (cJSON_IsString(mode) && mode->valuestring != nullptr) {
+            if (strcmp(mode->valuestring, "off") == 0) {
+                out->web.mode = WebMode::kOff;
+            } else if (strcmp(mode->valuestring, "on") == 0) {
+                out->web.mode = WebMode::kOn;
+            } else if (strcmp(mode->valuestring, "auto") == 0) {
+                out->web.mode = WebMode::kAuto;
+            } else {
+                ESP_LOGW(TAG, "web.mode '%s' is not off, on or auto; left alone",
+                         mode->valuestring);
+            }
+        }
+        // Whether the pages may write. Anything that is not a boolean leaves the
+        // default alone, which is the same call the mode above makes — and here the
+        // default is the permissive one, so a device that means to refuse writes
+        // has to say `false` in as many words.
+        const cJSON *writable = cJSON_GetObjectItemCaseSensitive(web, "write");
+        if (cJSON_IsBool(writable)) {
+            out->web.write = cJSON_IsTrue(writable);
+        }
+
+        // The credential the site asks for (§10.16). **Both or neither** — the
+        // pair is the switch, and `web::AuthRequired` is where that is decided
+        // rather than here: this component's job is to get the two strings out of
+        // a file, and a rule about them living in two places is a rule that
+        // drifts.
+        //
+        // Refused rather than truncated by `CopyString`, like the passphrase
+        // above, and for a sharper reason: a password shortened by one byte is a
+        // device nobody can log into and a log line that does not say so.
+        CopyString(web, "user", out->web.user, sizeof(out->web.user));
+        CopyString(web, "password", out->web.password, sizeof(out->web.password));
+    }
+
     const cJSON *led = cJSON_GetObjectItemCaseSensitive(root, "led");
     if (cJSON_IsObject(led)) {
         long value = out->led.percent;
@@ -324,6 +365,21 @@ esp_err_t Serialise(const Data &in, size_t *length) {
     cJSON *root = cJSON_CreateObject();
     if (root == nullptr) {
         return ESP_ERR_NO_MEM;
+    }
+
+    cJSON *web = cJSON_AddObjectToObject(root, "web");
+    if (web != nullptr) {
+        cJSON_AddStringToObject(web, "mode",
+                                in.web.mode == WebMode::kOff
+                                    ? "off"
+                                    : (in.web.mode == WebMode::kOn ? "on" : "auto"));
+        cJSON_AddBoolToObject(web, "write", in.web.write);
+        // **Written back like the Wi-Fi passphrase is** (§10.15): a secret this
+        // device has to present is a secret it has to keep, and the file is where
+        // it keeps it. What §10.15 forbids is a password in a *log line* or a
+        // console dump, and neither of those is this.
+        cJSON_AddStringToObject(web, "user", in.web.user);
+        cJSON_AddStringToObject(web, "password", in.web.password);
     }
 
     cJSON *wifi = cJSON_AddObjectToObject(root, "wifi");
@@ -481,6 +537,20 @@ void FillDefaults(Data *out) {
         return;
     }
     *out = Data{};
+    // **`auto` rather than off**, and it is the cheap default: the server comes up
+    // only while this device is its own access point, which is the one state in
+    // which somebody has no other way to reach it (§10.16).
+    out->web.mode = WebMode::kAuto;
+    // Permissive by default: a configuration site that cannot configure anything
+    // is not what §10.16 was asked for, and the switch exists for the device on a
+    // network its owner does not trust.
+    out->web.write = true;
+    // **No credential, so no lock** (§10.16): a device flashed with these defaults
+    // serves what it served before authentication existed. Setting both halves is
+    // what switches it on, and it is one line in `config.json` or two words on the
+    // console.
+    out->web.user[0] = '\0';
+    out->web.password[0] = '\0';
     out->wifi.active = false;
     out->wifi.mode = WifiMode::kClient;
     out->wifi.network_count = 0;

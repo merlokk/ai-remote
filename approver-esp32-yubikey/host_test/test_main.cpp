@@ -46,6 +46,12 @@ void RegisterCborTests(void);
 void RegisterCtap2Tests(void);
 void RegisterArkgTests(void);
 
+// The configuration site of §10.16, whose three decision-holding files include
+// nothing but `<cstddef>` / `<cstdint>` / cJSON and therefore all compile here.
+void RegisterWebPathTests(void);
+void RegisterWebAuthTests(void);
+void RegisterWebSettingsTests(void);
+
 void setUp(void) { fake::Reset(); }
 
 void tearDown(void) {}
@@ -102,6 +108,13 @@ int main(int argc, char **argv) {
 
     // And the duration formatter the console prints ages with (`ui/age_text.h`).
     if (Wanted("age") || Wanted("duration")) RegisterAgeTextTests();
+
+    // The configuration site (§10.16). Three suites, and each of them is a rule
+    // that stands between a network and this device: what a URL may reach, who may
+    // reach it at all, and what a form may change.
+    if (Wanted("web") || Wanted("http")) RegisterWebPathTests();
+    if (Wanted("web") || Wanted("http") || Wanted("auth")) RegisterWebAuthTests();
+    if (Wanted("web") || Wanted("http") || Wanted("settings")) RegisterWebSettingsTests();
 
     // Tier 2: the cross-language parity vectors.
     if (Wanted("vectors") || Wanted("parity") || Wanted("protocol")) RegisterVectorTests();

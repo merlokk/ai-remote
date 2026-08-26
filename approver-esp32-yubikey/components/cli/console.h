@@ -24,15 +24,17 @@ namespace console {
 // so `cat` has something to read.
 esp_err_t Init();
 
-// **`devstatus`, printed to whatever `stdout` currently is.** On the sibling
-// board this exists so its web server can serve the same dump the console prints
-// without a second copy of a single readout; **there is no web server here**, so
-// today it has exactly one caller — the `devstatus` command itself.
+// **`devstatus`, printed to whatever `stdout` currently is.** It exists so the
+// web server of §10.16 can serve the same dump the console prints without a
+// second copy of a single readout, and it now has the second caller it was
+// exported for: `console::Init` hands this function to `web::SetDiagnostics`, and
+// `GET /api/devstatus` swaps `stdout` for the length of the call.
 //
-// It is kept exported anyway, and that is a decision rather than an oversight:
-// §10.7's four-places rule is about copies of a readout, and the moment a second
-// surface wants this dump the temptation is to write it again. One function,
-// however many callers.
+// **The hook runs that way round on purpose.** `cli` depends on `web` — the `web`
+// command reads its status — so `web` must never depend on `cli`, and a cycle in
+// `REQUIRES` is a build that does not happen. One function, two surfaces, and
+// §10.7's four-places rule kept: the moment a second surface wants a readout, the
+// temptation is to write it again.
 void PrintDevStatus();
 
 }  // namespace console

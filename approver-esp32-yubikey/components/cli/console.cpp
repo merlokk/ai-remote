@@ -4,12 +4,18 @@
 // over USB, and it is worth knowing before wondering why this is not on USB
 // Serial/JTAG the way the sibling board's is.
 //
-// **Sixteen commands, and there is a command per piece of hardware this board
+// **Seventeen commands, and there is a command per piece of hardware this board
 // actually has.** `led` (§10.17) and `key` with its verbs (§10.18) are this
 // device's own; `status`, `config`, `wifi`, `nats`, `keys`, `register`, `forget`,
-// `ls`, `cat`, `term` and `reboot` are the same commands the sibling board
+// `web`, `ls`, `cat`, `term` and `reboot` are the same commands the sibling board
 // answers, deliberately unchanged so that an operator who knows one of these two
 // devices knows the other.
+//
+// `web` (§10.16) is the newest of those and the one that matters most on a board
+// with no glass: it is how a phone gets a page to type an SSID into, and it is
+// the one command here whose subject can be *reached* from a network rather than
+// only from this port. Nothing it serves can produce a verdict — §10.10 rule 4 —
+// and `web_settings.h` is where that is a whitelist rather than an intention.
 //
 // **There is no command here for a display, a speaker, a power rail or a clock**,
 // because none of those is on this board (§10.13). The clock is the one worth a
@@ -65,6 +71,8 @@
 #include "age_text.h"
 #include "request_card.h"
 #include "storage.h"
+#include "web_auth.h"
+#include "web_server.h"
 #include "wifi_manager.h"
 #include "wifi_radio.h"
 
@@ -681,6 +689,17 @@ int CmdConfig(int argc, char **argv) {
                c.wifi.networks[i].ip.enabled ? c.wifi.networks[i].ip.address : "dhcp");
     }
     printf("nats       %s\n", c.nats.url);
+    // The configuration site (§10.16), in three facts and no password: what mode
+    // was asked for, whether a form may write, and **whether the site is actually
+    // locked** — which is `web::AuthRequired`'s answer rather than "a user is set",
+    // because half a credential is an open site and an operator has to be able to
+    // see that here.
+    printf("web        %s, %s, %s\n",
+           c.web.mode == config::WebMode::kOff
+               ? "off"
+               : (c.web.mode == config::WebMode::kOn ? "on" : "auto"),
+           c.web.write ? "writable" : "read-only",
+           web::AuthRequired(c.web.user, c.web.password) ? c.web.user : "no password");
     printf("led        %u%%, idle %u%%\n", static_cast<unsigned>(c.led.percent),
            static_cast<unsigned>(c.led.idle_percent));
     // The gate (§10.18). There is no line here about whether the key is required,
@@ -2204,6 +2223,326 @@ int CmdKey(int argc, char **argv) {
 // **It exists so there is one thing to paste into a bug report.** It is split out
 // as a function the rest of the firmware can call, because §10.7's four-places
 // rule is about copies of a readout rather than about how many callers there are.
+// `web` (CLAUDE.md §10.16) — the configuration server, and the two questions it
+// exists to answer before anything is built on top of it: what does it cost while
+// it is up, and **does stopping it give every byte back**.
+//
+// The second one is why `cycle` is here. Older frameworks leaked a little per
+// start, which is invisible once and fatal on a device that is configured a few
+// times a week and never rebooted — and the only honest way to know is to do it
+// twenty times and look at the drift. It is the same experiment §10.9 records for
+// the Wi-Fi stack, where the on/off cycles came back every time and wandered a few
+// hundred bytes in *both* directions: the allocator, not a leak.
+//
+// **The sibling board answered both questions on a C6 with no PSRAM. This board
+// has 8 MB of it and a different internal budget** (§10.13), so the numbers are
+// its own and §10.16 records them separately rather than borrowing them.
+void PrintWebUsage() {
+    printf("usage: web                   what was asked for, and what is running\n");
+    printf("       web on                have it up whenever there is a network\n");
+    printf("       web off               never\n");
+    printf("       web auto              only while this device is an access point\n");
+    printf("       web cycle [n]         start and stop it n times, and print the drift\n");
+    printf("       web login <user> <pw> ask for these before anything is served\n");
+    printf("       web login off         serve to anyone who can reach it\n");
+    printf("       web help              this\n");
+    printf("the mode is a wish: it comes up only with a network, in memory only\n");
+    printf("the pages can change the wi-fi and bus settings, and can restart this\n");
+    printf("device - they can never approve a request, and cannot reach the key\n");
+}
+
+// A settling delay after `httpd_stop`, and it is not padding: **lwIP frees a
+// closed socket on its own task**, so a heap sampled the instant the server task
+// exits can still be holding what the tcpip thread has not got to yet. Without
+// this the measurement reports a leak that is not there.
+constexpr uint32_t kWebSettleMs = 150;
+
+// **Internal RAM**, the same call `status` makes and for its reason: with 8 MB of
+// PSRAM on this board a total-heap figure would be eight and a half megabytes and
+// would say nothing about the memory a task stack and a `.bss` buffer come out of.
+uint32_t WebFreeHeap() {
+    return static_cast<uint32_t>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+}
+
+void PrintWebStatus() {
+    const web::Status now = web::Get();
+    const wifimgr::Snapshot wifi = wifimgr::Get();
+
+    // **Desired and current, side by side** — §10.9's shape, and the reason a
+    // server that is waiting for a network does not read as a broken one.
+    printf("wanted     %s  (config: web %s)\n", web::Name(now.desired),
+           web::Name(web::DesiredFromConfig()));
+    printf("server     %s", now.running ? "running" : "stopped");
+    if (now.running) {
+        printf(" on port %u", static_cast<unsigned>(now.port));
+    } else {
+        // Why not, in the operator's terms rather than as an error code. Each of
+        // these is a different thing to go and do.
+        if (now.desired == web::Desired::kOff) {
+            printf(" - nothing asked for it");
+        } else if (wifimgr::DesiredFromConfig() == wifimgr::Desired::kOff) {
+            printf(" - the radio is switched off ('wifi mode client' or 'wifi mode ap')");
+        } else if (!wifi.stack_up) {
+            printf(" - waiting for a network ('wifi mode client' or 'wifi mode ap')");
+        } else if (now.desired == web::Desired::kAuto) {
+            printf(" - 'auto', and this device is not an access point");
+        }
+    }
+    printf("\n");
+    if (now.running && wifi.radio.ip != 0) {
+        // The address to type into a phone, which is the whole point of it being
+        // up — and it is the radio's own answer rather than something rebuilt.
+        // **On this board there is nowhere else to read it from**: the sibling
+        // shows an address on its glass, and this device has one light.
+        printf("reach      http://%u.%u.%u.%u/\n", static_cast<unsigned>(wifi.radio.ip & 0xFF),
+               static_cast<unsigned>((wifi.radio.ip >> 8) & 0xFF),
+               static_cast<unsigned>((wifi.radio.ip >> 16) & 0xFF),
+               static_cast<unsigned>((wifi.radio.ip >> 24) & 0xFF));
+    }
+    // **Whether the site is locked, and the open case is said out loud** (§10.16).
+    // A config with half a credential in it serves to anyone, and "half" is a
+    // state an operator reaches in one typo — so this prints what the door does
+    // rather than what the file nearly says. The password is never printed:
+    // §10.15's rule, and a console dump is the audience it names.
+    const config::Web &web_cfg = config::Get().web;
+    if (now.auth) {
+        printf("auth       basic, user '%s'\n", web_cfg.user);
+    } else if (web_cfg.user[0] != '\0' || web_cfg.password[0] != '\0') {
+        printf("auth       OPEN - %s is set and %s is not ('web login <user> <pw>')\n",
+               web_cfg.user[0] != '\0' ? "the user" : "the password",
+               web_cfg.user[0] != '\0' ? "the password" : "the user");
+    } else {
+        printf("auth       none - anyone who can reach it is served ('web login <user> <pw>')\n");
+    }
+    printf("write      %s\n", web_cfg.write
+                                  ? "yes - the wi-fi and bus pages can apply and save"
+                                  : "no - the whole write path is refused (config.json)");
+    printf("served     %" PRIu32 " file(s), %" PRIu32 " byte(s), %" PRIu32 " api\n",
+           now.requests, now.bytes, now.api);
+    // **Two refusals, counted apart.** A name the whitelist would not serve is
+    // somebody asking for something like `config.json` or `fido.json`; a name that
+    // is simply not there is an ordinary 404. The browser is told the same thing
+    // either way (§10.16), and this is where the difference lives.
+    printf("refused    %" PRIu32 " not a page, %" PRIu32 " no such file\n", now.refused,
+           now.not_found);
+    if (now.unauthorised != 0) {
+        // Printed only when it is not zero, and it cannot be non-zero on a site
+        // with no credential. **The first one is always the browser** — it has no
+        // way to know a password is wanted until the 401 says so — so one or two
+        // per visit is the handshake, and a count that climbs on its own is
+        // somebody guessing.
+        printf("unauth     %" PRIu32 " request(s) with no credential or the wrong one\n",
+               now.unauthorised);
+    }
+    printf("heap       %" PRIu32 " internal free, %" PRIu32 " lowest ever\n", now.free_now,
+           now.low_water);
+    if (now.task_stack_low != 0) {
+        // **Measured after the heaviest handler there is**, which is
+        // `/api/devstatus`: it formats every readout on this device on this task's
+        // 4 KB. Section 10.14.1's number, for the one task in this firmware whose
+        // stack is not ours to size statically.
+        printf("stack      %" PRIu32 " byte(s) never used, of %" PRIu32 "\n",
+               now.task_stack_low, static_cast<uint32_t>(web::kTaskStackBytes));
+    }
+    if (now.running && !wifi.stack_up) {
+        // The radio went down under a running server. Not a crash — the socket
+        // outlives the netif — but nothing can reach it, and a server that is
+        // "running" and unreachable is the readout §10.9 spends a paragraph on.
+        printf("warning    the network stack went down under it - nothing can reach this\n");
+    }
+    // **While it is up, the cost; once it is down, what came back** — and never
+    // both, because the two are only comparable when nothing else has moved the
+    // heap between them. `web_server.h` has the readout that taught that: a radio
+    // switched off between a start and a stop releases tens of kilobytes, and this
+    // line reported the server as having cost minus forty-two kilobytes.
+    if (now.running && now.free_before_start != 0) {
+        printf("cost       %" PRId32 " byte(s) while up\n",
+               static_cast<int32_t>(now.free_before_start) - static_cast<int32_t>(now.free_now));
+    } else if (now.has_run) {
+        printf("last run   %" PRId32 " byte(s) unreturned by its stop%s\n",
+               -now.last_run_returned,
+               now.last_run_returned >= 0 ? "  (all of it came back)" : "");
+    }
+}
+
+int CmdWeb(int argc, char **argv) {
+    if (argc == 1) {
+        PrintWebStatus();
+        return 0;
+    }
+    if (strcmp(argv[1], "help") == 0) {
+        PrintWebUsage();
+        return 0;
+    }
+
+    // **The credential, and it is the one setter here that takes two words.**
+    // §10.16's gate is on when both halves are set, so setting them is one action
+    // rather than two — a device left with a user and no password is an open site
+    // that reads as a locked one, and the readout above has a line for that state
+    // precisely because a two-step setter would create it routinely.
+    //
+    // **It is typed here rather than sent to the site**, and that is the point:
+    // the whitelist of `web_settings.h` refuses `web` outright, so nothing that
+    // arrives over HTTP can lock this device or unlock it. The console and
+    // `config.json` are the two ways in.
+    //
+    // In memory only, like every other setter (§10.15) — and this one says what
+    // that costs out loud, because a credential that does not survive a reboot is
+    // the surprise that matters.
+    if (strcmp(argv[1], "login") == 0) {
+        config::Web &web_cfg = config::Get().web;
+        if (argc == 3 && strcmp(argv[2], "off") == 0) {
+            web_cfg.user[0] = '\0';
+            web_cfg.password[0] = '\0';
+            printf("the site is open to anyone who can reach it - 'config save' writes that "
+                   "to %s\n",
+                   config::kPath);
+            return 0;
+        }
+        if (argc != 4) {
+            printf("usage: web login <user> <password>   or   web login off\n");
+            return 1;
+        }
+        if (argv[2][0] == '\0' || argv[3][0] == '\0') {
+            // Half a credential is an open site, so the empty half is refused
+            // rather than stored: 'web login off' is how it is turned off, in as
+            // many words.
+            printf("both halves or neither - 'web login off' is how it is switched off\n");
+            return 1;
+        }
+        if (strchr(argv[2], ':') != nullptr) {
+            // Basic authentication cannot represent it (`web_auth.h`): the colon is
+            // the separator, so a user with one in it is two credentials wearing
+            // one name. Refused here so that it is refused *before* it becomes a
+            // device nobody can log into.
+            printf("a user name cannot contain a colon - basic auth uses it as the "
+                   "separator\n");
+            return 1;
+        }
+        if (strlen(argv[2]) >= config::kWebUserSize ||
+            strlen(argv[3]) >= config::kWebPasswordSize) {
+            printf("at most %u bytes of user and %u of password\n",
+                   static_cast<unsigned>(config::kWebUserSize - 1),
+                   static_cast<unsigned>(config::kWebPasswordSize - 1));
+            return 1;
+        }
+        snprintf(web_cfg.user, config::kWebUserSize, "%s", argv[2]);
+        snprintf(web_cfg.password, config::kWebPasswordSize, "%s", argv[3]);
+        // **The password is not echoed**, here or anywhere (§10.15). The user name
+        // is, because that is the half somebody has to type into a phone and
+        // getting it wrong is the ordinary mistake.
+        printf("the site now asks for user '%s' - in memory only, 'config save' writes it "
+               "to %s\n",
+               web_cfg.user, config::kPath);
+        printf("basic auth is not TLS: the password crosses this network readable\n");
+        return 0;
+    }
+
+    // **The three of them set a wish, they do not start anything.** The
+    // reconcile runs on the Wi-Fi manager's tick (§10.16), so it happens within
+    // 200 ms and it happens in one place — which is what keeps "asked for" and
+    // "running" from being two truths. In memory only, like every other setter
+    // (§10.15).
+    web::Desired wanted = web::Desired::kOff;
+    bool is_mode = true;
+    if (strcmp(argv[1], "on") == 0) {
+        wanted = web::Desired::kOn;
+    } else if (strcmp(argv[1], "off") == 0) {
+        wanted = web::Desired::kOff;
+    } else if (strcmp(argv[1], "auto") == 0) {
+        wanted = web::Desired::kAuto;
+    } else {
+        is_mode = false;
+    }
+    if (is_mode && argc == 2) {
+        const uint32_t before = WebFreeHeap();
+        web::SetDesired(wanted);
+        // Long enough for the manager's next pass to have acted, so the readout
+        // below is the answer rather than the question.
+        vTaskDelay(pdMS_TO_TICKS(wifimgr::kPollMs * 2 + kWebSettleMs));
+        printf("web %s, in memory only - 'config save' writes it to %s\n",
+               web::Name(wanted), config::kPath);
+        const int32_t moved = static_cast<int32_t>(before) - static_cast<int32_t>(WebFreeHeap());
+        if (moved != 0) {
+            printf("heap       %+" PRId32 " byte(s)\n", -moved);
+        }
+        PrintWebStatus();
+        return 0;
+    }
+
+    if (strcmp(argv[1], "cycle") == 0 && argc <= 3) {
+        long rounds = 10;
+        if (argc == 3) {
+            char *end = nullptr;
+            rounds = strtol(argv[2], &end, 10);
+            if (end == argv[2] || *end != '\0' || rounds < 1 || rounds > 50) {
+                printf("cycle takes 1..50 rounds; got '%s'\n", argv[2]);
+                return 1;
+            }
+        }
+        if (web::Running()) {
+            printf("stop it first - 'web off'\n");
+            return 1;
+        }
+        // **The reconciler is held off for the whole loop, not asked politely.**
+        // It runs on the Wi-Fi manager's task five times a second and on the
+        // sibling board it used to race this one: with `web off` set it tore down
+        // each round the moment it went up - two `httpd_stop` calls on one handle,
+        // which is a double free and, a few rounds later, a panic inside the
+        // allocator. So this takes the lifetime and gives it back on every path
+        // out, and the mode no longer matters: `web on` cycles as honestly as
+        // `web off` does.
+        struct Owned {
+            Owned() { web::Hold(true); }
+            ~Owned() { web::Hold(false); }
+        } owned;
+
+        const uint32_t start = WebFreeHeap();
+        uint32_t lowest = start;
+        uint32_t highest = start;
+        uint32_t last = start;
+        printf("round   after start   after stop   drift\n");
+        for (long i = 0; i < rounds; ++i) {
+            if (web::Start() != ESP_OK) {
+                printf("round %ld would not start\n", i + 1);
+                return 1;
+            }
+            // Long enough for the server task to reach its own `select`, so each
+            // round is a server that really ran rather than one that was torn
+            // down mid-construction.
+            vTaskDelay(pdMS_TO_TICKS(50));
+            const uint32_t up = WebFreeHeap();
+            web::Stop();
+            vTaskDelay(pdMS_TO_TICKS(kWebSettleMs));
+            const uint32_t down = WebFreeHeap();
+
+            printf("%5ld   %11" PRIu32 "   %10" PRIu32 "   %+" PRId32 "\n", i + 1, up, down,
+                   static_cast<int32_t>(down) - static_cast<int32_t>(last));
+            last = down;
+            if (down < lowest) {
+                lowest = down;
+            }
+            if (down > highest) {
+                highest = down;
+            }
+        }
+        printf("start %" PRIu32 ", end %" PRIu32 " - %+" PRId32 " over %ld round(s)\n", start,
+               last, static_cast<int32_t>(last) - static_cast<int32_t>(start), rounds);
+        printf("spread %" PRIu32 " byte(s) between the lowest and highest resting point\n",
+               highest - lowest);
+        // **What the numbers mean, said here rather than left to whoever reads
+        // them**: a leak walks one way and grows with the rounds; the allocator
+        // wandering shows up as a spread with no direction.
+        printf("a drift that grows with the rounds is a leak; a spread that does not is the "
+               "allocator\n");
+        return 0;
+    }
+
+    printf("no such thing as 'web %s'\n", argv[1]);
+    PrintWebUsage();
+    return 1;
+}
+
 int CmdDevStatus(int argc, char **) {
     if (argc != 1) {
         printf("usage: devstatus     the board, the light, the key and the network\n");
@@ -2229,6 +2568,9 @@ int CmdDevStatus(int argc, char **) {
         // to: a socket that is open and a key that cannot sign are the same
         // silence from the other end.
         {"keys", &CmdKeys},
+        // And the one thing on this list that is off unless somebody asked for it
+        // (§10.16), which is itself the state worth printing.
+        {"web", &CmdWeb},
     };
 
     bool first = true;
@@ -2247,9 +2589,9 @@ int CmdDevStatus(int argc, char **) {
 // **The table, and the order in it is the order `help` prints.** Grouped the way
 // somebody learning this device would want them: what it is, what it is doing
 // about approvals, the two pieces of hardware it has, the settings, the network,
-// the bus, the identity, and the filesystem last.
+// the bus, the identity, the configuration site, and the filesystem last.
 //
-// Sixteen of them; the file's opening comment says what there is no command for
+// Seventeen of them; the file's opening comment says what there is no command for
 // and why.
 const esp_console_cmd_t kCommands[] = {
     {
@@ -2379,6 +2721,15 @@ const esp_console_cmd_t kCommands[] = {
         .context = nullptr,
     },
     {
+        .command = "web",
+        .help = "the configuration web server: off, on, or only while this device is an access point",
+        .hint = "[on|off|auto|cycle|login] — 'web help' for the forms",
+        .func = &CmdWeb,
+        .argtable = nullptr,
+        .func_w_context = nullptr,
+        .context = nullptr,
+    },
+    {
         .command = "ls",
         .help = "what is on the storage partition, with sizes",
         .hint = nullptr,
@@ -2403,6 +2754,13 @@ const esp_console_cmd_t kCommands[] = {
 void PrintDevStatus() { CmdDevStatus(1, nullptr); }
 
 esp_err_t Init() {
+    // **The web server's `/api/devstatus` prints this one** (§10.16), rather than
+    // a second copy of every section — §10.7's rule that one readout lives in one
+    // place, and the reason `console.h` exported `PrintDevStatus` before there was
+    // a second surface to want it. The hook runs the other way round so that `web`
+    // never depends on the console, which depends on it.
+    web::SetDiagnostics(&PrintDevStatus);
+
     esp_console_repl_t *repl = nullptr;
     esp_console_repl_config_t repl_config = ESP_CONSOLE_REPL_CONFIG_DEFAULT();
     repl_config.prompt = "approver>";

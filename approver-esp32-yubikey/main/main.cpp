@@ -34,6 +34,7 @@
 #include "registrar.h"
 #include "responder.h"
 #include "storage.h"
+#include "web_server.h"
 #include "wifi_manager.h"
 
 namespace {
@@ -112,6 +113,48 @@ void GatherState(indicator::Inputs *out) {
     out->fault = !crypto::Ready() && storage::Mounted() && config::Loaded();
 }
 
+// --- What the configuration page says about the approval loop -------------
+//
+// **`components/web` may not ask `components/responder` for this**, and on this
+// board that is a choice rather than a forced one (`web/CMakeLists.txt` argues
+// it): `responder` requires `fido`, and a component that could reach the
+// responder would be one refactor away from being able to reach the *gate* —
+// which is the one thing §10.10 rule 4 says nothing on a network may touch. So
+// `main` is the one place that sees both, which is where it belongs anyway
+// (§10.14.2) — the same shape as `indicator::OnGather` above and
+// `web::SetDiagnostics` next door.
+//
+// Three groups, and each is a question the front page asks: could this device
+// answer a request, what has it answered, and what is it saying about itself.
+void FillApprovals(web::Approvals *out) {
+    const responder::Status now = responder::Get();
+    out->ready = now.ready;
+    out->subscribed = now.subscribed;
+    out->blocked_by = responder::BlockerText(now.blocked_by);
+    out->received = now.received;
+    out->allowed = now.allowed;
+    out->denied = now.denied;
+    // **Kept apart from `denied`, because §10.10 rule 2 says they are different
+    // outcomes.** On this board that distinction is the ordinary case rather than
+    // an edge: every verdict costs a touch, so "nobody touched the key" is what
+    // most unanswered requests are, and a page that summed this into `denied`
+    // would be reporting refusals nobody made.
+    out->declined = now.gate_declined;
+    out->replied = now.replied;
+
+    // The two facts about the key a page can have for free (§10.18). Not "does it
+    // work" — that is `key selftest`, it costs two curve operations, and it is a
+    // command somebody types rather than something a browser triggers.
+    out->key_present = fido::Present();
+    out->key_enrolled = fido::Enrolled();
+
+    // And what the one output is saying, in the ranking's own words (§10.17), so
+    // that a page and the light on the desk cannot disagree about what this device
+    // is. **A readout and never an instruction**: there is no setter beside it,
+    // for the reason §10.17 compiles the palette in.
+    out->light = indicator::StateName(indicator::Current());
+}
+
 // --- Who is holding a copy of a field in `config.json` --------------------
 //
 // Called once at boot and again on every `config reload` / `config restore`,
@@ -125,6 +168,10 @@ void SettingsChanged() {
     led::SetBrightness(config::Get().led.percent, config::Get().led.idle_percent);
     wifimgr::Apply();
     nats::Apply();
+    // **And the configuration site's own mode** (§10.16), which is why a `config
+    // reload` that says `web.mode: off` can take the page down that asked for the
+    // reload. `web_server.cpp`'s action handler says so where it offers the button.
+    web::Apply();
     // The light itself, so that a brightness change or a fresh enrolment is
     // visible on the next frame rather than at the next state change.
     indicator::Poke();
@@ -226,6 +273,23 @@ extern "C" void app_main(void) {
     // `esp_wifi_init` costs tens of kilobytes of heap, and a device configured with
     // Wi-Fi off should not pay them.
     wifimgr::Init();
+
+    // **The configuration web server (§10.16), which starts nothing here.** It
+    // reads `web.mode` and registers itself on the manager's tick; whether it
+    // actually comes up is `web::ShouldRun`'s answer, and on a device whose radio
+    // is off the answer is no — `httpd_start` without lwIP is a panic, not an
+    // error, and that is the whole reason this is a wish rather than a call.
+    //
+    // After `wifimgr::Init` and not before it, because the tick it borrows is that
+    // manager's: there is no task here to own the server's lifetime, which is
+    // 2.5 KB of permanent RAM not spent on managing a 7 KB on-demand cost.
+    //
+    // **On this board it is the only way in that needs no cable** (`web_server.h`):
+    // there is no glass and no keyboard, so the alternative to this page is the
+    // CH343P console. `console::Init` above has already handed over the dump the
+    // site serves at `/api/devstatus` — one printer, two surfaces (§10.7).
+    web::Init();
+    web::SetApprovals(FillApprovals);
 
     // And the bus (§10.3), after the radio for the same reason: it has nothing to
     // do until there is a client link with an address.

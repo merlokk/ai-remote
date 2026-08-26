@@ -1,10 +1,10 @@
 # The console — every command, and what it does
 
-Sixteen commands on UART0, through the CH343P bridge (the socket marked **UART**,
-not the one marked **OTG** — §10.1). `COM6` on this machine.
+Seventeen commands on UART0, through the CH343P bridge (the socket marked
+**UART**, not the one marked **OTG** — §10.1). `COM6` on this machine.
 
-One of them lost a subcommand rather than gaining one: `keys forget now` went with
-the Ed25519 identity it deleted (§10.6).
+The newest is `web` (§10.16). One of them lost a subcommand rather than gaining
+one: `keys forget now` went with the Ed25519 identity it deleted (§10.6).
 
 Design documents describe *why*; this one describes what you can type.
 `working-with-code.md` has how to open the port.
@@ -24,8 +24,13 @@ every `set` says so.
 ### `devstatus`
 Every readout below, in one go, in the order in which one of them being wrong
 stops the next from working: `status`, `buttons`, `led`, `request`, `key`,
-`wifi`, `nats`, `keys`. It exists so there is one thing to paste into a bug
+`wifi`, `nats`, `keys`, `web`. It exists so there is one thing to paste into a bug
 report.
+
+**It is also what `GET /api/devstatus` serves** (§10.16), byte for byte — the
+server swaps `stdout` for the length of the call rather than keeping a second copy
+of every section. So anything you add to a readout below appears on the page too,
+which is the point.
 
 ### `status`
 ```
@@ -394,6 +399,59 @@ and the live subscriptions.
 The three at the end are a debugging surface. They cannot reach a verdict: nothing
 they subscribe to feeds the responder, and nothing they publish is signed.
 
+## The configuration site (§10.16)
+
+### `web`
+What was asked for and what is actually running, side by side — plus the address
+to type into a phone while it is up, which on this board is the only place that
+address appears at all. Then whether the site is locked, whether a form may write,
+what has been served, the two kinds of refusal counted apart, the heap, and the
+server task's own stack margin.
+
+**Read that last line after anything changes a readout.** `/api/devstatus` runs the
+whole console dump on the server's task, and a 4 KB stack left 116 bytes of margin
+and rebooted the board — days later, in effect, because a FreeRTOS canary is checked
+at a context switch rather than at the overrun. It is 8,192 now against a measured
+peak of 3,980, and this line is the only place that number is visible.
+
+The `auth` line says **`OPEN`** in those words when only one half of the credential
+is set, because half a credential is an open site and that is a state you reach in
+one typo.
+
+### `web on` · `web off` · `web auto`
+A wish, not a start: the server comes up only when there is a network stack to come
+up in, and the reconcile happens on the Wi-Fi manager's tick within 200 ms. `auto`
+means *only while this device is its own access point*, which is the state in which
+somebody has no other way to reach it — and it is the default.
+
+In memory only, like every other setter. `config save` is what survives a reboot,
+and a server that does not come back after a restart is almost always this.
+
+### `web login <user> <password>` · `web login off`
+The credential the site asks for, and it takes both words at once: the gate is on
+when both halves are set, so a two-step setter would routinely leave the site open
+while looking locked. Refused if either half is empty, if the user contains a colon
+(basic auth uses it as the separator), or if either is too long.
+
+**This cannot be done from the site.** The write path's whitelist refuses `web` by
+name, so nothing arriving over HTTP can lock this device or unlock it. The console
+and `config.json` are the two ways in.
+
+The password is never echoed, here or anywhere. And it is not TLS — the reply says
+so, once, where somebody is looking.
+
+### `web cycle [n]`
+Start and stop the server `n` times (default 10, max 50) and print the heap after
+each round. **This is a measurement, not a diagnostic you run casually**: a drift
+that grows with the rounds is a leak, and a spread with no direction is the
+allocator. It takes the server's lifetime away from the reconciler for the length
+of the loop, so the rounds are its own rather than a race with a tick.
+
+**It has been run here**: `web cycle 20` on this board answered **+0 bytes end to
+end**, spread 64, with seventeen of twenty rounds flat to the byte — so there is no
+leak on an esp32s3 either. The server costs 11,064 bytes of internal heap while up,
+of which 8,192 is its task stack. `web.md` §10.16 has the table.
+
 ## The rest
 
 ### `ls` · `cat <path>`
@@ -408,8 +466,9 @@ until the board is reset. If it happens: send `\x1b[24;80R`, then `term dumb`.
 
 ## What there is no command for
 
-Sixteen is the whole list, and what is missing from it is missing because the thing
-it would control is not on this board (§10.13) — not switched off, not postponed:
+Seventeen is the whole list, and what is missing from it is missing because the
+thing it would control is not on this board (§10.13) — not switched off, not
+postponed:
 
 | No command for | Why |
 |----------------|-----|
@@ -418,4 +477,4 @@ it would control is not on this board (§10.13) — not switched off, not postpo
 | sound | no codec and no speaker. The light is the whole notification |
 | power | no PMIC and no battery: this board is mains-powered over USB, and there is nothing to switch off |
 | a clock or a date | **no clock of any kind.** No RTC and no SNTP: §7's `ts` is echoed from the request and never re-derived, nothing else here reads a wall-clock time, and there is nowhere to show one |
-| a web server | there is none, and §10.10 rule 4 is why there is unlikely to be one |
+| a *second* web server | there is one, and `web` above is its command. What there is no command for is a second surface: no console over the bus, and nothing on the site that can reach the key (§10.10 rule 4) |

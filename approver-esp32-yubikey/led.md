@@ -170,10 +170,9 @@ brightness cannot be chosen on paper.
 
 ## 10.17.3 The wire: a WS2812 driven from a UART
 
-**This is the house firmware's trick, not a new idea here** — it comes from
-`E:\projects\Zesec.ModuleX.Firmware.v3`, `main/led.cpp`, the same place §10.14.4
-borrows shapes from, and the numbers came with it because they were chosen against
-a real emitter.
+**This is the house firmware's trick, not a new idea here** — it comes from the
+codebase §10.14.4 borrows shapes from, and the numbers came with it because they
+were chosen against a real emitter.
 
 A WS2812 reads a 1.25 µs bit cell whose duty cycle carries the value. A UART at
 **3,333,333 baud with six data bits**, one start bit and one stop bit puts eight

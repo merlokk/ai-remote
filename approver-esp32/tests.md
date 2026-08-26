@@ -588,12 +588,16 @@ Three tiers, and the first one is where nearly everything belongs:
      thing a hand-pasted literal never taught anybody.
 
    **And one guard on this tier that has nothing to do with the protocol.**
-   `tests/test_esp32_web_pages.py` reads the six pages of §10.16 off the disk and
+   `tests/test_esp32_web_pages.py` reads the seven pages of §10.16 off the disk and
    checks how they are *wired*: no page carries an inline `<script>`, each loads
    `app.js` exactly once, each `data-page` has a handler behind it, every element
    that handler asks for by id is on that page, and every link between pages
-   resolves to a file that ships. It lives on this tier rather than in the Unity
-   suite because the pages are assets rather than code — nothing in
+   resolves to a file that ships. **It reads `approver-esp32-yubikey/`'s copy of
+   the site as well**, from one copy of the rules: that folder serves the same
+   seven pages on hardware with no glass, and two copies of assertions that must
+   never differ is nothing that would notice if they did. It lives on this tier
+   rather than in the Unity suite because the pages are assets rather than code —
+   nothing in
    `components/web` reads them, and the C++ side can only say what a URL may
    *reach*, never whether what it reaches works.
 

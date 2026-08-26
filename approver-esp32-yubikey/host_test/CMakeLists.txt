@@ -116,6 +116,13 @@ add_executable(host_test
     test_ctap2.cpp
     test_arkg.cpp
 
+    # The configuration site (§10.16): the whitelist, the gate and the write path.
+    # All three include nothing that needs a board — which is the whole argument
+    # for their shape, since each one stands between a network and this device.
+    test_web_paths.cpp
+    test_web_auth.cpp
+    test_web_settings.cpp
+
     test_request_card.cpp
     test_config.cpp
     test_wifi_policy.cpp
@@ -158,6 +165,17 @@ add_executable(host_test
     # SHA-256 for the tests only -- `sha256_ref.h` says why it is not a fake and
     # why nothing on the device links it.
     sha256_ref.c
+
+    # **The site's three rules** (§10.16). `web_paths.cpp` includes `<cstddef>`
+    # and nothing else and `web_auth.cpp` adds `<cstdint>` — no crypto component
+    # for the second of those, because the credential is base64-encoded and
+    # compared rather than decoded (`web_auth.h` argues why that is the safer
+    # direction), so neither libsodium nor mbedTLS is in this build.
+    # `web_settings.cpp` needs cJSON and `config`, both of which are already here.
+    ../components/web/web_paths.cpp
+    ../components/web/web_policy.cpp
+    ../components/web/web_auth.cpp
+    ../components/web/web_settings.cpp
 
     ../components/ui/request_card.cpp
     ../components/ui/age_text.cpp
@@ -203,6 +221,7 @@ target_include_directories(host_test PRIVATE
     ../components/wifimgr
     ../components/nats
     ../components/protocol
+    ../components/web
     "${CJSON_DIR}"
     "${UNITY_DIR}"
 )

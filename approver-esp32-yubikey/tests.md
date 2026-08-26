@@ -17,7 +17,8 @@ host_test\run.cmd            everything
 host_test\run.cmd led fido   only the suites whose name matches
 ```
 
-**358 tests, 0 failures** as of this writing. `working-with-code.md` has the one
+**462 tests, 0 failures** as of this writing — 358 before §10.16's site brought
+three suites and 83 tests with it. `working-with-code.md` has the one
 line that runs them and what it needs; `host_test/CMakeLists.txt` explains why
 this is a plain CMake project rather than `idf.py --preview set-target linux` (the
 short version: that target is offered by this install and does not work on a
@@ -25,9 +26,9 @@ Windows host).
 
 ### What is under test, and why each one is there
 
-Seventeen suites. Six are this board's own, ten are shared with the sibling folder
-— where they are expected to stay identical — and one is a formatter the console
-uses.
+Twenty suites. Six are this board's own, thirteen are shared with the sibling
+folder — where they are expected to stay identical — and one is a formatter the
+console uses.
 
 **This board's own:**
 
@@ -42,7 +43,17 @@ uses.
 
 **Shared with the sibling board:** `buttons`, `config`, `request_card`,
 `wifi_policy`, `reachability`, `nats`, `signing`, `registration`, `approval`,
-`vectors`.
+`vectors`, and §10.16's three — `web_paths`, `web_auth`, `web_settings`.
+
+**Those last three deserve their own paragraph, because of what they guard.** Each
+one is a rule standing between a network and this device, and all three compile
+with a bare C++ compiler because the files they test include almost nothing:
+
+| Suite | Why it exists |
+|-------|---------------|
+| `web_paths` | **what a URL may reach on the filesystem.** The pages, `config.json` and `fido.json` share one flat SPIFFS namespace, so a server that served whatever was asked for would hand out a WPA passphrase and §10.18's enrolment. `test_the_enrolment_is_not_a_page_either` is this board's own addition to the ported suite, and it passes because `.json` is not on a whitelist of *extensions* — nobody had to remember that file when it was added |
+| `web_auth` | **who may reach the site at all**, in 21 tests. The pair is the switch, the credential is encoded and never decoded, every unanswerable path fails closed, and the comparison does not stop early. Ported unchanged, because a base64 comparison is not board-specific |
+| `web_settings` | **what a form may change**, and on this board that is §10.10 rather than tidiness: `test_web_the_gate_cannot_be_reached_from_a_network` pins that `approval` — the timeout a request waits for a touch, and whether BOOT may deny — is refused by name, and `test_web_what_the_light_says_cannot_be_reached_from_a_network` pins the same for `led`. The three-word Wi-Fi mode mapping is tested directly here too, because it is this folder's own now: there is no `ui::WifiMode` on a board with no screen |
 
 **And one small one:** `age_text` — the duration formatter `cli/console.cpp` prints
 ages with. `test_age_text.cpp` keeps its three bands pinned so two readouts cannot
@@ -99,6 +110,23 @@ what would be under test is the fake. That is tier 3's, and `status.md` says so.
 
 `led.cpp`'s UART half, `indicator.cpp`'s task, and every driver in `wifi/`,
 `nats/` and `storage/` are in the same position and for the same reason.
+
+**And `web_server.cpp`, which is the whole socket half of §10.16.** The three
+suites above test its rules; nothing here tests the heap it costs while it is up,
+whether `httpd_stop` gives every byte back, or the `funopen`/`stdout` cookie that
+streams `devstatus` into a response. Those are tier 3's, `web cycle` is the command
+for the middle one, and `status.md` says the row is still owed.
+
+**There is one more tier that is neither of these**, and it is Python rather than
+C++: `tests/test_esp32_web_pages.py` reads the pages that get flashed off the disk
+and asserts they are wired to `app.js` the way §10.16 says — no inline `<script>`,
+the shared tag exactly once, a handler behind every `data-page`, **every id a
+handler asks for present on the page**, and every link resolving to a file that
+ships. That fourth one is what catches a port: the two boards' front pages paint
+different things, so a handler copied across without its markup fails precisely
+there. One copy of that file covers both sites, for the reason
+`host_test/CMakeLists.txt` gives about `parity_vectors.h` — two copies of rules that
+must never differ is nothing that would notice if they did.
 
 ## Tier 2 — the parity vectors
 
@@ -198,6 +226,9 @@ that did not say so would be a list nobody could act on.
 | **the touch prompt** | blue and fast while a console command waits, gone the moment the key answers rather than waited out (§10.17) |
 | **the `previewSign` advertisement check** | `getInfo`'s extension list is parsed and `key enrol` refuses a key without it before spending a touch. The key on this desk **does** advertise it, so what is proven here is the parse and the readout, not the refusal |
 | **the spin** | **found a bug**: the first gate refused instantly with no key, nothing decided the request, and the task re-took it several hundred times a second. Fixed in two places (`WaitForKey`, `g_abandoned_nonce`) and re-checked: 700 bytes of console output over 25 seconds of waiting |
+| **the web server, over the LAN** (§10.16) | **found a bug, and it was the ported stack**: `/api/devstatus` left **116 bytes of 4,096** on the server's task, because this board's dump includes `key` and `keys` and the sibling's does not. The dump *succeeded* and the board rebooted several requests later — a FreeRTOS canary is checked at a context switch — and three attempts to reproduce it from the request that seemed to cause it all passed. Found by reading `web`'s own stack line. Now 8,192 against a peak of 3,980 |
+| **the leak question** (§10.16) | `web cycle 20`: **+0 bytes end to end**, spread 64, one −64/+64 pair, seventeen rounds flat to the byte; a second run −112 with spread 140 and flat from round 16, which is a first-run settling. **No leak on esp32s3**, which the C6's answer could not establish |
+| **every route, refusal and the gate** (§10.16) | all three API endpoints; five names the whitelist refuses as indistinguishable 404s including `fido.json`; the write path refusing `approval` and `led` **by name**, which is §10.10 rule 4 on the wire; `do=nonsense` as 400 through the gate; both halves of the reboot guard; and eight ways of getting a credential wrong, all 401 with this board's own realm — including `POST /api/reboot?confirm=reboot` answering **401 instead of restarting** |
 
 ### Not done, and each one needs something that is not here
 
@@ -209,6 +240,7 @@ that did not say so would be a list nobody could act on.
 | **the restore window** | a finger and a reset | hold BOOT while the board comes up, watch for white, and check `config.json` came back |
 | **`term` on this port** | a terminal | whether the linenoise probe is answered here. The sibling board's answer was "no, because the port does not exist yet"; this board has a real UART from power-on and the answer may differ. `console.cpp` says the question is open |
 | **the libsodium size comparison** | a build each way | `CONFIG_LIBSODIUM_USE_MBEDTLS_SHA` saved 10,780 bytes on esp32c6. That number is inherited, not measured here |
+| **a page served by this board** (§10.16) | a full `idf.py flash`, which costs the enrolment | the site exists in the SPIFFS image and has never been served. Everything *behind* the pages has now run on the board — see the row in the section above — so what is left is HTML over the wire and a phone doing the setup on it. `app-flash` gives a running server with no pages, which is why this row's cost is a `key enrol` with the key in hand (§10.18.1) |
 
 **The gate's failure paths are better tested than its success path**, which is an
 honest description of where this device is and not an accident: everything that

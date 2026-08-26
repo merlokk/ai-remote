@@ -90,9 +90,11 @@ interleaved into a conversation is a wedged channel.
 
 ### 10.14.4 The house firmware
 
-`E:\projects\Zesec.ModuleX.Firmware.v3` is the codebase this project borrows
-shapes from, and on this board it contributed something concrete rather than a
-shape: **the whole WS2812-over-UART trick** in §10.17.3, numbers and all — the
+**The house firmware** is a separate, unrelated ESP-IDF codebase on this machine
+that this project borrows shapes from — settled answers to problems this one meets
+again, rather than any code that is linked or vendored here. On this board it
+contributed something concrete rather than a shape:
+**the whole WS2812-over-UART trick** in §10.17.3, numbers and all — the
 baud rate, the six-bit frame, the inversion, the four-character table and the
 sixty-step Weber–Fechner breath. Those were chosen against a real emitter on a real
 desk, and re-deriving them from nothing would have been re-deriving them worse.
@@ -121,9 +123,30 @@ all unchanged:
 ```
 
 and what has **no section at all**: there are no `display`, `touch` or `audio`
-fields (no such hardware), no `web` one (no server here), and no `time` one — there
-is no clock on this board and nowhere to show one (§10.13). §10.17.2 and §10.18.6
-argue the two above.
+fields (no such hardware), and no `time` one — there is no clock on this board and
+nowhere to show one (§10.13). §10.17.2 and §10.18.6 argue the two above.
+
+**`web` is not on that list any more**, and it is the sibling board's section
+unchanged (§10.16):
+
+```json
+"web": { "mode": "auto", "write": true, "user": "", "password": "" }
+```
+
+`auto` is the cheap default — the server comes up only while this device is its own
+access point, which is the one state in which somebody has no other way to reach it.
+The credential is **empty by default, and the pair is the switch**: both set is a
+locked site, either half missing is an open one, and there is no third boolean
+beside them for the reason `Wifi::active` has none. A device flashed with the
+shipped file therefore serves to whoever can reach it, exactly as this board did
+before the server existed — and `web` on the console says `OPEN` in those words
+when only one half is filled in.
+
+**Three of these five sections cannot be written from the site**, which is where
+§10.15 meets §10.10 rule 4 on this board: the write path whitelists `wifi` and
+`nats`, and refuses `approval` (when a verdict may be asked for), `led` (what this
+device is saying while it asks) and `web` itself by name. [`web.md`](web.md) argues
+each; two host tests are the enforcement.
 
 **`requireKey` was here and is gone**, which is worth a line because a config file
 left over from before will still have it. It switched the security key off and let

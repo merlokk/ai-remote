@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#0b0d0c">
+<title>restart</title>
+<style>html,body{margin:0;background:#0b0d0c;color:#d6ded8;
+font:16px/1.5 system-ui,-apple-system,sans-serif}
+body{padding:0 16px 40px}</style>
+</head>
+<body data-page="reboot">
+<div class="wrap">
+<header>
+  <h1>Restart</h1>
+  <span class="lamp" id="lamp">up</span>
+</header>
+
+<p class="notice">
+  Anything set and not saved is lost. Settings typed on the console live in memory
+  until <code>config save</code> writes them, and a restart is exactly where they
+  go &mdash; including this site's own mode and password.
+</p>
+
+<p class="lead">
+  It comes back in about ten seconds. The enrolment and the registration are files
+  and survive it, so the device is answering requests again as soon as it has a
+  network and the key is on the port.
+</p>
+
+<nav>
+  <a class="btn" href="/">
+    <span class="chev">&lsaquo;</span>
+    <span class="grow"><span class="name">Back</span></span>
+  </a>
+  <button class="btn warn" type="button" id="go">
+    <span class="grow"><span class="name" id="go-name">Restart the device</span>
+      <span class="sub" id="go-sub">tap, then confirm</span></span>
+  </button>
+</nav>
+
+<h2>What happens</h2>
+<table>
+  <tr><th>keeps</th><td>the enrolment, the registration, and everything in
+      <code>config.json</code></td></tr>
+  <tr><th>loses</th><td>settings that were never saved, the uptime, and the heap
+      low-water mark</td></tr>
+  <tr><th>takes</th><td>about ten seconds, plus a few more to rejoin the
+      network</td></tr>
+</table>
+
+<footer>
+  There is no signing key on this board to lose &mdash; the private half lives
+  inside the security key and is reconstructed there for each signature, so a
+  restart cannot cost this device its identity. This page cannot switch the board
+  off, only restart it; the <code>RST</code> button on the board does the same
+  thing with no firmware involved.
+</footer>
+</div>
+<script src="/app.js"></script>
+</body>
+</html>

@@ -93,16 +93,29 @@ three files the device wrote for itself:
 * **`fido.json`** — the key enrolment, so `key enrol` has to run again with the key
   in hand.
 
-The **identity is not lost**: the Ed25519 seed lives in NVS, which a `flash` does
-not touch, so the device comes back with the same `key_id` and the same public key
-— unregistered rather than unknown.
+**And since §10.18 the enrolment *is* the identity, so a full flash loses the
+signing key.** This paragraph used to say the opposite — that the Ed25519 seed in
+NVS survives a `flash`, so the device came back with the same `key_id` and the
+same public key, unregistered rather than unknown. That is no longer true and was
+the most expensive sentence in this file to believe: §10.6's identity is deleted,
+the firmware *erases* the seed an older build left in NVS, and the key this device
+signs as is derived from `fido.json`. A device that has lost that file comes back
+with the same `key_id` and **no key at all**, and `key enrol` — which needs the
+security key in hand and a touch — has to run before `register` will even start
+(§10.18.1). [`build.md`](build.md) §10.12 has the same warning in its corrected
+form.
 
-Before a full flash, read them off and keep them:
+Before a full flash, read off what you can and keep it:
 
 ```
 cat config.json
 cat registration.json
+cat fido.json
 ```
+
+`fido.json` is worth reading for the record, but note that there is **no console
+command that writes a file** — reading it does not let you put it back. The
+enrolment is redone with the key, not restored from a dump.
 
 Two other things worth knowing:
 
