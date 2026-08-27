@@ -4,12 +4,17 @@
 // over USB, and it is worth knowing before wondering why this is not on USB
 // Serial/JTAG the way the sibling board's is.
 //
-// **Seventeen commands, and there is a command per piece of hardware this board
-// actually has.** `led` (§10.17) and `key` with its verbs (§10.18) are this
+// **Seventeen commands here, and there is a command per piece of hardware this
+// board actually has.** `led` (§10.17) and `key` with its verbs (§10.18) are this
 // device's own; `status`, `config`, `wifi`, `nats`, `keys`, `register`, `forget`,
 // `web`, `ls`, `cat`, `term` and `reboot` are the same commands the sibling board
 // answers, deliberately unchanged so that an operator who knows one of these two
 // devices knows the other.
+//
+// **An operator counts eighteen**, because `help` is ESP-IDF's and is registered
+// by `Init` alongside these. `commands.md` documents it with the other seventeen
+// for that reason: a list that leaves out the command people type first is a list
+// that is wrong in the one place it is read.
 //
 // `web` (§10.16) is the newest of those and the one that matters most on a board
 // with no glass: it is how a phone gets a page to type an SSID into, and it is
@@ -2609,8 +2614,18 @@ int CmdDevStatus(int argc, char **) {
 // about approvals, the two pieces of hardware it has, the settings, the network,
 // the bus, the identity, the configuration site, and the filesystem last.
 //
-// Seventeen of them; the file's opening comment says what there is no command for
-// and why.
+// That first sentence is only true because `CONFIG_CONSOLE_SORTED_HELP=n`, which
+// `sdkconfig.defaults` pins for this reason: ESP-IDF appends to its command list
+// and `help` walks it, so registration order survives — but the same file's sorted
+// mode would replace this grouping with an alphabetical list and nothing here
+// would say so.
+//
+// **A command whose `.help` is null is left out of `help` entirely** (ESP-IDF's
+// `console/commands.c` skips it), which is the one way a command can exist here
+// and not be findable. All seventeen carry one.
+//
+// Seventeen of them, and `help` itself is an eighteenth registered below by
+// ESP-IDF; the file's opening comment says what there is no command for and why.
 const esp_console_cmd_t kCommands[] = {
     {
         .command = "devstatus",

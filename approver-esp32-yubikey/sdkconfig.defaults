@@ -47,6 +47,19 @@ CONFIG_COMPILER_CXX_RTTI=n
 # and it is why this board was the right one for this design.
 CONFIG_ESP_CONSOLE_UART_DEFAULT=y
 
+# **`help` lists the commands in the order they were registered, not sorted**, and
+# that order is `console.cpp`'s `kCommands` — grouped the way somebody learning
+# this device would want them (what it is, what it is doing about approvals, the
+# hardware, the settings, the network, the bus, the identity, the site, the files)
+# rather than alphabetically.
+#
+# This is ESP-IDF's own default, so the line changes nothing today. It is here
+# because the grouping is a decision somebody made and the comment above
+# `kCommands` asserts it: with sorted help on, that assertion silently becomes
+# false and no test in any tier would notice. Pinning it is cheaper than a
+# comment saying "do not turn this on".
+CONFIG_CONSOLE_SORTED_HELP=n
+
 # --- The USB peripheral, as a host (§10.18.3) -------------------------------
 #
 # The Host Library is a managed component (`espressif/usb`), so most of its

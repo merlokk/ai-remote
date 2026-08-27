@@ -1,13 +1,50 @@
 # The console — every command, and what it does
 
-Seventeen commands on UART0, through the CH343P bridge (the socket marked
+**Eighteen commands** on UART0, through the CH343P bridge (the socket marked
 **UART**, not the one marked **OTG** — §10.1). `COM6` on this machine.
 
-The newest is `web` (§10.16). One of them lost a subcommand rather than gaining
-one: `keys forget now` went with the Ed25519 identity it deleted (§10.6).
+Seventeen of them are this firmware's, in `console.cpp`'s `kCommands`. The
+eighteenth is `help`, which is ESP-IDF's and is registered one line above the loop
+that registers the rest — which is why every count in this folder used to say
+seventeen and why this one now says what an operator would count.
+
+The newest of ours is `web` (§10.16). One of them lost a subcommand rather than
+gaining one: `keys forget now` went with the Ed25519 identity it deleted (§10.6).
 
 Design documents describe *why*; this one describes what you can type.
 `working-with-code.md` has how to open the port.
+
+## `help`
+
+### `help`
+Every command with its hint and its one-line description — the one to type first,
+and the only one here that is not ours.
+
+**In the order they were registered, which is the order they appear in
+`kCommands`**, grouped the way somebody learning this device would want them
+rather than alphabetically: what it is, what it is doing about approvals, the two
+pieces of hardware, the settings, the network, the bus, the identity, the
+configuration site, the filesystem. `CONFIG_CONSOLE_SORTED_HELP=n` in
+`sdkconfig.defaults` is what keeps that true — it is ESP-IDF's default, and it is
+pinned rather than inherited because turning it on would replace that grouping
+with an alphabetical list and nothing would report the change.
+
+A command registered with a null description is **silently left out** of this
+listing (`console/commands.c`), which is worth knowing because it is the one way a
+command can exist and not be findable. None of ours is: all seventeen carry a
+description, and it is the first thing to check if one ever goes missing from here.
+
+### `help <command>`
+The same entry for one command, plus its argument glossary if it has an argtable.
+Ours take their arguments positionally rather than through argtable, so for this
+firmware's commands this is the one-line summary and nothing more — the forms live
+in `<command> help` for the four that have one (`config`, `wifi`, `nats`, `web`)
+and in this file for the rest.
+
+### `help -v 0` · `help -v 1`
+How much of each entry to print: `0` is the name and hint alone, `1` adds the
+description. **`1` is the default**, and `-v 0` is the compact list worth having on
+a narrow terminal.
 
 ## Two rules that apply almost everywhere
 
@@ -466,9 +503,9 @@ until the board is reset. If it happens: send `\x1b[24;80R`, then `term dumb`.
 
 ## What there is no command for
 
-Seventeen is the whole list, and what is missing from it is missing because the
-thing it would control is not on this board (§10.13) — not switched off, not
-postponed:
+Eighteen — the seventeen above plus `help` — is the whole list, and what is missing
+from it is missing because the thing it would control is not on this board
+(§10.13) — not switched off, not postponed:
 
 | No command for | Why |
 |----------------|-----|
