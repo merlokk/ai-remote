@@ -15,11 +15,12 @@
 // scrolling past a hundred lines of PASS to find the one that matters is how a
 // suite stops being run.
 //
-// **Seventeen suites.** Six are this board's own — the LED's arithmetic, the state
-// ranking, CTAPHID framing, CBOR, CTAP2 and the ARKG derivation. Ten are shared
-// with `../approver-esp32` and are expected to stay identical. One is the duration
-// formatter the console prints ages with. There is no suite for hardware this
-// board does not have (§10.13), and none is kept as a placeholder for one.
+// **Twenty suites.** Six are this board's own — the LED's arithmetic, the state
+// ranking, CTAPHID framing, CBOR, CTAP2 and the ARKG derivation. Thirteen are
+// shared with `../approver-esp32` and are expected to stay identical, three of
+// them §10.16's. One is the duration formatter the console prints ages with. There
+// is no suite for hardware this board does not have (§10.13), and none is kept as
+// a placeholder for one.
 
 #include <cstring>
 

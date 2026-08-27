@@ -12,24 +12,26 @@ States, and `written` is the one to watch:
   real thing**
 * **design** — a document and no code
 
-**As of 2026-08-26 the tables below are almost entirely `runs`**, which they were
-not that morning: the whole of §10.18 was `written` and no security key had ever
-been plugged in. What is left is at the bottom, under **Owed, and known**, and the
-largest item there is a *removal*.
+**As of 2026-08-27 the tables below are almost entirely `runs`**, which they were
+not on the morning of the 26th: the whole of §10.18 was `written` and no security
+key had ever been plugged in. What is left is at the bottom, under **Owed, and
+known**: mostly things needing something that is not on this desk — a second key, a
+hand, a fresh token, a full flash whose price is the enrolment — plus one that is a
+real piece of work, the `CHANNEL_BUSY` retry that rebooted the board.
 
 ## The device
 
 | Piece | State | Note |
 |-------|-------|------|
-| Boot, PSRAM, flash | **runs** | 8 MB octal PSRAM detected, 16 MB flash, 8.5 MB free heap |
+| Boot, PSRAM, flash | **runs** | 8 MB octal PSRAM detected, 16 MB flash, ~187 KB of *internal* heap free at boot — which is the number that matters and the number `status` prints (§10.13) |
 | SPIFFS + `config.json` | **runs** | mounts, parses, saves, reloads, restores |
 | Ed25519 identity (§10.6) | **deleted** | there is no key of this device's own. What is left of libsodium verifies §6's *reply* — one call — and does base64; a fresh registration on the board proves it still works |
 | — its custody | **settled by removal** | the seed was 32 bytes of private key in unencrypted NVS protecting nothing. `crypto::Init` erases it, and did: one `W crypto: erased the 32-byte Ed25519 seed…` on this board. **There is now no private key on this flash of any kind** |
 | The verifier self-test | **runs** | a real signature verifies and a one-bit-flipped one does not. A failure keeps the device off `approvals.*` (`Blocker::kCannotVerify`), because a board that cannot check §6's reply cannot know whose key it pinned |
 | ARKG derivation (§10.18.2) | **runs** | `components/arkg`, 3,921 bytes. The five pure steps are host-tested against numbers Python produced, and the two curve steps agree with Python **on this chip** — `key selftest`, 661–670 ms |
 | Console on UART0 (§10.7) | **runs** | all 17 commands answer — 16 before §10.16 added `web` |
-| Web server (§10.16) | **runs** | ported from the sibling board: the server, the whitelist, the basic-auth gate, the write path and the seven pages. In the image at **+56,576 bytes** (49 % of the slot free), `libweb.a` 13,482 of which 3,517 is `.bss`. Served over the LAN at `192.168.11.190`: all three API endpoints, every refusal, every action, the reboot guard and the credential — `web.md` lists them one by one. **It found a bug first, and the bug was a stack** — see below |
-| — the 4 KB task stack | **fixed, and it rebooted the board** | `/api/devstatus` runs the console's whole dump on the server's task, and on this board that dump includes `key` and `keys` — readouts the console gives *itself* 12 KB for. It left **116 bytes of 4,096**. The dump *succeeded*; the panic came several requests later, because a FreeRTOS canary is checked at a context switch rather than at the overrun. Three attempts to reproduce it from the request that seemed to trigger it all passed. `kTaskStackBytes` is now **8,192** against a measured peak of **3,980** |
+| Web server (§10.16) | **runs** | ported from the sibling board: the server, the whitelist, the basic-auth gate, the write path and the seven pages. In the image at **+56,576 bytes** (49 % of the slot free), `libweb.a` 13,486 of which 3,517 is `.bss`. Served over the LAN at `192.168.11.190`: all three API endpoints, every refusal, every action, the reboot guard and the credential — `web.md` lists them one by one. **It found a bug first, and the bug was a stack** — see below |
+| — the 4 KB task stack | **fixed, and it rebooted the board** | `/api/devstatus` runs the console's whole dump on the server's task, and on this board that dump includes `key` and `keys` — readouts the console gives *itself* 10 KB for. It left **116 bytes of 4,096**. The dump *succeeded*; the panic came several requests later, because a FreeRTOS canary is checked at a context switch rather than at the overrun. Three attempts to reproduce it from the request that seemed to trigger it all passed. `kTaskStackBytes` is now **8,192** against a measured peak of **3,980** |
 | — the leak question | **answered on this chip** | `web cycle 20`: **+0 bytes end to end**, spread **64**, one −64/+64 pair in rounds 10–11 and seventeen rounds flat to the byte. A second run: −112, spread 140, flat from round 16 — a first-run settling, the same shape the sibling recorded. **No leak on esp32s3.** Cost while up: **11,064 bytes**, of which 8,192 is the task stack |
 | — `/api/devstatus` on this libc | **runs** | 3,309–3,353 bytes, all nine sections. The `funopen` cookie and the global-`stdout` swap were inherited unchecked and behave |
 | — its pages, on this device | **not flashed** | the site lives in the SPIFFS image, so serving it needs a full `idf.py flash` — which erases `fido.json` and costs a `key enrol` with the key in hand (§10.18.1). `app-flash` gives a running server with no pages, which is why `/` is a 404 on the board right now. A decision with a physical price, and it has not been taken |
@@ -120,11 +122,16 @@ refused every one of them in three milliseconds among them. They are listed unde
 
 ## What running it found
 
-**Every defect on this page was found by running the device, and none of them could
-have been found any other way.** The host tier has no light, no clock, no finger and
-no key; the vector tier has no time in it at all. That is the argument for tier 3
+**Almost every defect on this page was found by running the device, and those could
+not have been found any other way.** The host tier has no light, no clock, no finger
+and no key; the vector tier has no time in it at all. That is the argument for tier 3
 written as evidence rather than as a claim, and it is why this section is the longest
 one here.
+
+**The exception is the section at the end, and it is worth keeping for the opposite
+reason**: two defects were found by reading the documents against the code, and
+running the device would never have found either. A tier that has no instrument is
+not the only kind of blind spot.
 
 ### The web server: a stack that was fine on the other board
 
@@ -133,7 +140,7 @@ the board to say so. `web::kTaskStackBytes` came across as the sibling's 4,096, 
 `/api/devstatus` — which runs the console's whole dump on the server's own task, by
 design (§10.7) — left **116 bytes of it**. The sibling's dump leaves 1,756; the
 difference is that this board's dump includes `key` and `keys`, and the console
-gives *itself* 12 KB for those.
+gives *itself* 10 KB for those.
 
 **Three things about how it failed are worth keeping**, because each one would have
 sent a reader in the wrong direction:
@@ -255,3 +262,34 @@ There is also **one bug this device found in the *design***, which is
 straight onto `approvals.*` with nothing enrolled and began taking requests it
 could not answer out of a shared queue group. That is §10.10 rule 5, and it did
 not exist until the device broke it.
+
+## And two that reading found, which no tier would have
+
+Recorded here because the way they hid is the interesting part: both were live in
+a build that passed 462 host tests, built clean and ran on the desk.
+
+**1. `led test` walked fifteen of sixteen states.** `CmdLed`'s list was written by
+hand; `kDenyPending` was added to the ranking afterwards and not to the list. So
+the one command whose entire job is to teach an operator the palette never showed
+the state that most needs recognising *before* it matters — red at the middle rate,
+a deny waiting for a touch (§10.18.5). Nothing failed: the walk printed its own
+count, and `walking 15 states` reads exactly like a correct number.
+
+**2. `indicator::State`'s declaration order contradicted its own comment.** The
+header says the enum is ordered worst first, "which is also the order `Decide`
+tests them in" — and `kNotRegistered` was declared before `kNotEnrolled` while
+`Decide` checks the enrolment first. `Decide` was right, so every existing test
+passed; what was wrong was the *list*, which is what `led test` walks.
+
+The fix for the first is to enumerate the enum rather than list it, which makes the
+second load-bearing — so the second is now a host test
+(`test_indicator_the_enum_order_is_the_order_decide_ranks_them`) that spoils the
+device one condition at a time from `ready` downwards and asserts both that `Decide`
+returns the new state and that its enumerator went down. It fails on the old order.
+
+**What this says about the tiers is narrow and worth having**: a readout whose
+content is a hand-maintained copy of a list somewhere else is a readout no test
+covers, because the thing that is wrong is the copy. There were three such copies in
+this folder and the other two were counts — `test_main.cpp` claiming seventeen
+suites when it registers twenty, and `kConsoleStackBytes` cited as 12 KB in five
+places while being 10,240 bytes.

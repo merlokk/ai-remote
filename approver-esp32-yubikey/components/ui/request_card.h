@@ -36,7 +36,9 @@
 // What it deliberately does not do: hash anything, sign anything, or know what a
 // subject is. It carries the reply subject as opaque text and hands the whole
 // request back when a human has decided — the signer is somebody else's file, and
-// §10.6 has not been written yet.
+// on this board that is `components/fido` — the signature is made inside the
+// security key (§10.18), and §10.6 is the section that records there being no
+// private key here to sign with.
 
 #include <cstddef>
 #include <cstdint>

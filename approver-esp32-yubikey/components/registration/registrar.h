@@ -63,8 +63,10 @@ inline constexpr size_t kMaxReplyBytes = 512;
 inline constexpr uint32_t kReplyTimeoutMs = 10000;
 
 // Loads `registration.json` if there is one. A missing file is **not an error**:
-// it is the unregistered state, which §10.8.2 already requires the clock to
-// announce.
+// it is the unregistered state, and on this board what announces it is the light
+// — magenta, `indicator::State::kNotRegistered` (§10.17). The sibling board's
+// §10.8.2 clock screen said so instead; there is neither a clock nor a screen
+// here (§10.13).
 esp_err_t Init();
 
 // **True only when the handler knows the key this device holds now.** The record on

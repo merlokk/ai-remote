@@ -37,9 +37,11 @@
 //      side: reach for the narrowest thing that changed).
 //
 // **And on this board the whitelist carries §10.10 rather than merely tidiness.**
-// Two of the five sections of `config.json` are about *when a verdict may be
-// asked for* and *what this device is saying while it asks*, and neither is
-// reachable from here:
+// `config.json` has six sections and this list is two of them, so four are
+// refused: `internet` and `web` because a form has no business with the
+// reachability probe or with its own door, and two because they are §10.10 —
+// *when a verdict may be asked for* and *what this device is saying while it
+// asks*:
 //
 //   * **`approval` is not on the list.** `touchTimeoutSeconds` is how long a
 //     request waits for a fingertip and `denyButton` is whether BOOT can refuse

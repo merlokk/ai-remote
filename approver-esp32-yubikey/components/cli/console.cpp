@@ -314,11 +314,20 @@ int CmdCat(int argc, char **argv) {
     }
 }
 
+// **What the REPL task gets, and it is the deepest stack in this firmware after
+// the gate's.** `key selftest` runs the ARKG derivation's two curve operations on
+// this task (§10.18.2) and `devstatus` runs every readout there is one after
+// another, so it is sized for those rather than for a line of input.
+//
+// It used to be `crypto::kSignTaskStackBytes` — a constant that went with the
+// Ed25519 identity (§10.6) — and the size stayed when the name went, because what
+// replaced signing is not shallower. `web_server.h` cites this constant by name
+// when it argues its own 8,192, so the two move together or not at all.
+constexpr uint32_t kConsoleStackBytes = 10240;
+
 // `buttons watch` runs for this long unless told otherwise, and no longer than
 // the cap — the REPL task is blocked while it runs, so a watch that outlives the
 // operator's attention is a console that looks hung.
-constexpr uint32_t kConsoleStackBytes = 10240;
-
 constexpr uint32_t kWatchDefaultSeconds = 10;
 constexpr uint32_t kWatchMaxSeconds = 120;
 
@@ -655,12 +664,17 @@ int CmdConfig(int argc, char **argv) {
             return 0;
         }
         // **Nothing is re-applied here any more, and that is the point.** A
-        // reload or a restore moves every field at once, and three subsystems are
+        // reload or a restore moves every field at once, and four subsystems are
         // holding copies of some of them — the LED a brightness, the Wi-Fi manager
-        // a network list, the bus a URL. That list used to live here, in the one
-        // caller there was; there are two now (this and the boot restore), so it
-        // lives where it cannot drift: `config::OnChanged`, registered by `main`,
-        // called by `Reload` and `Restore` themselves.
+        // a network list, the bus a URL, the configuration site its mode. That
+        // list used to live here, in the one caller there was; there are two now
+        // (this and the boot restore), so it lives where it cannot drift:
+        // `config::OnChanged`, registered by `main`, called by `Reload` and
+        // `Restore` themselves.
+        //
+        // The fourth entry is what that buys: `web` was added to the hook when
+        // §10.16 arrived, and a copy of the list kept here would have been a list
+        // of three for as long as nobody re-read it.
     }
 
     const config::Data &c = config::Get();
@@ -710,8 +724,8 @@ int CmdConfig(int argc, char **argv) {
 }
 
 // **Where a scan lands, and it is a static rather than a local** (§10.14.1): the
-// REPL task has 12 KB and `wifi::kMaxScanResults` entries of `ScanResult` is more
-// than a comfortable slice of it. There is one scan at a time by construction —
+// REPL task has `kConsoleStackBytes` and `wifi::kMaxScanResults` entries of
+// `ScanResult` is more than a comfortable slice of it. There is one scan at a time by construction —
 // the command blocks until it has an answer.
 wifi::ScanResult scan_results[wifi::kMaxScanResults];
 
@@ -1892,16 +1906,20 @@ int CmdLed(int argc, char **argv) {
     if (argc == 2 && strcmp(argv[1], "test") == 0) {
         // Every state, in the order `Decide` ranks them, so that what the walk
         // shows is also the order the device would prefer them in.
-        const indicator::State kAll[] = {
-            indicator::State::kBooting,     indicator::State::kRestoreWindow,
-            indicator::State::kSigning,     indicator::State::kPending,
-            indicator::State::kFault,       indicator::State::kNoStorage,
-            indicator::State::kNoVerifier, indicator::State::kNoWifi,
-            indicator::State::kNoInternet,  indicator::State::kNoBus,
-            indicator::State::kNotRegistered, indicator::State::kNotEnrolled,
-            indicator::State::kNoFidoKey,   indicator::State::kWatching,
-            indicator::State::kReady,
-        };
+        //
+        // **Enumerated from the enum rather than listed**, and that is the fix
+        // for a real gap: this used to be a hand-written list, `kDenyPending` was
+        // added to the ranking after it, and the walk then showed fifteen of
+        // sixteen states — missing the one whose colour an operator most needs to
+        // recognise *before* it matters (red, mid-rate: a deny waiting for a
+        // touch, §10.18.5). A list that has to be kept in step with
+        // `indicator::State` is a list that will fall out of step again;
+        // `indicator_policy.h` guarantees the order and that `kReady` is last,
+        // and the host tier walks the same range for the same reason.
+        indicator::State kAll[static_cast<size_t>(indicator::State::kReady) + 1];
+        for (size_t i = 0; i < sizeof(kAll) / sizeof(kAll[0]); ++i) {
+            kAll[i] = static_cast<indicator::State>(i);
+        }
         printf("walking %u states, 1.5 s each — the device is unaffected\n",
                static_cast<unsigned>(sizeof(kAll) / sizeof(kAll[0])));
         for (const indicator::State state : kAll) {
@@ -2677,8 +2695,14 @@ const esp_console_cmd_t kCommands[] = {
     },
     {
         .command = "keys",
-        .help = "this device's own signing key: id, public key, self-test, or forget it",
-        .hint = "[selftest|forget now]",
+        // **Not "this device's own signing key", because there is not one** — and
+        // this line said exactly that until §10.6's identity was deleted, next to
+        // a `forget now` that has been answered-with-a-sentence rather than done
+        // since. `help` is the one place an operator reads to find out what a
+        // command is for, so a stale one advertises a key this board does not hold
+        // and a subcommand it no longer has.
+        .help = "the key_id the handler knows this board by, and whether its replies verify",
+        .hint = "[selftest]",
         .func = &CmdKeys,
         .argtable = nullptr,
         .func_w_context = nullptr,
@@ -2695,7 +2719,10 @@ const esp_console_cmd_t kCommands[] = {
     },
     {
         .command = "forget",
-        .help = "delete registration.json; the signing key is untouched",
+        // "the signing key is untouched" was the sibling board's wording, and on
+        // this one the signing key *is* the enrolment (§10.18.1) — so naming the
+        // file is what tells an operator this costs a token and not a touch.
+        .help = "delete registration.json; the key enrolment in fido.json is untouched",
         .hint = "now",
         .func = &CmdForget,
         .argtable = nullptr,

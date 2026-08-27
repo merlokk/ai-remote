@@ -39,8 +39,10 @@ namespace nats {
 // well be. `nats_link.cpp` has the story.
 inline constexpr uint32_t kTaskStackBytes = 8192;
 
-// Everything a console line — and, later, §10.8.1's link indicator — needs,
-// taken at one instant. The task keeps it up to date; nothing here reaches
+// Everything a console line — and the light's `bus_connected` (§10.17) — needs,
+// taken at one instant. The sibling board's version of this comment promised
+// §10.8.1's on-screen link indicator "later"; there is no screen here, so the one
+// consumer besides the console is a boolean in `indicator::Inputs`. The task keeps it up to date; nothing here reaches
 // into the client, so reading it can never wait behind a connect.
 struct Status {
     bool ready = false;  // the task started

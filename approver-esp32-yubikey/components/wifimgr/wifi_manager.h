@@ -11,7 +11,11 @@
 //   * the settings, read out of `config.json` (§10.15) — which is also where
 //     the SSIDs and the passwords live, so that the policy can stay a state
 //     machine that has never seen a credential;
-//   * a snapshot for the console (§10.7) and, later, for §10.8.6's screen.
+//   * a snapshot for the console (§10.7), for the light's `wifi_link` and
+//     `internet` booleans (§10.17), and for the configuration site's Wi-Fi page
+//     (§10.16). The sibling board's version of this line promised §10.8.6's
+//     screen "later"; there is none here, and those three are what arrived
+//     instead.
 //
 // It is the logic layer, not the library layer (§10.14.2): it reads
 // `config.json` and knows what a "remembered network" is. `wifi::Radio` below

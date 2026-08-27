@@ -135,9 +135,11 @@ struct Wifi {
     // raise a WPA2 one, and anything in between is refused by the driver
     // rather than silently turned into an open AP somebody believes is locked.
     //
-    // The two shipped files deliberately differ — `config.json` sets a key and
-    // `config.init.json` does not — so a restore opens the access point.
-    // §10.9 has the argument.
+    // **Both shipped files set the same key**, `approver-yubikey-ap`, so a
+    // restore leaves the fallback access point locked rather than opening it —
+    // which is what the user manual's phone-setup walkthrough tells whoever is
+    // holding the device to type. This comment claimed the opposite (that
+    // `config.init.json` carried no key) for as long as the files have agreed.
     char ap_ssid[kSsidSize];
     char ap_password[kPasswordSize];
     uint8_t ap_channel;
@@ -301,7 +303,12 @@ esp_err_t Restore();
 //
 // A `Reload` or a `Restore` replaces every field at once, and four subsystems are
 // holding copies of some of them: the light has a brightness, the Wi-Fi manager a
-// network list, the bus a URL, the gate a timeout. Telling them is not this
+// network list, the bus a URL, and the configuration site a mode (§10.16) — so a
+// `config reload` can take down the page that asked for it. **The gate is not on
+// that list and deliberately has nothing to apply**: it reads
+// `approval.touch_timeout_seconds` when the next request arrives, which is why a
+// timeout changed mid-request does not move the request already waiting. Telling
+// them is not this
 // component's job — it has never heard of a radio (§10.14.2) — but *remembering*
 // to tell them cannot be the caller's, because there are two callers: the
 // console's `config reload` and the restore.

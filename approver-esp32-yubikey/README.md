@@ -51,7 +51,7 @@ idf.py -p COM6 monitor          # the registration and the key enrolment
 Host tests need no board and no key:
 
 ```
-host_test\run.cmd               # 358 tests
+host_test\run.cmd               # 463 tests
 ```
 
 ## First-time setup, on the console
@@ -98,7 +98,7 @@ enrolment. [`status.md`](status.md) says what has and has not been tried.
 
 ## The light
 
-Fifteen states, ranked — one emitter can only say one thing at a time. The ones
+Sixteen states, ranked — one emitter can only say one thing at a time. The ones
 worth memorising:
 
 | | |
@@ -114,8 +114,8 @@ worth memorising:
 
 ## Status
 
-**The loop runs up to the signature.** Boot, filesystem, Wi-Fi, NATS, the request
-queue and every failure path have been done on the board on this desk — and so has
+**It runs, and the whole of it has been run on the board on this desk.** Boot,
+filesystem, Wi-Fi, NATS, the request queue and every failure path — and so has
 the enrolment: a YubiKey 5 on the OTG port was enumerated, interrogated and
 enrolled, so all four layers under §10.18 (CTAPHID, CBOR, CTAP2 with `previewSign`,
 and the ARKG derivation) have run against real hardware, and this device holds a

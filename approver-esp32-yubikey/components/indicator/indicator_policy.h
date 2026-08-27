@@ -88,9 +88,17 @@ struct Inputs {
     bool deny_pending = false;
 };
 
-// Ordered **worst first**, which is also the order `Decide` tests them in. The
-// enumerator values are not a wire format and nothing persists them, so
+// Ordered **worst first**, which is also the order `Decide` tests them in — and
+// that is an invariant rather than a description: `led test` on the console walks
+// this list to show an operator the palette, so a list in a different order is a
+// walk that teaches the wrong ranking. `kNotEnrolled` before `kNotRegistered` is
+// the one pair where the two used to disagree (§10.18.1: `register` refuses
+// without an enrolment, so enrolment is the lower rung).
+//
+// The enumerator values are not a wire format and nothing persists them, so
 // inserting a state in the middle is a source change and not a migration.
+// `kReady` stays last: the host tier enumerates `0..kReady` to assert that every
+// state has a name, a sentence and a look nobody else has.
 enum class State : uint8_t {
     kBooting = 0,
     kRestoreWindow,
@@ -103,8 +111,8 @@ enum class State : uint8_t {
     kNoWifi,
     kNoInternet,
     kNoBus,
-    kNotRegistered,
     kNotEnrolled,
+    kNotRegistered,
     kNoFidoKey,
     kWatching,  // on the bus, reading, and unable to approve — a real state
     kReady,

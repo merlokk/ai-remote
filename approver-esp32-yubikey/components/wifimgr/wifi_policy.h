@@ -30,7 +30,8 @@
 // Two states, therefore, and the distinction is the point:
 //
 //   * **desired** — AP or client, what the operator asked for (`config.json`,
-//     the console, later §10.8.6);
+//     the console, and §10.16's Wi-Fi page — which is where the sibling board's
+//     line said "later §10.8.6", a screen this board does not have);
 //   * **current** — `client "point3" connected`, or `temporary AP` — what is
 //     actually happening on the way there.
 //

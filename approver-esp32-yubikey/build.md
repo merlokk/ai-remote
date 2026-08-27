@@ -40,7 +40,7 @@ rather than a gap — which is most of why this firmware is 1.3 MB.
   host-tests (§10.18.4). Taking the class driver would add a dependency in order
   to *not* use most of it. **One new component instead of two.**
 
-It costs **35,354 bytes** of the image (`idf.py size-components`), of which 890
+It costs **35,366 bytes** of the image (`idf.py size-components`), of which 890
 are IRAM.
 
 ### The dependency §10.18 did *not* add
@@ -161,21 +161,29 @@ be 64 KB aligned and an off-by-one there is a silent reflash away from confusing
 Measured on this build, `idf.py size` and `idf.py size-components`:
 
 ```
-Total image size: 1,341,563 bytes
+Total image size: 1,341,547 bytes
 Smallest app partition: 2,621,440 bytes — 49% free
 Bootloader: 21,056 bytes — 36% free
 ```
 
-**56,576 bytes larger than the line above used to say**, and the change that did it
-was §10.16's configuration web server — the sibling board's site, ported. Where it
-went:
+**Every number in this section was re-taken against the tree as it stands.** The
+two tables below had drifted in a way worth naming, because it is the way a size
+table always drifts: a change that adds a component updates the rows it is *about*
+and leaves the rest, so `libweb.a` and `liblwip.a` were exact while `libbuttons.a`
+still read 775 — from before the 10 ms poller of §10.18.5 — and `libcrypto.a` still
+read 2,310, from before its identity was deleted. The total was right the whole
+time, which is what let it go unnoticed.
+
+**The last change to move that total by anything worth a table was §10.16's
+configuration web server** — the sibling board's site, ported, measured at
+**1,284,987 → 1,341,563, +56,576 bytes**. Where it went:
 
 | | Bytes |
 |---|---|
-| `libweb.a` | **13,482**, of which **3,517 is `.bss`** — a 512-byte chunk buffer, a 1 KB JSON document, a 1,281-byte body buffer, the scan table and a 156-byte header buffer. §10.14.1 as a column again: nothing in it allocates |
+| `libweb.a` | **13,486**, of which **3,517 is `.bss`** — a 512-byte chunk buffer, a 1 KB JSON document, a 1,281-byte body buffer, the scan table and a 156-byte header buffer. §10.14.1 as a column again: nothing in it allocates |
 | `libesp_http_server.a` | **11,117**, and **in-tree** — it arrives with ESP-IDF and is not a new entry on root §1's list, which is why §10.4 below did not have to grow |
 | `liblwip.a` | 108,305 → **112,103**, **+3,798** — the listening-socket paths the linker could previously discard. The largest single share of the total that is not this component's own code |
-| `libcli.a` | 20,339 → **21,970**, +1,631 for `web`, `web login` and two readout rows |
+| `libcli.a` | 20,339 → **21,951**, +1,612 for `web`, `web login` and two readout rows |
 | `libconfig.a` | 8,814 → **9,260**, +446 for the four `web` fields, their parse and their write |
 | the site itself | **41,893 bytes** of SPIFFS in eight files, on a partition with ~9.8 MB free. Not in the image at all |
 
@@ -189,7 +197,7 @@ over twenty start/stop rounds**, spread 64. There is no leak on esp32s3.
 [`web.md`](web.md) §10.16 has the table, the second run, and the stack overflow that
 made that 8,192 a measured number rather than the 4,096 it was ported with.
 
-**Before that, the line said 1,284,987 bytes and 51 % free**, which was itself
+**And 1,284,987 was itself 51 % free**, which was
 **13,228 bytes smaller** than the version before it — and that change was a
 deletion: §10.6's Ed25519 identity, the eFuse route through the HMAC unit, the seed
 generated from SAR-ADC entropy and kept in NVS, `Sign`, and `ProveKey`. Three
@@ -201,37 +209,37 @@ The largest archives, and none of them is a surprise:
 
 | Archive | Bytes | What |
 |---------|-------|------|
-| `libnet80211.a` | 150,629 | the Wi-Fi MAC |
-| `libespressif__libsodium.a` | 135,955 | Ed25519, and now **only** to verify — one call, plus base64 (§10.6). The largest thing this firmware links for the smallest surface, and the reason is fixed protocol: §6's server key is Ed25519 and mbedTLS has no EdDSA |
-| `libtfpsacrypto.a` | 111,117 | mbedTLS/PSA, linked for `esp-tls` and used by §10.18 |
-| `libesp_stdio.a` | 108,533 | mostly `.rodata` — `printf` and its tables |
-| `liblwip.a` | 108,305 | TCP/IP |
+| `libnet80211.a` | 150,637 | the Wi-Fi MAC |
+| `libespressif__libsodium.a` | 124,149 | Ed25519, and now **only** to verify — one call, plus base64 (§10.6). Still the largest thing this firmware links for the smallest surface, and the reason is fixed protocol: §6's server key is Ed25519 and mbedTLS has no EdDSA. It was 135,955 while `Sign` existed; the ~11.8 KB the linker could then discard is the second-largest thing §10.6's deletion bought, after the private key itself |
+| `libesp_stdio.a` | 121,911 | mostly `.rodata` — `printf` and its tables |
+| `liblwip.a` | 112,103 | TCP/IP |
+| `libtfpsacrypto.a` | 110,993 | mbedTLS/PSA, linked for `esp-tls` and used by §10.18 |
 
 And this project's own, which is the interesting half:
 
 | Archive | Bytes | of which `.bss` |
 |---------|-------|-----------------|
-| `libresponder.a` | 50,850 | **36,142** — four 2.3 KB requests, two pending decisions, two task stacks |
-| `libespressif__usb.a` | 35,354 | 17 |
-| `libfido.a` | 34,732 | **14,804** — the 2 KB CTAPHID buffer, a 1,152-byte request buffer sized from §10.18's ceilings, the enrolment |
-| `libnats.a` | 33,032 | 10,496 |
-| `libcli.a` | 21,970 | 5,248 |
-| `libweb.a` | 13,482 | 3,517 — §10.16's five buffers, and no more than five |
-| `libwifimgr.a` | 8,968 | 4,499 — one task stack |
+| `libresponder.a` | 55,025 | **40,239** — four 2.3 KB requests, two pending decisions, two task stacks (one of them `kGateStackBytes`' 12 KB, raised after it was measured twice) |
+| `libespressif__usb.a` | 35,366 | 17 |
+| `libfido.a` | 35,018 | **14,804** — the 2 KB CTAPHID buffer, a 1,152-byte request buffer sized from §10.18's ceilings, the enrolment |
+| `libnats.a` | 33,040 | 10,496 |
+| `libcli.a` | 21,951 | 5,248 |
+| `libweb.a` | 13,486 | 3,517 — §10.16's five buffers, and no more than five |
 | `libconfig.a` | 9,260 | 5,166 |
-| `libprotocol.a` | 6,633 | 0 |
+| `libwifimgr.a` | 8,963 | 4,499 — one task stack |
+| `libprotocol.a` | 6,625 | 0 |
 | `libwifi.a` | 5,456 | 1,472 |
-| `libled.a` | 5,333 | 2,660 — one task stack |
-| `libindicator.a` | 4,873 | 3,192 — one task stack |
+| `libled.a` | 5,381 | 2,660 — one task stack |
+| `libindicator.a` | 5,012 | 3,192 — one task stack |
 | `libarkg.a` | 3,921 | 0 — §10.18's derivation, and it allocates nothing at all |
-| `libcrypto.a` | 2,310 | 144 |
-| `libui.a` | 1,486 | 0 |
-| `libbuttons.a` | 775 | 0 |
-| `libboards.a` | 512 | 102 |
+| `libbuttons.a` | 2,623 | 1,636 — the 10 ms poller and its latch, which is what made a 70 ms tap on BOOT visible to a gate blocked inside a USB read (§10.18.5). It was 775 bytes and no `.bss` before that |
+| `libui.a` | 1,489 | 0 |
+| `libcrypto.a` | 927 | 2 — and it was 2,310 while there was a key to derive (§10.6) |
+| `libboards.a` | 560 | 2 |
 
 **The `.bss` column is where §10.14.1 shows up as a number.** Nothing here
 allocates, so every buffer is in that column and every one of them is a decision
-that was made once: `libresponder.a`'s 36 KB is four queued requests at 2.3 KB
+that was made once: `libresponder.a`'s 40 KB is four queued requests at 2.3 KB
 each plus two decisions waiting to be signed, and `libfido.a`'s 14.8 KB is the
 CTAPHID reassembly buffer capped at 2 KB rather than the protocol's 7,609, a
 request buffer sized from the *ceilings* rather than from what a YubiKey happens to
@@ -243,7 +251,7 @@ a key handle (§10.18.1).
 derivation, the rest in `fido` and `ctap2` for `previewSign` and the wider
 enrolment. Nothing was added to the dependency list to get it.
 
-`libboards.a` at 512 bytes is the whole of this board's hardware layer, which is
+`libboards.a` at 560 bytes is the whole of this board's hardware layer, which is
 the clearest single number for what §10.13's list of absences bought.
 
 ### Flashing

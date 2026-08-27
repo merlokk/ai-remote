@@ -98,7 +98,7 @@ board's own.
 `web_settings.h` whitelists `wifi` and `nats` and refuses everything else **by
 name**. On the sibling board the refused set was the touch calibration, the idle
 timers, the clock and the display brightness — settings whose worst case is an
-annoyance. Here three of the five sections of `config.json` are refused and two of
+annoyance. Here four of the six sections of `config.json` are refused and two of
 them carry §10.10:
 
 * **`approval` decides when a verdict may be asked for.** `touchTimeoutSeconds` is
@@ -115,7 +115,11 @@ them carry §10.10:
 * **`web` itself**, which is the sibling's rule inherited unchanged: a form that
   could set `web.write` back to true is not a switch but a suggestion, and a form
   that could write `web.user` could lock this device or unlock it. The console and
-  the file are the two ways in.
+  the file are the two ways in;
+* and **`internet`**, the fourth, which carries nothing of §10.10 and is refused
+  by the same whitelist for the ordinary reason: the reachability probe's targets
+  and intervals are not a form's business, and a whitelist that only refuses the
+  dangerous sections is a whitelist somebody has to keep judging.
 
 All of that is `test_web_the_gate_cannot_be_reached_from_a_network` and
 `test_web_what_the_light_says_cannot_be_reached_from_a_network` rather than prose.
@@ -165,11 +169,11 @@ figures [`build.md`](build.md) recorded before this component existed:
 
 | | |
 |---|---|
-| the whole image | 1,284,987 → **1,341,563 bytes**, **+56,576** |
+| the whole image | 1,284,987 → **1,341,563 bytes**, **+56,576**. ([`build.md`](build.md) carries the current total, which later edits have moved a few bytes) |
 | the app slot | 51 % → **49 % free** of 2.5 MB |
-| `libweb.a` | **13,482 bytes**, of which **3,517 is `.bss`** — the 512-byte chunk buffer, the 1 KB JSON document, the 1,281-byte body buffer, the scan table and the 156-byte header buffer. §10.14.1 as a column: nothing here allocates |
+| `libweb.a` | **13,486 bytes**, of which **3,517 is `.bss`** — the 512-byte chunk buffer, the 1 KB JSON document, the 1,281-byte body buffer, the scan table and the 156-byte header buffer. §10.14.1 as a column: nothing here allocates |
 | `libesp_http_server.a` | **11,117 bytes**, new, and in-tree — not a new entry on root §1's list |
-| `libcli.a` | 20,339 → **21,970**, +1,631 for `web`, `web login` and two readout rows |
+| `libcli.a` | 20,339 → **21,951**, +1,612 for `web`, `web login` and two readout rows |
 | `libconfig.a` | 8,814 → **9,260**, +446 for the four `web` fields and their parse and write |
 | `liblwip.a` | 108,305 → **112,103**, +3,798 — the listening-socket paths the linker could previously drop. Worth naming because it is the largest single share of the total that is *not* this component |
 | the site, in SPIFFS | **41,893 bytes** in eight files — seven pages and one `app.js` — on a partition with ~9.8 MB free. The one part of this that is free |
@@ -204,7 +208,7 @@ shape of that failure is the whole argument for tier 3 on this section.
 design, and §10.7's reason for it is that a second copy of fifteen readouts drifts
 from the first. On the sibling board that dump is I²C reads and formatting, and it
 left **1,756 bytes of 4,096**. On this board the same dump includes `key` and
-`keys` (§10.18) — readouts the console gives *itself* **12 KB** for — and it left
+`keys` (§10.18) — readouts the console gives *itself* **10 KB** for — and it left
 **116 bytes**.
 
 116 bytes is not a margin, and what earns this a section is the failure mode rather
@@ -224,7 +228,7 @@ than the number:
   `Status::task_stack_low` rather than from a repro.
 
 The fix is one constant: **8,192**, a little over 2× the measured peak. It is not
-12 KB like the console because the one thing that makes *that* number necessary is
+10 KB like the console because the one thing that makes *that* number necessary is
 unreachable from here — `key selftest` runs two curve operations and nothing on this
 server can ask for one (§10.10 rule 4). `web` prints the margin against the
 constant, and it is the number to re-check after any change to a readout.

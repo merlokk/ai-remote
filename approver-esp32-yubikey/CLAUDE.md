@@ -69,6 +69,17 @@ folder. Where this device genuinely differs, the section is new and its number i
 new with it: **§10.17** is the light and **§10.18** is the key, and neither exists
 next door.
 
+**And one number in that scheme is owned by neither folder's code but is cited by
+this one's: §10.8, the screens.** It lives in
+[`../approver-esp32/screens.md`](../approver-esp32/screens.md) and there is nothing
+here for it to describe (§10.13: no display, no touch). A dozen comments in
+`components/` still cite it — `§10.8.4` for the rules about a `tool_input` that
+must not be truncated and about answering one request bringing up the next,
+`§10.8.1` for the press guard and what may steal focus, `§10.8.2` and `§10.8.6` for
+readouts — and those are legitimate: the rule was argued once, next door, and the
+queue and the guard it argued about are on both boards. What is *not* legitimate is
+a comment here promising a screen "later", and there are none left.
+
 **§10.16 goes the other way and is worth naming for it**: the configuration site
 keeps its number because it is the same component, ported rather than rewritten —
 the same whitelist, the same gate, the same desired-state reconciler, and the two
@@ -99,14 +110,14 @@ status summary below, whose long form is [`status.md`](status.md).
 | [`user-manual.md`](user-manual.md) | the only document here written for whoever is **holding** the device rather than changing it: the two sockets, the one light, the gesture that approves and the two that refuse, first-time setup, and a troubleshooting table keyed on what the light is doing. Three photographs of the real board in [`images/`](images/) carry the states words are worst at — green at rest, white with the key asking, red with the deny waiting to be signed. **It decides nothing** |
 | [`README.md`](README.md) | the short form, for somebody arriving rather than working here: what the device is, the four hardware facts, build and flash, first-time setup and what the light means. **It owns no section and decides nothing** — every line in it is a summary of one of the files above, which stay authoritative |
 
-## Status: a working responder with no signing key yet
+## Status: a working responder
 
-**The device is real and the loop is closed up to the key.** It boots, mounts its
-filesystem, joins Wi-Fi, connects to the NATS server on the LAN, and — in the
-shape it had before §10.18 changed the signer — registered with the handler over
-§6 and took its place on `approvals.*` in the `approvers` queue group. A request
-put on it appears as a white flashing light, waits for a fingertip, expires with
-**no reply** if none comes, and the counters say which of those happened. All of
+**The device is real and the loop is closed.** It boots, mounts its filesystem,
+joins Wi-Fi, connects to the NATS server on the LAN, registered its
+ARKG-derived `p256` key with the handler over §6, and took its place on
+`approvals.*` in the `approvers` queue group. A request put on it appears as a
+white flashing light, waits for a fingertip, and either comes back as a signature
+the hook trusts or expires with **no reply** — and the counters say which. All of
 that has been done on the board on this desk, against the real handler and the
 real NATS server.
 
@@ -135,23 +146,21 @@ The only step left is cosmetic by comparison: the request arriving from a live
 Claude Code session's `PermissionRequest` rather than from the probe that sends the
 same bytes.
 
-Because of that the device is, right now, in the state its own light calls
-`not-registered` — magenta — and **it is deliberately not on `approvals.*` while
-it is**: it must not take requests out of a queue group away from responders that
-can answer them (§6's "Multiple clients", and `responder::Blocker` is where that is
-enforced). That rule was added after the first registration, when the device did
-exactly that. The rung below it, `not-enrolled`, is where a device with no key at
-all sits — **and it is the lower of the two on purpose**, because `register`
-refuses without an enrolment (§10.18.1), so telling an operator to mint a one-time
-token first would cost them the token.
+**Two rules about *not* answering are what the device spends most of its life
+proving, and both are enforced rather than logged.** It is on `approvals.*` only
+while it could actually answer — enrolment, a registration naming the key
+currently enrolled, and a connection — because §6's queue group means each request
+reaches exactly *one* responder, so a device that subscribed while unable to sign
+would be taking requests away from responders that can (`responder::Blocker`, and
+§10.10 rule 5). That rule was added after this board's first registration, when it
+did exactly that. And `not-enrolled` outranks `not-registered` in the light's
+ranking (§10.17) because `register` refuses without an enrolment (§10.18.1), so
+the other order would send an operator to mint a one-time token they cannot spend.
 
-**And there is no registration at all on the device now.** The one made before
-§10.18 named an Ed25519 key this firmware no longer signs with, and
-`registration.json` is no longer there either — the device says so at boot and the
-console says `registered no`. The enrolment is done, so what is left is one fresh
-token: `register <token>`. The `STALE` path — a registration naming a key that is
-no longer the enrolled one — is still real and still enforced at every boot
-(§10.18.1); it just is not what this device is showing.
+The `STALE` path — a registration naming a key that is no longer the enrolled one
+— is real and checked at every boot (§10.18.1), and it is the one thing here that
+has never been *produced*: doing so costs an enrolment and then a fresh token.
+[`status.md`](status.md) lists it as owed.
 
 Below the key, what runs: the WS2812 on GPIO48 driven off a UART (§10.17.3), a
 sixteen-state ranking that decides what a single emitter says about a device
@@ -185,14 +194,14 @@ is verified; the markup is checked from the host by
 `tests/test_esp32_web_pages.py`, which now reads both boards' sites from one copy of
 the rules.
 
-And one thing that is **no longer there at all**: `components/crypto` used to derive
-an Ed25519 identity at boot, which since §10.18 signed nothing. It has been deleted
-— the seed, the eFuse route, `Sign`, and the seed's 32 bytes in unencrypted NVS,
-which the firmware now **erases** on any board that has them. What is left of
-libsodium verifies the *handler's* reply (§6's server key is Ed25519 by fixed
-protocol) and provides base64, and neither ever needed a key of ours. **There is no
-private key on this board of any kind** (§10.6), which is the sentence the whole
-design was for.
+And one thing that is **no longer there at all**: the Ed25519 identity
+`components/crypto` used to derive at boot, which since §10.18 signed nothing. The
+identity is deleted — the seed, the eFuse route, `Sign`, and the seed's 32 bytes in
+unencrypted NVS, which the firmware now **erases** on any board that has them. The
+component itself stays and is 927 bytes of it: what is left of libsodium verifies
+the *handler's* reply (§6's server key is Ed25519 by fixed protocol) and provides
+base64, and neither ever needed a key of ours. **There is no private key on this
+board of any kind** (§10.6), which is the sentence the whole design was for.
 
 Read §10.3 before anything else: it is the one part of this that changes
 something outside this folder.

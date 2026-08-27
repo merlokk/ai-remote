@@ -138,8 +138,14 @@ are not in tension: everything this code owns is static, and what asks for heap 
 other people's — the Wi-Fi driver's TX buffers, lwIP's pools, the USB Host
 Library's transfer descriptors, cJSON while it parses. On a board without PSRAM
 those compete for a couple of hundred kilobytes of internal RAM; here there are
-eight megabytes behind them. It is also why `status` reports eight and a half
-megabytes of heap on a device that asks for none of it.
+eight megabytes behind them.
+
+**It is also why `status` does not print one heap number.** It used to, through
+`esp_get_free_heap_size`, and on this board that counts the PSRAM: the readout said
+eight and a half megabytes and therefore said nothing about the memory that
+actually runs out. `status` now prints `heap` as `MALLOC_CAP_INTERNAL` free and
+lowest-ever, with `psram` on its own line — and the internal number is the one that
+decided `responder::kGateStackBytes` an hour later.
 
 **What it must not hold is a task stack, and that is a trap rather than a rule you
 would guess.** `CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM` exists and on this

@@ -74,7 +74,7 @@ inline constexpr uint16_t kMaxSockets = 3;
 // number in this component that is not the sibling board's, and the reason is
 // `/api/devstatus`: it runs the console's whole dump on *this* task, and on this
 // device that dump includes `key` and `keys` (§10.18) — readouts the console
-// itself gives `kConsoleStackBytes` of 12 KB for. The sibling's dump is I²C reads
+// itself gives `kConsoleStackBytes` of 10 KB for. The sibling's dump is I²C reads
 // and formatting and left 1,756 bytes of 4,096; **this one left 116.**
 //
 // 116 bytes is not a margin, and the way it failed is worth writing down because
@@ -87,7 +87,7 @@ inline constexpr uint16_t kMaxSockets = 3;
 // delayed-detection overflow looks like from the outside.
 //
 // So: **8,192, against a measured peak of 3,980** — a little over 2× the deepest
-// path this task has. It is not 12 KB like the console because the one thing that
+// path this task has. It is not 10 KB like the console because the one thing that
 // makes *that* number necessary is not reachable from here: `key selftest` runs
 // two curve operations, and nothing on this server can ask for one (§10.10 rule 4).
 // `Status::task_stack_low` is the number to check after any change to a readout,

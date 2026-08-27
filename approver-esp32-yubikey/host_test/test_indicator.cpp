@@ -3,15 +3,19 @@
 //
 // This file is the whole reason `indicator_policy.cpp` is a separate translation
 // unit with no ESP-IDF in it. The alternative — four lines inside the responder —
-// would put a fourteen-way decision behind a Wi-Fi radio, a NATS server and a
+// would put a sixteen-way decision behind a Wi-Fi radio, a NATS server and a
 // security key, and the only way to check it would be to unplug things and watch
 // a desk.
 //
-// Two properties are pinned here that no amount of watching would establish:
+// Three properties are pinned here that no amount of watching would establish:
 //
 //   * **the order**, including the two places where it is deliberately not
 //     "fix the lowest rung first" — a pending request outranks a fault, and a
 //     boot outranks everything;
+//   * **that the declaration order of `State` *is* that order**, because `led
+//     test` on the console walks the enum to show an operator the palette. When
+//     the two disagreed, the walk taught a ranking the device does not use — and
+//     nothing failed;
 //   * **that no two states look alike.** With one emitter, two states sharing a
 //     colour *and* a rhythm is two states the operator cannot tell apart, and
 //     the five yellows of the pre-bus stack are the one place that is allowed —
@@ -256,6 +260,62 @@ void test_indicator_the_restore_window_is_the_brightest_thing_there_is(void) {
     TEST_ASSERT_FALSE(look.idle);
 }
 
+void test_indicator_the_enum_order_is_the_order_decide_ranks_them(void) {
+    // **`indicator_policy.h` claims the enum is ordered worst first, "which is
+    // also the order `Decide` tests them in" — this is that claim.** It is not
+    // documentation: `led test` on the console walks `0..kReady` to show an
+    // operator every colour, so an enum in a different order is a walk that
+    // teaches the wrong ranking, and an enum missing nothing but ordered wrongly
+    // fails no other test in this file.
+    //
+    // It is checked by spoiling the device one condition at a time, from the best
+    // state downwards. Each new condition is worse than every condition already
+    // spoiled, so `Decide` must return the new one every time — and its
+    // enumerator must be smaller than the last, which is what the walk reads.
+    struct Rung {
+        indicator::State state;
+        void (*spoil)(indicator::Inputs *);
+    };
+    const Rung kRungs[] = {
+        {indicator::State::kWatching, [](indicator::Inputs *in) { in->subscribed = false; }},
+        {indicator::State::kNoFidoKey, [](indicator::Inputs *in) { in->fido_present = false; }},
+        {indicator::State::kNotRegistered, [](indicator::Inputs *in) { in->registered = false; }},
+        // The pair that was wrong: `register` refuses without an enrolment
+        // (§10.18.1), so the enrolment is the lower rung — and the enum used to
+        // list it the other way round.
+        {indicator::State::kNotEnrolled, [](indicator::Inputs *in) { in->fido_enrolled = false; }},
+        {indicator::State::kNoBus, [](indicator::Inputs *in) { in->bus_connected = false; }},
+        {indicator::State::kNoInternet, [](indicator::Inputs *in) { in->internet = false; }},
+        {indicator::State::kNoWifi, [](indicator::Inputs *in) { in->wifi_link = false; }},
+        {indicator::State::kNoVerifier, [](indicator::Inputs *in) { in->can_verify = false; }},
+        {indicator::State::kNoStorage, [](indicator::Inputs *in) { in->storage_mounted = false; }},
+        {indicator::State::kFault, [](indicator::Inputs *in) { in->fault = true; }},
+        {indicator::State::kPending, [](indicator::Inputs *in) { in->request_pending = true; }},
+        {indicator::State::kDenyPending, [](indicator::Inputs *in) { in->deny_pending = true; }},
+        {indicator::State::kSigning, [](indicator::Inputs *in) { in->signing = true; }},
+        {indicator::State::kRestoreWindow, [](indicator::Inputs *in) { in->restore_window = true; }},
+        {indicator::State::kBooting, [](indicator::Inputs *in) { in->booting = true; }},
+    };
+
+    indicator::Inputs in = Working();
+    TEST_ASSERT_TRUE(indicator::Decide(in) == indicator::State::kReady);
+    int previous = static_cast<int>(indicator::State::kReady);
+    for (const Rung &rung : kRungs) {
+        rung.spoil(&in);
+        TEST_ASSERT_TRUE_MESSAGE(indicator::Decide(in) == rung.state,
+                                 indicator::StateName(rung.state));
+        TEST_ASSERT_TRUE_MESSAGE(static_cast<int>(rung.state) < previous,
+                                 indicator::StateName(rung.state));
+        previous = static_cast<int>(rung.state);
+    }
+
+    // And every state is on that list, so a state added to the enum without a
+    // rung here is a state whose place in the ranking nothing pins. `kReady` is
+    // the one that is not spoiled into existence — it is what `Working()` is.
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(indicator::State::kReady),
+                          static_cast<int>(sizeof(kRungs) / sizeof(kRungs[0])));
+}
+
 void test_indicator_every_state_has_a_name_and_a_sentence(void) {
     // A state added without either is a state the console cannot report, and
     // §10.7's rule is that the console answers in words.
@@ -323,6 +383,7 @@ void RegisterIndicatorTests(void) {
     RUN_TEST(test_indicator_a_missing_key_always_matters);
     RUN_TEST(test_indicator_connected_but_not_subscribed_is_not_ready);
     RUN_TEST(test_indicator_the_restore_window_is_the_brightest_thing_there_is);
+    RUN_TEST(test_indicator_the_enum_order_is_the_order_decide_ranks_them);
     RUN_TEST(test_indicator_every_state_has_a_name_and_a_sentence);
     RUN_TEST(test_indicator_no_two_states_look_alike_outside_the_yellow_stack);
     RUN_TEST(test_indicator_nothing_is_dark);

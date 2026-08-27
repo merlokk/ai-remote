@@ -71,7 +71,8 @@ Endpoint endpoint = {};
 bool endpoint_valid = false;
 
 // Fast enough that a permission request does not sit in a socket buffer while
-// the operator waits (§10.8.4 is the screen this feeds), slow enough to be
+// the operator waits — what this feeds here is the white light and the key's own
+// blink (§10.17), where the sibling board's §10.8.4 fed a screen — slow enough to be
 // free: `Bus::Process` is a `select` with a zero timeout and returns at once
 // when nothing has arrived. The Wi-Fi manager's 200 ms is the right number for
 // a radio and the wrong one for a request card.

@@ -256,7 +256,7 @@ void test_web_the_three_words_map_both_ways(void) {
 
 void test_web_a_field_that_is_not_on_the_list_is_refused(void) {
     // **Refused rather than ignored**, and this is the test that says the write
-    // path is a whitelist: three of the five sections of `config.json` are not
+    // path is a whitelist: four of the six sections of `config.json` are not
     // reachable from a form at all. A page with a typo in it fails loudly here.
     AssertRefused("{\"web\":{\"write\":false}}", WriteResult::kUnknownField);
     AssertRefused("{\"wifi\":{\"rounds\":9}}", WriteResult::kUnknownField);

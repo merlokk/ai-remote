@@ -17,8 +17,10 @@ host_test\run.cmd            everything
 host_test\run.cmd led fido   only the suites whose name matches
 ```
 
-**462 tests, 0 failures** as of this writing — 358 before §10.16's site brought
-three suites and 83 tests with it. `working-with-code.md` has the one
+**463 tests, 0 failures** as of this writing — 358 before §10.16's site brought
+three suites and 83 tests with it, and one more for the invariant below that
+`indicator`'s enum order *is* the order `Decide` ranks them in, which `led test` on
+the console walks. `working-with-code.md` has the one
 line that runs them and what it needs; `host_test/CMakeLists.txt` explains why
 this is a plain CMake project rather than `idf.py --preview set-target linux` (the
 short version: that target is offered by this install and does not work on a
@@ -35,7 +37,7 @@ console uses.
 | Suite | Why it exists |
 |-------|---------------|
 | `led` | the encoding is the one thing whose only other verification method is *looking at a desk*. A single wrong bit is an LED that is the wrong colour, and one of the tests decodes a frame back by hand — because a table whose entries were transposed still emits only the four legal characters |
-| `indicator` | a sixteen-way ranking that could otherwise only be checked by unplugging things. It pins the order, the two deliberate rule-breaks in it, and **that no two states look alike** — with one emitter, a shared appearance is a state the operator cannot see |
+| `indicator` | a sixteen-way ranking that could otherwise only be checked by unplugging things. It pins the order, the two deliberate rule-breaks in it, **that the enum's declaration order is that order** — `led test` walks the enum to teach an operator the palette, and when the two disagreed the walk taught a ranking the device does not use — and **that no two states look alike**, because with one emitter a shared appearance is a state the operator cannot see |
 | `ctaphid` | a sequence number, a length that arrives before the data, and a buffer whose fill rate a device on the other end of a cable controls. A *real* key will never send a malformed frame, which is precisely why the malformed paths need a test |
 | `cbor` | every length in a CTAP2 response is a number the key chose. Also the writer: CTAP2 requires canonical CBOR, and a canonicity bug looks like a key that mysteriously will not talk to this device |
 | `ctap2` | that the requests are bytes a real key accepts — including **`up: true`, said out loud**, which is the single most important byte this firmware sends — and that a malformed answer never reaches the verifier |
@@ -243,24 +245,24 @@ that did not say so would be a list nobody could act on.
 | **a page served by this board** (§10.16) | a full `idf.py flash`, which costs the enrolment | the site exists in the SPIFFS image and has never been served. Everything *behind* the pages has now run on the board — see the row in the section above — so what is left is HTML over the wire and a phone doing the setup on it. `app-flash` gives a running server with no pages, which is why this row's cost is a `key enrol` with the key in hand (§10.18.1) |
 
 **The gate's failure paths are better tested than its success path**, which is an
-honest description of where this device is and not an accident: everything that
-happens when there is *no* key has been run on hardware, and nothing that happens
-when there *is* one has.
+honest description of where this device is and not an accident: both halves have
+been run on hardware, and the failure paths were run first and more often.
 
-**And since §10.18 the registration on that board is stale by construction** — it
-names an Ed25519 key this firmware no longer signs with. The first three things to
-do when a key arrives are `key selftest`, `key enrol`, `register <token>`, in that
-order, and the device says so itself at every step.
+**The order the device asks for on a fresh board is `key selftest`, `key enrol`,
+`register <token>`**, and it says so itself at every step: `register` refuses
+without an enrolment (§10.18.1), and a registration naming a key that is no longer
+the enrolled one is reported `STALE` rather than answered with signatures the hook
+would reject.
 
 ## What is owed
 
-* **`key selftest` on the board**, which needs nothing and is owed now rather than
-  when a key arrives;
-* run every other row of the second table above, once there is a key;
+* run every remaining row of the second table above — the ones needing a second
+  key, a hand, a reset or a full flash;
 * a `scripts/esp32yk-approval.cmd` to match the sibling's `esp32-approval.cmd` —
   the whole loop against the real hook, with two touches and one deliberate
   non-touch. (`scripts/esp32yk-host-tests.cmd` already exists and is the launcher
-  for tier 1);
+  for tier 1).
+
 CI already covers tier 1: `.github/workflows/tests.yml`'s `esp32-host` job builds
 **both** boards' host tiers on Windows, in one job — the MSVC setup above them
 took three attempts to get right on a moving runner image, and a second job would

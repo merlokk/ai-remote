@@ -109,10 +109,10 @@ const char *StateName(State state) {
             return "no-internet";
         case State::kNoBus:
             return "no-bus";
-        case State::kNotRegistered:
-            return "not-registered";
         case State::kNotEnrolled:
             return "not-enrolled";
+        case State::kNotRegistered:
+            return "not-registered";
         case State::kNoFidoKey:
             return "no-fido-key";
         case State::kWatching:
@@ -147,10 +147,10 @@ const char *StateText(State state) {
             return "associated, but nothing answers - see `wifi check`";
         case State::kNoBus:
             return "no NATS connection - see `nats`";
-        case State::kNotRegistered:
-            return "not registered - run `register <token>`";
         case State::kNotEnrolled:
             return "no security key enrolled - run `key enrol`";
+        case State::kNotRegistered:
+            return "not registered - run `register <token>`";
         case State::kNoFidoKey:
             return "plug a security key into the OTG port";
         case State::kWatching:
@@ -242,12 +242,6 @@ Look LookOf(State state) {
         // in a key, or wait a tick. That is what earns them colours of their own
         // where the five above share one.
 
-        // Registration is a missing piece with a command that fixes it — and the
-        // *second* one a new device asks for, because an enrolment has to come
-        // first (§10.18.1) and outranks it above.
-        case State::kNotRegistered:
-            return {led::colour::kMagenta, led::Effect::kNormBlink, false};
-
         // **Cyan, fast, at full brightness — the one cyan that is asking for
         // something.** A device with nothing enrolled is not on `approvals.*` at
         // all (`responder::Blocker::kNotEnrolled`) and cannot even be registered,
@@ -256,6 +250,12 @@ Look LookOf(State state) {
         // brand-new device shows first.
         case State::kNotEnrolled:
             return {led::colour::kCyan, led::Effect::kFastBlink, false};
+
+        // Registration is a missing piece with a command that fixes it — and the
+        // *second* one a new device asks for, because an enrolment has to come
+        // first (§10.18.1) and outranks it above.
+        case State::kNotRegistered:
+            return {led::colour::kMagenta, led::Effect::kNormBlink, false};
 
         // Cyan: everything works except the thing in your pocket (§10.18).
         case State::kNoFidoKey:

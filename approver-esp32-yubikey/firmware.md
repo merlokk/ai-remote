@@ -142,11 +142,12 @@ shipped file therefore serves to whoever can reach it, exactly as this board did
 before the server existed — and `web` on the console says `OPEN` in those words
 when only one half is filled in.
 
-**Three of these five sections cannot be written from the site**, which is where
+**Four of these six sections cannot be written from the site**, which is where
 §10.15 meets §10.10 rule 4 on this board: the write path whitelists `wifi` and
-`nats`, and refuses `approval` (when a verdict may be asked for), `led` (what this
-device is saying while it asks) and `web` itself by name. [`web.md`](web.md) argues
-each; two host tests are the enforcement.
+`nats` and refuses everything else by name — `approval` (when a verdict may be
+asked for), `led` (what this device is saying while it asks), `web` itself, and
+`internet` (the reachability probe, which is nobody's business over HTTP).
+[`web.md`](web.md) argues the first three; two host tests are the enforcement.
 
 **`requireKey` was here and is gone**, which is worth a line because a config file
 left over from before will still have it. It switched the security key off and let
@@ -181,8 +182,16 @@ restore that ran after the parse could not rescue it.
 
 ### Who is told when the fields move
 
-A reload or a restore replaces every field at once, and three subsystems hold
-copies: the LED a brightness, the Wi-Fi manager a network list, the bus a URL.
+A reload or a restore replaces every field at once, and four subsystems hold
+copies: the LED a brightness, the Wi-Fi manager a network list, the bus a URL, and
+the configuration site its mode — so a `config reload` saying `web.mode: off` can
+take down the page that asked for the reload (§10.16).
+
+**The gate is not one of them**, which is worth stating because it looks like it
+should be: `approval.touchTimeoutSeconds` is read when the next request arrives, so
+there is nothing to re-apply and a timeout changed mid-request does not move the
+request already waiting.
+
 Telling them is not `config`'s job — it has never heard of a UART — but
 *remembering* to tell them cannot be the caller's either, because there are two
 callers.
