@@ -17,10 +17,11 @@ host_test\run.cmd            everything
 host_test\run.cmd led fido   only the suites whose name matches
 ```
 
-**463 tests, 0 failures** as of this writing — 358 before §10.16's site brought
-three suites and 83 tests with it, and one more for the invariant below that
+**466 tests, 0 failures** as of this writing — 358 before §10.16's site brought
+three suites and 83 tests with it, one more for the invariant below that
 `indicator`'s enum order *is* the order `Decide` ranks them in, which `led test` on
-the console walks. `working-with-code.md` has the one
+the console walks, and three that hold the shape of the breath after it was found
+to be walking its perceptual curve backwards (§10.17.5). `working-with-code.md` has the one
 line that runs them and what it needs; `host_test/CMakeLists.txt` explains why
 this is a plain CMake project rather than `idf.py --preview set-target linux` (the
 short version: that target is offered by this install and does not work on a

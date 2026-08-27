@@ -69,26 +69,43 @@ enum class Effect : uint8_t {
     kSlowBlink,  // 1 s / 1 s
     kNormBlink,  // 500 ms / 500 ms
     kFastBlink,  // 200 ms / 200 ms
-    kBreathe,    // the Weber-Fechner ramp below, ~9 s a cycle
+    kBreathe,    // the perceptually linear ramp below, ~9 s a cycle
 };
 
 const char *EffectName(Effect effect);
 
-// **Weber-Fechner, and the table is a measurement rather than a curve fit.**
-// Perceived brightness goes as roughly the cube root of radiated power, so a
-// linear ramp on the duty cycle looks like a lamp that snaps on and then does
-// nothing for most of its travel. The normalisation is 16.06 * x^0.33 over
-// 0..100 %, sampled at sixty points up and back down.
+// **The duty cycle that makes perceived brightness climb in a straight line**,
+// which is the *inverse* of the perceptual curve rather than the curve itself.
+// That distinction is the whole content of this table and it is easy to get
+// exactly backwards — this firmware did, and §10.17.5 records what it looked
+// like: the emitter reached 63 % of its apparent brightness one 150 ms step in
+// and then spent the remaining four seconds buying the other 37 %, so the breath
+// read as a snap to full followed by eight seconds of sitting there.
 //
-// Carried over from the house firmware of §10.14.4 unchanged, including the
-// count: sixty steps at 150 ms is a nine-second breath, which is slow enough to
-// read as *resting* rather than as *pulsing at you*.
-inline constexpr size_t kBreathSteps = 60;
+// The model is the one §10.17.5 quotes, solved for duty instead of for
+// appearance. CIE lightness is `L* = 116·Y^(1/3) − 16` above `Y = 0.008856` and
+// `903.3·Y` below it; walking `L*` linearly from 0 to 100 and taking the `Y` that
+// produces it gives this ramp. Each step is about **1.1 L\* units**, which is near
+// enough the just-noticeable difference that the travel has no visible stairs and
+// no visible plateau.
+//
+// The low, linear segment of CIE is why this is not simply `x^3`: a cube leaves
+// the bottom fifteen steps quantised to zero on an 8-bit part, which is a breath
+// with three quarters of a second of black at the bottom of it. Here only the
+// first two steps are dark, and that reads as the pause a breath has anyway.
+//
+// **What is carried over from the house firmware of §10.14.4 is the nine-second
+// period, not the table** — that number was chosen against a real emitter on a
+// real desk and is slow enough to read as *resting* rather than as *pulsing at
+// you*. 180 steps at 50 ms is the same nine seconds at three times the temporal
+// resolution, which the corrected curve needs: its interesting region is no
+// longer crammed into the first step.
+inline constexpr size_t kBreathSteps = 180;
 extern const uint8_t kBreathRamp[kBreathSteps];
 
 // How often the breath advances one step. Everything else in this file is
 // event-driven; this is the one effect with a frame rate.
-inline constexpr uint32_t kBreathStepMs = 150;
+inline constexpr uint32_t kBreathStepMs = 50;
 
 // Scale a colour to a percentage, the way the house firmware does it: multiply
 // and divide once, in `int`, so that 1 % of 255 is 2 rather than 0.

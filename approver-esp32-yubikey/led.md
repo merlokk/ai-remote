@@ -285,11 +285,63 @@ is a ceiling nobody can reason about** — a `led` readout saying `50%` next to 
 emitter running at 12 % duty is a readout that has to be explained every time.
 
 The perceptual curve *is* applied, in the one place it belongs: `kBreathRamp`,
-the sixty-step Weber–Fechner table the breath walks (§10.17.3). There it is not a
-setting anybody reads back — it is the shape of an animation, and a linear ramp
-there looks like a lamp that snaps on and then does nothing for most of its
-travel, which is exactly the effect this section is about.
+the table the breath walks (§10.17.3). There it is not a setting anybody reads
+back — it is the shape of an animation, and a linear ramp there looks like a lamp
+that snaps on and then does nothing for most of its travel, which is exactly the
+effect this section is about.
 
 If the numbers ever want to mean perceived brightness instead, the change is one
 line in `Scale` plus a re-derivation of both defaults — and this section is the
 note to read first.
+
+### The breath had this bug, for exactly the reason above
+
+Worth its own heading because the fix is not "apply the curve" — the curve *was*
+applied, and **applied the wrong way round**, which is the failure mode this whole
+section makes easy to reach.
+
+What was on the desk: green `ready` ramped to full in roughly a fifth of a
+second, sat there for about eight seconds, went dark and started again. There was
+a gradient, but only at the very bottom of the travel.
+
+What the table held was the **`seen` row of the table above** — 245·(x)^0.33,
+sixty samples of it — which is lightness *as a function of* duty. What the breath
+needed was the inverse: duty as a function of the lightness it should be showing
+now. Measured against the model this section quotes, the shipped ramp reached
+**62.8 L\*** on its first 150 ms step and spent the remaining four seconds
+buying the other 37 points.
+
+The replacement walks `L*` from 0 to 100 in even steps and takes the `Y` that
+produces each one — CIE inverted, `Y = ((L*+16)/116)³` above `L* = 8` and
+`L*/903.3` below it, where that low linear segment matters: a plain cube leaves
+the bottom fifteen steps quantised to zero, which is three quarters of a second
+of black at the bottom of every breath. Here only two steps are dark.
+
+| up the sweep | 0 % | 11 % | 22 % | 34 % | 51 % | 67 % | 84 % | 100 % |
+|---|---|---|---|---|---|---|---|---|
+| **was** (duty) | 0 | 115 | 153 | 172 | 196 | 216 | 229 | 245 |
+| **was** (seen, L\*) | 0 | 73 | 82 | 86 | 90 | 94 | 96 | 98 |
+| **is** (duty) | 0 | 3 | 9 | 20 | 48 | 95 | 165 | 255 |
+| **is** (seen, L\*) | 0 | 10 | 22 | 34 | 50 | 67 | 84 | 100 |
+
+Three things changed with it, and each is a sentence rather than a taste:
+
+* **180 steps at 50 ms rather than 60 at 150 ms.** The same nine-second period —
+  that number was chosen against a real emitter and is not the thing that was
+  wrong — at three times the resolution, which the corrected curve needs because
+  its interesting region is no longer crammed into the first step. Each step is
+  now about **1.1 L\***, near enough the just-noticeable difference to have no
+  visible stairs;
+* **the top of the sweep is 255, not 245.** A breath is the operator's brightness
+  setting swept from off to that setting and back, so the top has to be the same
+  number a solid frame shows — otherwise `config set led 15` means one thing when
+  the device is idle and another when it is not;
+* **one multiply instead of `Scale` and then another.** Rounding to eight bits
+  twice throws away the low end of a curve whose low end is the whole point: at
+  the 8 % idle ceiling the entire breath lives in twenty duty levels. The two
+  divisions are now one, and it rounds rather than truncates.
+
+Four host tests hold the shape rather than the numbers — perceived-step
+uniformity, symmetry, half-travel looking half-bright, and the idle ceiling still
+being a sweep — because the next person to regenerate this table should be free to
+pick a different step count and not free to re-invert it.

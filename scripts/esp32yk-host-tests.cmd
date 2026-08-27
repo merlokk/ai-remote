@@ -18,7 +18,7 @@ REM  With no arguments it runs everything, which is what a pre-commit check
 REM  wants. Arguments are suite filters -- a suite runs when its name contains
 REM  one of them -- which is what a debugging loop wants:
 REM
-REM    scripts\esp32yk-host-tests.cmd                REM all 406 of them
+REM    scripts\esp32yk-host-tests.cmd                REM all 466 of them
 REM    scripts\esp32yk-host-tests.cmd led indicator  REM the light and its ranking
 REM    scripts\esp32yk-host-tests.cmd fido           REM ctaphid + cbor + ctap2
 REM

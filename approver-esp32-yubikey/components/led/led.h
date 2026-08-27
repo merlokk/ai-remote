@@ -14,7 +14,7 @@
 //     deleting `indicator` must leave a working LED.
 //
 // **Why a task at all.** Two of the six rhythms are time-varying and one of them
-// has sixty steps; the alternative is every caller re-asserting the colour on a
+// has a hundred and eighty steps; the alternative is every caller re-asserting the colour on a
 // timer of its own, which is five timers where one will do. The task is cheap
 // because `Animator::FrameAt` tells it when the next change is due — a solid
 // colour wakes it once a second, a beacon twice every two seconds, and only the

@@ -11,6 +11,7 @@
 //     tick, and an animator without that rule freezes a breath at its first step
 //     and a beacon permanently on.
 
+#include <cmath>
 #include <cstring>
 
 #include "led_frames.h"
@@ -206,7 +207,92 @@ void test_led_breathe_walks_the_ramp_and_reaches_both_ends(void) {
         if (frame.g > high) high = frame.g;
     }
     TEST_ASSERT_EQUAL_UINT8_MESSAGE(0, low, "the breath never reaches dark");
-    TEST_ASSERT_TRUE_MESSAGE(high > 200, "the breath never reaches bright");
+    // **Exactly the ceiling, not nearly it.** A breath is the operator's
+    // brightness setting swept from off to that setting and back, so the top of
+    // the sweep has to be the same number a solid frame would show — otherwise
+    // `config set led 15` means one thing when the device is idle and another
+    // when it is not.
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(255, high, "the breath never reaches the ceiling");
+}
+
+// **The regression test for a breath that looked like a switch.** The ramp is a
+// duty cycle and the eye reads roughly its cube root, so a table that walks
+// *duty* evenly — or worse, walks it along the perceptual curve instead of its
+// inverse, which is what this firmware shipped first — spends one step getting to
+// most of its apparent brightness and the remaining four seconds going nowhere.
+// What it looked like on the desk: a snap to full, eight seconds of sitting there,
+// and a gradient visible only at the very bottom.
+//
+// So the property under test is not the table's shape, which looks wrong on
+// purpose (§10.17.3). It is that **apparent** brightness moves by about the same
+// amount at every step, measured with the same model the table was generated
+// from — CIE L\*, including its linear segment near black, which a bare `cbrt`
+// gets badly wrong exactly where this table spends half its entries.
+double Lstar(uint8_t duty) {
+    const double y = duty / 255.0;
+    return y <= 0.008856 ? 903.3 * y : 116.0 * std::cbrt(y) - 16.0;
+}
+
+void test_led_breathe_is_linear_in_what_the_eye_sees(void) {
+    const size_t half = led::kBreathSteps / 2;
+    // An even sweep is 100 / 89 = 1.12 L\* a step. The budget is wider than that
+    // because the bottom of the travel is quantisation-limited rather than
+    // curve-limited: one duty level out of 255 is 3.5 L\* down there, and no
+    // 8-bit part can do better. What it still excludes by a factor of twelve is
+    // the table this replaced, whose *first* step was 62.8.
+    const double budget = 5.0;
+
+    double previous = 0.0;
+    for (size_t step = 1; step < half; step++) {
+        const double seen = Lstar(led::kBreathRamp[step]);
+        TEST_ASSERT_TRUE_MESSAGE(seen >= previous, "the rising half is not monotone");
+        TEST_ASSERT_TRUE_MESSAGE(seen - previous <= budget,
+                                 "one step of the breath is a visible jump");
+        previous = seen;
+    }
+    TEST_ASSERT_TRUE_MESSAGE(previous > 99.0, "the rising half does not reach the top");
+
+    // And it is symmetric: what goes up comes back down the same way, so the
+    // breath has no fast edge on either side.
+    for (size_t step = 0; step < half; step++) {
+        TEST_ASSERT_EQUAL_UINT8_MESSAGE(led::kBreathRamp[step],
+                                        led::kBreathRamp[led::kBreathSteps - 1 - step],
+                                        "the breath is not symmetric");
+    }
+}
+
+// The halfway point of the travel is the shortest statement of the same bug: half
+// way through the sweep the emitter should look about half as bright, which on a
+// linear-duty part is well under a quarter of full duty. The table this replaced
+// was at 216 of 255 here — 94 % of the way there, a quarter of the way in.
+void test_led_breathe_at_half_travel_looks_half_bright(void) {
+    const uint8_t mid = led::kBreathRamp[led::kBreathSteps / 4];
+    TEST_ASSERT_TRUE_MESSAGE(mid > 30 && mid < 70, "half way up the breath is not half bright");
+}
+
+// A breath under the idle ceiling is where the two divisions used to compound:
+// scaling to 8 % and *then* applying the ramp rounds twice, and the second
+// rounding lands on a curve whose bottom half is one duty level wide. The whole
+// sweep still has to be a sweep — several distinct levels, not on and off.
+void test_led_breathe_at_the_idle_ceiling_is_still_a_sweep(void) {
+    led::Animator a;
+    a.Set(led::colour::kGreen, led::Effect::kBreathe, 8, 0);
+
+    bool seen[256] = {};
+    uint32_t next = 0;
+    size_t distinct = 0;
+    for (size_t step = 0; step < led::kBreathSteps; step++) {
+        const uint8_t g = a.FrameAt(static_cast<uint32_t>(step) * led::kBreathStepMs, &next).g;
+        if (!seen[g]) {
+            seen[g] = true;
+            distinct++;
+        }
+    }
+    TEST_ASSERT_TRUE_MESSAGE(distinct >= 15, "the idle breath is not a sweep");
+    TEST_ASSERT_TRUE_MESSAGE(seen[0], "the idle breath never reaches dark");
+    // 8 % of 255, which is what a solid frame at the same ceiling shows.
+    TEST_ASSERT_TRUE_MESSAGE(seen[led::Scale(led::colour::kGreen, 8).g],
+                             "the idle breath never reaches its own ceiling");
 }
 
 void test_led_an_override_expires_and_the_state_underneath_comes_back(void) {
@@ -315,6 +401,9 @@ void RegisterLedTests(void) {
     RUN_TEST(test_led_re_asserting_the_same_state_does_not_restart_the_phase);
     RUN_TEST(test_led_a_changed_state_does_restart_the_phase);
     RUN_TEST(test_led_breathe_walks_the_ramp_and_reaches_both_ends);
+    RUN_TEST(test_led_breathe_is_linear_in_what_the_eye_sees);
+    RUN_TEST(test_led_breathe_at_half_travel_looks_half_bright);
+    RUN_TEST(test_led_breathe_at_the_idle_ceiling_is_still_a_sweep);
     RUN_TEST(test_led_an_override_expires_and_the_state_underneath_comes_back);
     RUN_TEST(test_led_a_state_change_under_a_running_override_is_what_it_falls_back_to);
     RUN_TEST(test_led_an_override_can_be_ended_early);

@@ -35,6 +35,15 @@ constexpr uint8_t Clamp255(int value) {
     return static_cast<uint8_t>(value);
 }
 
+// One channel of one breath frame: the colour's own value, the operator's
+// ceiling and the ramp's position, divided once and **rounded** rather than
+// truncated. The rounding is worth a word — truncation biases every level down,
+// which at the bottom of the travel is the difference between a step that is dim
+// and a step that is off.
+constexpr uint8_t BreathLevel(uint8_t channel, int percent, int level) {
+    return Clamp255((channel * percent * level + 12750) / 25500);
+}
+
 // bits -> the inverted-UART character that spells them (§10.17.1).
 constexpr uint8_t kEncode2Bit[4] = {0x37, 0x07, 0x34, 0x04};
 
@@ -47,16 +56,34 @@ void EncodeByte(uint8_t value, uint8_t *out) {
 
 }  // namespace
 
-// Sixty steps up and back down, from the house firmware of §10.14.4. The zero at
-// each end is what makes the breath actually reach dark rather than hovering
-// just above it, and the plateau in the middle is the curve, not a typo.
+// Ninety steps up and the same ninety back down — the duty cycle that makes
+// **perceived** lightness walk from 0 to 100 in a straight line, generated from
+// the CIE inverse in `led_frames.h`'s comment rather than hand-tuned.
+//
+// Read it as a shape and it looks wrong, which is the point: the numbers crowd
+// the bottom because that is where the eye's resolution is. The zero at each end
+// makes the breath actually reach dark rather than hovering just above it, and
+// the 255 at the top makes it actually reach the operator's ceiling — the two
+// ends of `config set led`, neither of them approximated.
 const uint8_t kBreathRamp[kBreathSteps] = {
-    0,   80,  101, 115, 127, 137, 145, 153, 159, 166,  //
-    172, 177, 182, 187, 192, 196, 200, 205, 208, 212,  //
-    216, 219, 223, 226, 229, 232, 235, 238, 241, 245,  //
-    245, 241, 238, 235, 232, 229, 226, 223, 219, 216,  //
-    212, 208, 205, 200, 196, 192, 187, 182, 177, 172,  //
-    166, 159, 153, 145, 137, 127, 115, 101, 80,  0};
+      0,   0,   1,   1,   1,   2,   2,   2,   3,   3,  //
+      3,   4,   4,   5,   5,   6,   6,   7,   8,   9,  //
+      9,  10,  11,  12,  13,  14,  15,  16,  17,  19,  //
+     20,  21,  23,  24,  26,  28,  29,  31,  33,  35,  //
+     37,  39,  41,  43,  46,  48,  51,  53,  56,  59,  //
+     61,  64,  67,  70,  74,  77,  80,  84,  87,  91,  //
+     95,  99, 103, 107, 111, 115, 120, 124, 129, 134,  //
+    139, 144, 149, 154, 159, 165, 170, 176, 182, 188,  //
+    194, 200, 207, 213, 220, 226, 233, 240, 248, 255,  //
+    255, 248, 240, 233, 226, 220, 213, 207, 200, 194,  //
+    188, 182, 176, 170, 165, 159, 154, 149, 144, 139,  //
+    134, 129, 124, 120, 115, 111, 107, 103,  99,  95,  //
+     91,  87,  84,  80,  77,  74,  70,  67,  64,  61,  //
+     59,  56,  53,  51,  48,  46,  43,  41,  39,  37,  //
+     35,  33,  31,  29,  28,  26,  24,  23,  21,  20,  //
+     19,  17,  16,  15,  14,  13,  12,  11,  10,   9,  //
+      9,   8,   7,   6,   6,   5,   5,   4,   4,   3,  //
+      3,   3,   2,   2,   2,   1,   1,   1,   0,   0};
 
 const char *EffectName(Effect effect) {
     switch (effect) {
@@ -144,13 +171,19 @@ Rgb Animator::FrameAt(uint32_t now_ms, uint32_t *next_ms) {
     if (effect == Effect::kBreathe) {
         const uint32_t elapsed = now_ms - phase_at_ms_;
         const size_t step = (elapsed / kBreathStepMs) % kBreathSteps;
-        // The ramp is 0..245 of the *scaled* colour, so the operator's ceiling
-        // and the perceptual curve compose rather than fight: `percent` says how
-        // bright this may ever be, the ramp says how far through that it is now.
-        const Rgb ceiling = Scale(colour, percent);
-        frame = Rgb{Clamp255(ceiling.r * kBreathRamp[step] / 255),
-                    Clamp255(ceiling.g * kBreathRamp[step] / 255),
-                    Clamp255(ceiling.b * kBreathRamp[step] / 255)};
+        // The ramp is 0..255 of the operator's ceiling, so the two compose rather
+        // than fight: `percent` says how bright this may ever be, the ramp says
+        // how far through that it is now.
+        //
+        // **One multiply, not `Scale` and then another** — and that is not tidying.
+        // Rounding to eight bits twice throws away the low end of a curve whose
+        // low end is the whole point: at the 8 % idle ceiling the whole breath
+        // lives in twenty duty levels, and half of them are in the bottom quarter
+        // of the travel. Combining the two divisions keeps them.
+        const int p = percent > 100 ? 100 : percent;
+        const int level = kBreathRamp[step];
+        frame = Rgb{BreathLevel(colour.r, p, level), BreathLevel(colour.g, p, level),
+                    BreathLevel(colour.b, p, level)};
         next = kBreathStepMs - (elapsed % kBreathStepMs);
     } else if (effect == Effect::kSolid) {
         frame = Scale(colour, percent);

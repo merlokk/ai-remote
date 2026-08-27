@@ -95,9 +95,13 @@ that this project borrows shapes from — settled answers to problems this one m
 again, rather than any code that is linked or vendored here. On this board it
 contributed something concrete rather than a shape:
 **the whole WS2812-over-UART trick** in §10.17.3, numbers and all — the
-baud rate, the six-bit frame, the inversion, the four-character table and the
-sixty-step Weber–Fechner breath. Those were chosen against a real emitter on a real
-desk, and re-deriving them from nothing would have been re-deriving them worse.
+baud rate, the six-bit frame, the inversion, the four-character table and the four
+blink rates. Those were chosen against a real emitter on a real desk, and
+re-deriving them from nothing would have been re-deriving them worse.
+
+**One number came across and turned out to be wrong here, and §10.17.5 is the
+post-mortem**: the breath's sixty-step ramp, which was the perceptual curve where
+it needed the curve's *inverse*. Its nine-second period was right and was kept.
 
 ## 10.15 The settings file
 
