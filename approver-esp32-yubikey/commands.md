@@ -208,6 +208,7 @@ enrolled   no — run 'key enrol' with a key plugged in
 gate       0 asked, 0 approved, 0 timed out
 cable      0 attached, 0 detached, 0 claimed, 0 rejected
 exchanges  0 total, 0 timed out, 0 framing, 0 key errors, 0 transfer
+transfers  0 reclaimed, 0 stuck, 0 busy waits
 ```
 With an enrolment there is one more line, and it is the important one:
 ```
@@ -219,6 +220,15 @@ seconds instead of by watching approvals silently fail.
 
 A `suspicious` line appears only when it is not zero — assertions that did not
 verify, and credentials that were not the enrolled one. Neither is ever routine.
+
+The `transfers` line is the USB transfer lifecycle (§10.18.4), and only one of the
+three is meant to move: **`reclaimed`** is a queued transfer taken back off an
+endpoint because its wait ran out, which costs nothing and climbs by about one per
+exchange that timed out. **`stuck`** means a transfer never came back and that
+endpoint is finished until the key is unplugged — it has never been anything but
+zero. **`busy waits`** counts how often a key was found holding a stale
+transaction from a previous boot and asked again rather than written off; anything
+above zero means somebody reset the board while the key was waiting for a finger.
 
 ### `key info`
 `authenticatorGetInfo`. No touch needed.

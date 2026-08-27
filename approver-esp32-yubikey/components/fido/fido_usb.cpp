@@ -30,6 +30,26 @@ namespace {
 constexpr uint32_t kDrainMs = 1000;
 constexpr uint32_t kDrainReadMs = 50;
 
+// How long to wait for a cancelled transfer's completion after flushing the
+// endpoint it was queued on. The cancellation arrives the ordinary way — a
+// completion callback on the client task — so this is a task handoff rather than
+// anything on the bus, and 200 ms is three orders of magnitude more than it
+// needs.
+constexpr uint32_t kReclaimMs = 200;
+
+// The same job on the one task that may not wait for that callback, because it
+// is the task that delivers it: `CloseDevice` pumps its own event queue instead.
+// Twenty rounds of 10 ms is the same ceiling expressed the other way.
+constexpr int kCloseDrainRounds = 20;
+
+// How long to leave a key that answered `CHANNEL_BUSY` before asking it again,
+// and how often the caller's cancel hook is offered while waiting. §10.18.4 has
+// the measurement these are sized against: the stale transaction is a
+// user-presence wait and expires about 34 s after it started, so what matters is
+// that the retry is cheap and cancellable rather than fast.
+constexpr uint32_t kBusyRetryMs = 500;
+constexpr uint32_t kBusyPollMs = 50;
+
 
 constexpr const char *TAG = "fido-usb";
 
@@ -74,6 +94,20 @@ struct Runtime {
 
     usb_transfer_t *transfer_in = nullptr;
     usb_transfer_t *transfer_out = nullptr;
+
+    // **Whether the driver still owns each transfer** — the one fact this file
+    // used not to track, and the one whose absence let a timed-out read poison
+    // everything after it. A queued `usb_transfer_t` may not be submitted again
+    // (`usb_host_transfer_submit` answers `ESP_ERR_NOT_FINISHED`), may not be read
+    // out of, and may not be freed: `usb_host_transfer_free`'s contract says so in
+    // one line, and the host controller writes into that buffer when the transfer
+    // finally completes.
+    //
+    // Set by whoever submits, cleared by the completion callback, and `volatile`
+    // for the same reason `want_open` below is: written on one task and read on
+    // another. `Reclaim` is the only thing that ends a transfer early.
+    volatile bool in_flight_in = false;
+    volatile bool in_flight_out = false;
 
     // Given by each transfer's completion callback, taken by `Exchange`.
     SemaphoreHandle_t in_done = nullptr;
@@ -194,31 +228,129 @@ bool FindFidoInterface(const usb_config_desc_t *config, uint8_t *interface_numbe
 //
 // The rule that does still apply is the library's own: do not block in here.
 // A give does not.
+//
+// **The flag is cleared here and given after**, in that order. A waiter that has
+// taken the semaphore is then guaranteed to see the transfer as its own, which is
+// what makes the flag rather than the semaphore the authority on ownership — the
+// semaphore also carries `CloseDevice`'s wake-up give, which no transfer produced.
 void TransferInDone(usb_transfer_t *transfer) {
     (void)transfer;
+    runtime.in_flight_in = false;
     xSemaphoreGive(runtime.in_done);
 }
 
 void TransferOutDone(usb_transfer_t *transfer) {
     (void)transfer;
+    runtime.in_flight_out = false;
     xSemaphoreGive(runtime.out_done);
 }
 
-void CloseDevice() {
-    if (runtime.transfer_in != nullptr) {
-        usb_host_transfer_free(runtime.transfer_in);
-        runtime.transfer_in = nullptr;
+// Halt an endpoint, cancel whatever is queued on it, and un-halt it. Return
+// values are deliberately not logged: on a key that has just been unplugged all
+// three answer `ESP_ERR_INVALID_STATE` and none of it is actionable. What is
+// actionable is whether the transfer came back, which is `Reclaim`'s line.
+void ResetEndpoint(uint8_t endpoint) {
+    if (runtime.device == nullptr || endpoint == 0) {
+        return;
     }
-    if (runtime.transfer_out != nullptr) {
+    usb_host_endpoint_halt(runtime.device, endpoint);
+    usb_host_endpoint_flush(runtime.device, endpoint);
+    usb_host_endpoint_clear(runtime.device, endpoint);
+}
+
+// **Take a transfer back from the driver so that it can be used again**, and the
+// fix for the weakness this file used to only document.
+//
+// A read whose wait ran out returned with its IN transfer still queued. Every
+// submit on that endpoint afterwards answered `ESP_ERR_NOT_FINISHED`, so
+// `Transact`'s read loop had nothing left to block on and spun; `CloseDevice`,
+// which an unplugged key reaches, freed a buffer the controller still owned.
+//
+// The documented way to end a queued transfer is through the endpoint rather than
+// the transfer: halt the pipe, flush it — which cancels what is queued — and clear
+// the halt. The cancellation is then delivered as an ordinary completion with
+// `USB_TRANSFER_STATUS_CANCELED`, so this waits for it before calling the
+// transfer ours.
+//
+// **A flush can race a real completion, and the caller has to care.** If the key
+// answered in the moment between the wait expiring and the halt going out, the
+// transfer completed normally and the packet in it is genuinely ours. So this
+// reports only whether the transfer is safe to touch; the status is the caller's
+// to read.
+bool Reclaim(uint8_t endpoint, SemaphoreHandle_t done, volatile bool *in_flight) {
+    if (!*in_flight) {
+        return true;
+    }
+    if (runtime.device == nullptr) {
+        // Nothing to halt and nobody left to answer. The library cancels a gone
+        // device's transfers itself; what cannot be done from here is *prove* it,
+        // so the transfer stays marked and is never touched again.
+        return false;
+    }
+
+    ResetEndpoint(endpoint);
+    if (xSemaphoreTake(done, pdMS_TO_TICKS(kReclaimMs)) != pdTRUE || *in_flight) {
+        // Re-using this transfer now is the one thing that must not happen, so it
+        // stays marked in flight — which makes this endpoint unusable until the
+        // key is unplugged. Loud, because it has never been seen.
+        runtime.stats.reclaims_failed++;
+        ESP_LOGE(TAG, "endpoint 0x%02x did not give its transfer back", endpoint);
+        return false;
+    }
+    runtime.stats.reclaims++;
+    return true;
+}
+
+// **Nothing here may be handed back while the driver still owns it**, and that
+// applies to all three things this releases. `usb_host_transfer_free` forbids an
+// in-flight transfer in one line of its header; `usb_host_interface_release`
+// cannot delete a pipe with URBs queued on it and answers `ESP_ERR_INVALID_STATE`
+// instead; `usb_host_device_close` then fails behind it. This used to do all three
+// unconditionally and ignore every return value, which on the path that reaches it
+// most — a key pulled out mid-read — freed a buffer the host controller was still
+// going to write into.
+//
+// **It runs on the client task, which is the task that delivers completion
+// callbacks**, so it cannot block on a semaphore waiting for one: that would be
+// waiting for itself. It pumps its own event queue instead, which is the same wait
+// spelled the only way it can be spelled from here.
+void CloseDevice() {
+    ResetEndpoint(runtime.ep_in.address);
+    ResetEndpoint(runtime.ep_out.address);
+    for (int round = 0;
+         round < kCloseDrainRounds && (runtime.in_flight_in || runtime.in_flight_out); round++) {
+        usb_host_client_handle_events(runtime.client, pdMS_TO_TICKS(10));
+    }
+
+    // **A transfer that never came back is kept, not freed.** The pointers stay, so
+    // the next `OpenDevice` re-uses these two rather than allocating a second pair —
+    // §10.14.1's allowance is two 64-byte buffers at a device boundary, and handing
+    // them back while the controller owns them is the one outcome worse than
+    // holding on to them.
+    if (runtime.in_flight_in || runtime.in_flight_out) {
+        runtime.stats.reclaims_failed++;
+        ESP_LOGE(TAG, "a transfer is still in flight; keeping its buffer rather than freeing "
+                      "one the controller still owns");
+    } else {
+        usb_host_transfer_free(runtime.transfer_in);
         usb_host_transfer_free(runtime.transfer_out);
+        runtime.transfer_in = nullptr;
         runtime.transfer_out = nullptr;
     }
+
     if (runtime.claimed) {
-        usb_host_interface_release(runtime.client, runtime.device, runtime.interface_number);
+        const esp_err_t err =
+            usb_host_interface_release(runtime.client, runtime.device, runtime.interface_number);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "interface_release: %s", esp_err_to_name(err));
+        }
         runtime.claimed = false;
     }
     if (runtime.device != nullptr) {
-        usb_host_device_close(runtime.client, runtime.device);
+        const esp_err_t err = usb_host_device_close(runtime.client, runtime.device);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "device_close: %s", esp_err_to_name(err));
+        }
         runtime.device = nullptr;
     }
     runtime.info = DeviceInfo{};
@@ -272,9 +404,13 @@ void OpenDevice(uint8_t address) {
     runtime.ep_out = ep_out;
 
     // §10.18.4: the one allocation this component makes, at a device boundary,
-    // freed when the key is unplugged. Never per exchange.
-    if (usb_host_transfer_alloc(ctaphid::kPacketSize, 0, &runtime.transfer_in) != ESP_OK ||
-        usb_host_transfer_alloc(ctaphid::kPacketSize, 0, &runtime.transfer_out) != ESP_OK) {
+    // freed when the key is unplugged. Never per exchange — and **not repeated**
+    // when the last close had to keep a buffer it could not safely free, which is
+    // what the null checks are for.
+    if ((runtime.transfer_in == nullptr &&
+         usb_host_transfer_alloc(ctaphid::kPacketSize, 0, &runtime.transfer_in) != ESP_OK) ||
+        (runtime.transfer_out == nullptr &&
+         usb_host_transfer_alloc(ctaphid::kPacketSize, 0, &runtime.transfer_out) != ESP_OK)) {
         ESP_LOGE(TAG, "no memory for the two 64-byte transfers");
         CloseDevice();
         return;
@@ -366,6 +502,13 @@ bool WritePacket(const uint8_t *packet) {
     if (!runtime.info.present || runtime.transfer_out == nullptr) {
         return false;
     }
+    // A previous write that ran out of time has to be taken back before this one
+    // can fill the same buffer in.
+    if (!Reclaim(runtime.ep_out.address, runtime.out_done, &runtime.in_flight_out)) {
+        runtime.stats.transfer_errors++;
+        return false;
+    }
+
     std::memcpy(runtime.transfer_out->data_buffer, packet, ctaphid::kPacketSize);
     runtime.transfer_out->num_bytes = ctaphid::kPacketSize;
     runtime.transfer_out->device_handle = runtime.device;
@@ -374,24 +517,44 @@ bool WritePacket(const uint8_t *packet) {
     runtime.transfer_out->context = nullptr;
 
     xSemaphoreTake(runtime.out_done, 0);  // drain a stale give
+    // Marked before the submit, because the callback can fire the instant after it.
+    runtime.in_flight_out = true;
     if (usb_host_transfer_submit(runtime.transfer_out) != ESP_OK) {
+        runtime.in_flight_out = false;
         runtime.stats.transfer_errors++;
         return false;
     }
     if (xSemaphoreTake(runtime.out_done, pdMS_TO_TICKS(kTransferTimeoutMs)) != pdTRUE) {
         runtime.stats.transfer_errors++;
+        Reclaim(runtime.ep_out.address, runtime.out_done, &runtime.in_flight_out);
         return false;
     }
     return runtime.info.present && runtime.transfer_out->status == USB_TRANSFER_STATUS_COMPLETED;
 }
 
-// One 64-byte report in. `deadline_ms` is the whole exchange's, not this
-// packet's — an IN that returns nothing is retried until the exchange gives up,
-// which is how a key that is waiting for a fingertip is waited on.
-bool ReadPacket(uint8_t *packet, uint32_t wait_ms) {
+// What one read attempt produced. **Three outcomes rather than two, and the third
+// is why this type exists**: "nothing arrived, ask again" and "this endpoint cannot
+// be used" used to be the same `false`, so a caller met a dead endpoint by asking
+// again immediately — for the whole remaining budget of the exchange, with nothing
+// left to block on. A read loop that cannot block is a busy loop.
+enum class Read : uint8_t {
+    kPacket,   // 64 bytes, in `packet`
+    kNothing,  // the wait expired, the transfer is ours again — ask again
+    kBroken,   // the endpoint is unusable; the exchange is over
+};
+
+// One 64-byte report in. `wait_ms` is this attempt's, not the exchange's — an IN
+// that returns nothing is asked again until the exchange gives up, which is how a
+// key waiting for a fingertip is waited on.
+Read ReadPacket(uint8_t *packet, uint32_t wait_ms) {
     if (!runtime.info.present || runtime.transfer_in == nullptr) {
-        return false;
+        return Read::kBroken;
     }
+    if (!Reclaim(runtime.ep_in.address, runtime.in_done, &runtime.in_flight_in)) {
+        runtime.stats.transfer_errors++;
+        return Read::kBroken;
+    }
+
     runtime.transfer_in->num_bytes = ctaphid::kPacketSize;
     runtime.transfer_in->device_handle = runtime.device;
     runtime.transfer_in->bEndpointAddress = runtime.ep_in.address;
@@ -399,22 +562,46 @@ bool ReadPacket(uint8_t *packet, uint32_t wait_ms) {
     runtime.transfer_in->context = nullptr;
 
     xSemaphoreTake(runtime.in_done, 0);
+    runtime.in_flight_in = true;
     if (usb_host_transfer_submit(runtime.transfer_in) != ESP_OK) {
+        runtime.in_flight_in = false;
         runtime.stats.transfer_errors++;
-        return false;
+        return Read::kBroken;
     }
+
     if (xSemaphoreTake(runtime.in_done, pdMS_TO_TICKS(wait_ms)) != pdTRUE) {
-        return false;
+        // **The wait ran out with the transfer still queued** — the state this
+        // function used to return in, and the whole reason `Reclaim` exists. Take it
+        // back before anybody submits it again.
+        if (!Reclaim(runtime.ep_in.address, runtime.in_done, &runtime.in_flight_in)) {
+            return Read::kBroken;
+        }
+        // And then fall through rather than return: the flush may have raced a real
+        // completion, and a key that answered in that moment has handed us a genuine
+        // packet. Throwing it away here would lose a keepalive, or an assertion
+        // somebody had just touched the key for. The status decides.
     }
+
     if (!runtime.info.present) {
-        return false;
+        return Read::kBroken;
     }
-    if (runtime.transfer_in->status != USB_TRANSFER_STATUS_COMPLETED ||
-        runtime.transfer_in->actual_num_bytes < static_cast<int>(ctaphid::kPacketSize)) {
-        return false;
+    if (runtime.transfer_in->status != USB_TRANSFER_STATUS_COMPLETED) {
+        if (runtime.transfer_in->status != USB_TRANSFER_STATUS_CANCELED) {
+            // A transfer error leaves the pipe halted, so clearing it here is what
+            // lets the next read happen at all. The delay is an anti-spin guard and
+            // nothing else: a fault that resolved instantly and repeatedly would
+            // otherwise be a read loop with no wait in it.
+            runtime.stats.transfer_errors++;
+            ResetEndpoint(runtime.ep_in.address);
+            vTaskDelay(pdMS_TO_TICKS(2));
+        }
+        return Read::kNothing;
+    }
+    if (runtime.transfer_in->actual_num_bytes < static_cast<int>(ctaphid::kPacketSize)) {
+        return Read::kNothing;
     }
     std::memcpy(packet, runtime.transfer_in->data_buffer, ctaphid::kPacketSize);
-    return true;
+    return Read::kPacket;
 }
 
 // **A cancelled request still gets an answer, and somebody has to collect it.**
@@ -442,7 +629,11 @@ void DrainAfterCancel(uint32_t cid) {
     const uint32_t deadline = NowMs() + kDrainMs;
     uint8_t packet[ctaphid::kPacketSize];
     while (static_cast<int32_t>(deadline - NowMs()) > 0) {
-        if (!ReadPacket(packet, kDrainReadMs)) {
+        const Read read = ReadPacket(packet, kDrainReadMs);
+        if (read == Read::kBroken) {
+            return;
+        }
+        if (read == Read::kNothing) {
             if (!runtime.info.present) {
                 return;
             }
@@ -502,6 +693,24 @@ esp_err_t Transact(uint32_t cid, uint8_t command, const uint8_t *request, size_t
         const int32_t left = static_cast<int32_t>(deadline - NowMs());
         if (left <= 0) {
             runtime.stats.timeouts++;
+            // **Tell the key to forget it before walking away**, which this used not
+            // to do. A key holds one transaction at a time; a request abandoned on
+            // its deadline goes on holding that slot for the rest of its
+            // user-presence window, so *everything after it* answers
+            // `CHANNEL_BUSY` — the same wedge a reset causes (§10.18.4), except
+            // self-inflicted, and this half is avoidable: the channel is still ours,
+            // so there is somewhere to send the cancel.
+            //
+            // Found by the retry loop this went in with. A `key test` nobody touched
+            // timed out, and the next command on the console spent its whole budget
+            // retrying against a key that was busy because of us.
+            //
+            // The cancel and its drain cost up to `kDrainMs` past the deadline. That
+            // is cleanup on a path that has already failed, and the alternative is a
+            // key that answers nothing for half a minute.
+            if (cid != ctaphid::kBroadcastCid) {
+                CancelAndDrain(cid);
+            }
             *fault = Fault::kTimeout;
             return ESP_ERR_TIMEOUT;
         }
@@ -509,21 +718,34 @@ esp_err_t Transact(uint32_t cid, uint8_t command, const uint8_t *request, size_t
         // cancel hook is offered the chance to fire even on a key that has gone
         // quiet.
         //
-        // **300 ms is a floor as well as a ceiling, and that is worth knowing.**
-        // Shortening it looks free and is not: `ReadPacket` submits a fresh IN
-        // transfer on every call and abandons the previous one when it times out, so
-        // a wait short enough to expire before the key answers re-submits a transfer
-        // that is still queued. Tried at 10 ms — to poll the deny button faster —
-        // this became `the key could not be reached` sixty milliseconds into every
-        // exchange, with the key never lighting up. Whatever needs to be sampled
-        // faster than this has to be sampled somewhere else; `buttons` grew a poller
-        // of its own for exactly that reason.
+        // **300 ms used to be a correctness floor and is now only a cost one**,
+        // which is worth recording because the reason it was a floor is gone.
+        // `ReadPacket` abandoned its IN transfer when the wait expired and submitted
+        // a fresh one on the next call, so a wait short enough to expire before the
+        // key answered re-submitted a transfer that was still queued. Tried at
+        // 10 ms — to poll the deny button faster — that became `the key could not be
+        // reached` sixty milliseconds into every exchange, with the key never
+        // lighting up.
+        //
+        // `Reclaim` fixed that, and shortening this is now merely expensive rather
+        // than wrong: every expiry costs a halt, a flush, a clear and a task handoff
+        // on a pipe that was working. 300 ms it stays — and whatever needs sampling
+        // faster than this is still sampled somewhere else, which is why `buttons`
+        // has a poller of its own.
         uint32_t wait = static_cast<uint32_t>(left);
         if (wait > 300) {
             wait = 300;
         }
 
-        if (!ReadPacket(packet, wait)) {
+        const Read read = ReadPacket(packet, wait);
+        if (read == Read::kBroken) {
+            // The endpoint could not be used, or could not be taken back from the
+            // driver. There is nothing left to wait for, and asking again is what
+            // used to turn this loop into a busy wait.
+            *fault = runtime.info.present ? Fault::kTimeout : Fault::kUnplugged;
+            return ESP_FAIL;
+        }
+        if (read == Read::kNothing) {
             if (!runtime.info.present) {
                 *fault = Fault::kUnplugged;
                 return ESP_FAIL;
@@ -570,38 +792,13 @@ esp_err_t Transact(uint32_t cid, uint8_t command, const uint8_t *request, size_t
             if (key_error != nullptr) {
                 *key_error = code;
             }
-            ESP_LOGW(TAG, "the key answered CTAPHID_ERROR %02x (%s)", code,
-                     ctaphid::ErrorName(code));
-            // **One of these has a fix and it is not on this device**, so it gets its
-            // own sentence rather than being filed under "the key could not be
-            // reached". `CHANNEL_BUSY` means the key is still holding a transaction
-            // on *another* channel — most often this board's own, from before a
-            // reset: reflash while a request is waiting for a fingertip and the key
-            // goes on waiting for a channel that no longer has anybody on it. It
-            // frees itself when its own user-presence timeout expires, and unplugging
-            // it is instant. Two runs were spent chasing this as a firmware bug
-            // because the log said the key was unreachable.
-            if (code == ctaphid::kErrChannelBusy) {
-                // **Measured, so the advice can be specific.** The key holds one
-                // transaction at a time across every channel, and the way it ends up
-                // holding a dead one is a reset taken while a request was waiting for
-                // a fingertip: the channel that asked died with the previous boot, so
-                // there is nothing left to send `CTAPHID_CANCEL` to.
-                //
-                // It is not permanent. The stale transaction is a user-presence wait
-                // and it expires — **about 34 seconds from when it started**, timed on
-                // this key (busy at 8.4 s into a run, free at 42.9 s). So both cures
-                // work and one is instant.
-                //
-                // Waiting it out in firmware was tried and is **not** here: a retry
-                // loop in `Exchange` recovered correctly and also rebooted the board
-                // about one time in two, ~1.3 s in. The likely cause is this file's
-                // own known weakness — `ReadPacket` re-submits a transfer that may
-                // still be in flight — and until that is sorted out, a device that
-                // says what to do beats a device that restarts. `status.md` lists it.
-                ESP_LOGW(TAG, "the key is mid-transaction on another channel - it was probably "
-                              "left waiting by a reset. unplug it and plug it back in, or leave "
-                              "it about 30 s to expire on its own");
+            // **`CHANNEL_BUSY` is logged by `Exchange` and not here**, because
+            // `Exchange` now waits it out: this line would otherwise be sixty
+            // identical warnings at 500 ms apart while the retry does its job.
+            // Everything else the key can answer is a one-off and belongs here.
+            if (code != ctaphid::kErrChannelBusy) {
+                ESP_LOGW(TAG, "the key answered CTAPHID_ERROR %02x (%s)", code,
+                         ctaphid::ErrorName(code));
             }
             *fault = Fault::kKeyError;
             return ESP_FAIL;
@@ -626,16 +823,20 @@ esp_err_t Transact(uint32_t cid, uint8_t command, const uint8_t *request, size_t
 }
 
 // Opens a private channel. Called on the first exchange after a key appears.
-bool OpenChannel(Fault *fault) {
+//
+// **`key_error` is the caller's, not a local one**, and that is load-bearing: a key
+// holding a stale transaction refuses `CTAPHID_INIT` with `CHANNEL_BUSY` like
+// anything else, so the code has to reach `Exchange`'s retry rather than being
+// swallowed here.
+bool OpenChannel(Fault *fault, uint8_t *key_error) {
     uint8_t nonce[ctaphid::kNonceSize];
     esp_fill_random(nonce, sizeof(nonce));
 
     uint8_t response[ctaphid::kInitResponseSize + 8];
     size_t length = 0;
-    uint8_t key_error = 0;
     const esp_err_t err =
         Transact(ctaphid::kBroadcastCid, ctaphid::kCmdInit, nonce, sizeof(nonce), response,
-                 sizeof(response), &length, kInitTimeoutMs, nullptr, nullptr, fault, &key_error);
+                 sizeof(response), &length, kInitTimeoutMs, nullptr, nullptr, fault, key_error);
     if (err != ESP_OK) {
         return false;
     }
@@ -654,6 +855,24 @@ bool OpenChannel(Fault *fault) {
     const uint8_t capabilities = response[16];
     ESP_LOGI(TAG, "channel %08lx, CTAP2 %s", static_cast<unsigned long>(runtime.cid),
              (capabilities & static_cast<uint8_t>(ctaphid::kCapCbor)) != 0 ? "yes" : "no");
+    return true;
+}
+
+// Wait between retries without going deaf. The caller's cancel hook is the only
+// way a request that has run out of time on the bus — or a tap on BOOT — can stop
+// the loop above, so it is offered at roughly the keepalive cadence rather than
+// once at the end. False means the wait was cut short: cancelled, or the key left.
+bool BusyWait(uint32_t ms, KeepAlive keep_alive, void *context) {
+    const uint32_t until = NowMs() + ms;
+    while (static_cast<int32_t>(until - NowMs()) > 0) {
+        vTaskDelay(pdMS_TO_TICKS(kBusyPollMs));
+        if (!runtime.info.present) {
+            return false;
+        }
+        if (keep_alive != nullptr && !keep_alive(0, context)) {
+            return false;
+        }
+    }
     return true;
 }
 
@@ -762,17 +981,90 @@ esp_err_t Exchange(uint8_t command, const uint8_t *request, size_t request_lengt
         return ESP_ERR_INVALID_STATE;
     }
 
-    esp_err_t err = ESP_OK;
-    if (runtime.cid == ctaphid::kBroadcastCid) {
-        if (!OpenChannel(fault)) {
-            xSemaphoreGive(runtime.lock);
-            return ESP_FAIL;
+    runtime.stats.exchanges++;
+
+    // **`CHANNEL_BUSY` is the one key error worth waiting out** (§10.18.4). A reset
+    // taken while the key was waiting for a fingertip leaves it holding a
+    // transaction for a channel that died with the previous boot, and there is
+    // nothing left to send `CTAPHID_CANCEL` to. It is not permanent: the stale wait
+    // is a user-presence timeout and expires about 34 s after it started. So the
+    // answer is to keep asking until it does — inside the budget the caller already
+    // gave us, never beyond it, because the caller's budget is a request's deadline
+    // and §10.10 rule 1 says silence is the safe end of one.
+    //
+    // **This is the loop that used to reboot the board about one run in two**, and
+    // what it was tripping over was above it rather than in it: every attempt
+    // re-submitted an IN transfer the host controller still owned, because a read
+    // whose wait expired left it in flight. `Reclaim` is that fix, and this loop is
+    // what it was for.
+    const uint32_t started = NowMs();
+    const uint32_t deadline = started + timeout_ms;
+    esp_err_t err = ESP_FAIL;
+    bool announced = false;
+    bool still_busy = false;
+    for (;;) {
+        const int32_t left = static_cast<int32_t>(deadline - NowMs());
+        if (left <= 0) {
+            // **`still_busy` is deliberately not touched here.** Reaching this means
+            // the budget ran out during a wait between retries, so the last thing
+            // the key said really was `CHANNEL_BUSY` and the message below should
+            // say so. It looks like an oversight and is the opposite of one.
+            runtime.stats.timeouts++;
+            *fault = Fault::kTimeout;
+            err = ESP_ERR_TIMEOUT;
+            break;
+        }
+
+        // A channel of our own, opened lazily. Inside the retry rather than in
+        // front of it, because a busy key refuses `CTAPHID_INIT` too.
+        if (runtime.cid == ctaphid::kBroadcastCid && !OpenChannel(fault, key_error)) {
+            err = ESP_FAIL;
+        } else {
+            err = Transact(runtime.cid, command, request, request_length, response,
+                           response_capacity, response_length, static_cast<uint32_t>(left),
+                           keep_alive, keep_alive_context, fault, key_error);
+        }
+
+        still_busy = err != ESP_OK && *fault == Fault::kKeyError &&
+                     *key_error == ctaphid::kErrChannelBusy;
+        if (!still_busy) {
+            break;
+        }
+
+        runtime.stats.busy_retries++;
+        if (!announced) {
+            announced = true;
+            ESP_LOGW(TAG, "the key is mid-transaction on another channel - it was probably left "
+                          "waiting by a reset. asking again every %u ms until it expires (about "
+                          "30 s from when it started); unplug it and plug it back in if you would "
+                          "rather not wait",
+                     static_cast<unsigned>(kBusyRetryMs));
+        }
+        if (!BusyWait(kBusyRetryMs, keep_alive, keep_alive_context)) {
+            *fault = runtime.info.present ? Fault::kCancelled : Fault::kUnplugged;
+            err = ESP_FAIL;
+            break;
         }
     }
 
-    runtime.stats.exchanges++;
-    err = Transact(runtime.cid, command, request, request_length, response, response_capacity,
-                   response_length, timeout_ms, keep_alive, keep_alive_context, fault, key_error);
+    // **Three endings, not two, and the third is the one worth being careful
+    // about.** A stale transaction that expires hands the request straight on to
+    // the key, which then waits for a fingertip like any other — so an exchange
+    // that recovered and *then* timed out on the finger is not a key that was
+    // still busy, and saying so would send somebody to unplug a key that had
+    // already fixed itself.
+    if (announced) {
+        const unsigned waited = static_cast<unsigned>(NowMs() - started);
+        if (still_busy) {
+            ESP_LOGW(TAG, "the key was still holding its stale transaction after %u ms", waited);
+        } else if (err == ESP_OK) {
+            ESP_LOGI(TAG, "the key freed its stale transaction and answered, %u ms in", waited);
+        } else {
+            ESP_LOGW(TAG, "the key freed its stale transaction, then %s (%u ms in)",
+                     FaultName(*fault), waited);
+        }
+    }
+
     xSemaphoreGive(runtime.lock);
     return err;
 }

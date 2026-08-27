@@ -15,9 +15,10 @@ States, and `written` is the one to watch:
 **As of 2026-08-27 the tables below are almost entirely `runs`**, which they were
 not on the morning of the 26th: the whole of §10.18 was `written` and no security
 key had ever been plugged in. What is left is at the bottom, under **Owed, and
-known**: mostly things needing something that is not on this desk — a second key, a
-hand, a fresh token, a full flash whose price is the enrolment — plus one that is a
-real piece of work, the `CHANNEL_BUSY` retry that rebooted the board.
+known**, and it is now **only** things needing something that is not on this desk:
+a second key, a hand, a fresh token, a full flash whose price is the enrolment. The
+one item that was a real piece of work — the `CHANNEL_BUSY` retry that rebooted the
+board — is done, and the transfer lifecycle it was waiting on is done with it.
 
 ## The device
 
@@ -90,6 +91,11 @@ refused every one of them in three milliseconds among them. They are listed unde
 | `key info` / `key enrol` | **run** | both against the real key |
 | `key test` | **runs** | twice: 7.2 s and 17.1 s, both `approved`, both verified. The seconds are the human walking over |
 | `key selftest` | **runs** | on the chip, against Python's vector, in **661–670 ms** |
+| Transfer ownership (§10.18.4) | **runs** | `Reclaim` — halt, flush, clear, and collect the cancellation — ran on every one of five trials and returned the transfer every time: **`0 stuck`, `0 transfer` errors**. What has *not* been produced is the heavy case, many consecutive reclaims: a YubiKey sends a keepalive every ~100 ms while it waits for a finger, so a 300 ms read almost never expires and the counter climbs about one per timed-out exchange |
+| Waiting out a `CHANNEL_BUSY` key | **runs** | the loop that used to reboot the board about one run in two. **Five repro runs, no reboot**, 21–50 retry rounds each; the key freed its stale transaction on schedule in four of them, and in the fifth — a `key info` with a two-second budget — the retry correctly gave up inside the caller's budget rather than extending it |
+| The self-inflicted wedge | **fixed** | an exchange that ran out of its own deadline used to walk away without cancelling, leaving the key's one transaction slot held for the rest of its user-presence window. On the board: a `key test` nobody touches is now followed by a `key info` that **works** |
+| A touched success through the new read path | **owed** | every exchange above either failed on purpose or timed out with nobody at the desk. An `approved` verdict has not been taken since the transfer rewrite, and that needs a fingertip |
+| Unplug mid-read | **owed** | `CloseDevice`'s teardown order is the second half of the transfer fix and the path it guards is a key pulled out during an exchange. It has not been pulled since |
 | `fido.json` (format 2) | **runs** | written by a real enrolment, and re-read at the next boot into the same `signs as` — including across an `app-flash` |
 | PSA ECDSA verification | **runs** | the DER→raw conversion, against real signatures of 70 **and** 71 bytes — the variable length that made it the part most likely to be wrong first |
 | The registration↔enrolment binding | **partly** | the boot comparison runs against a real registration and stays quiet, which is the right answer. The **stale** path — a registration naming a key that is no longer enrolled — has still never been produced, because that needs a re-enrolment |
@@ -103,7 +109,6 @@ refused every one of them in three milliseconds among them. They are listed unde
 | **An allow from Claude Code itself** | every request so far came from `tools/test_request.py`, which sends the bytes `hook.py` sends. What has not happened is the request arriving from a live session's `PermissionRequest` |
 | **`scripts/esp32yk-approval.cmd`** | the end-to-end script. Everything it would drive now works by hand |
 | **A page served by this board** | everything *behind* the pages now runs on the board — the endpoints, the refusals, the gate, the leak measurement — and the markup is checked from the other side by `tests/test_esp32_web_pages.py`. What is left is the one thing needing a full flash, which costs the enrolment: an actual HTML page over the wire, and a phone doing the first-time setup on it |
-| **Waiting out a `CHANNEL_BUSY` key in firmware** | a reset taken while the key is waiting for a fingertip leaves it holding a transaction for a channel that no longer exists, and everything after that gets `0x06`. It is **not permanent** — measured at about **34 s** from when the stale request started (busy at 8.4 s into a run, free at 42.9 s) — and unplugging the key is instant, so the device says both. A retry loop in `Exchange` was written, recovered correctly, and **rebooted the board about one run in two**, ~1.3 s after the first `0x06`; it is reverted. The suspect is this file's documented weakness — `ReadPacket` re-submits a transfer that may still be in flight — and that is what has to be fixed before the retry comes back |
 
 ## Not built at all
 
@@ -205,6 +210,42 @@ still answers the request it abandoned, with `0x2D`. Nobody drained it, so the d
 was too easily satisfied — a `CTAPHID_KEEPALIVE` is a complete message, so it could
 swallow one, report success and leave the reply where it was. It skips them now.
 
+### Nobody was tracking who owned a USB transfer
+
+Two bugs, one cause, and the first of them had been sitting in the code as a
+*comment* for several sessions: the reason the 300 ms read wait could not be
+shortened.
+
+**A read whose wait ran out abandoned its transfer.** `ReadPacket` submitted a
+fresh IN transfer per call and returned when the wait expired, leaving the previous
+one queued — after which every submit on that endpoint was refused with
+`ESP_ERR_NOT_FINISHED`, the read loop had nothing left to block on, and it spun for
+whatever remained of the exchange's budget. That is what stood between this
+firmware and the `CHANNEL_BUSY` retry, and it is why the retry rebooted the board
+about one run in two, ~1.3 s after the first `0x06`.
+
+**And `CloseDevice` freed transfers the controller still owned**, on the one path
+this component exists to survive — a key pulled out mid-read. It freed both
+buffers, then released the interface and closed the device without looking at
+either return value, though neither can succeed while a pipe still has URBs on it.
+That one was never observed; it was read off the header's own contract, which says
+in one line that a transfer must not be in flight when it is freed.
+
+The fix is that a transfer is ended through its **endpoint** — halt, flush, clear,
+and collect the cancellation — and that ownership is a flag somebody keeps. Two
+details are easy to get wrong and are in §10.18.4: a flush can race a real
+completion, so the packet it produces has to be kept rather than discarded; and
+`CloseDevice` runs on the very task that delivers the completion it is waiting for,
+so it pumps its own queue instead of blocking.
+
+**Then the retry found a third one, which this device was doing to itself.** An
+exchange that ran out of its own deadline walked away without sending
+`CTAPHID_CANCEL`, so the abandoned request held the key's one transaction slot for
+the rest of its user-presence window and everything after it answered `0x06` — the
+reset wedge, self-inflicted, and this half entirely avoidable because the channel
+was still ours. It cancels on its deadline now, the way it already did when the
+keep-alive hook gave up.
+
 ### Lights and readouts that said the wrong thing
 
 None of these stopped a verdict. All of them sent somebody the wrong way.
@@ -226,8 +267,8 @@ None of these stopped a verdict. All of them sent somebody the wrong way.
   when nobody touched it — cost two attempts to read correctly;
 * **`CHANNEL_BUSY` read as "the key could not be reached"**, and two runs went into
   chasing a firmware bug. Reflash the board while a request waits for a fingertip and
-  the key holds a transaction for a channel with nobody on it; unplugging it is the
-  fix, and the log says so now.
+  the key holds a transaction for a channel with nobody on it. The device waits it
+  out now (§10.18.4) and says what it is doing while it does.
 
 ### And one the documents had already promised
 

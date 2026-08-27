@@ -2048,6 +2048,13 @@ int CmdKey(int argc, char **argv) {
                " key errors, %" PRIu32 " transfer\n",
                cable.exchanges, cable.timeouts, cable.protocol_errors, cable.key_errors,
                cable.transfer_errors);
+        // The transfer lifecycle (§10.18.4). `reclaimed` climbing is normal — it is
+        // one per read that waited out its 300 ms while the key thought about it.
+        // The other two are not: `stuck` means an endpoint is finished until the key
+        // is unplugged, and `busy waits` means a key was found holding a stale
+        // transaction and asked again rather than written off.
+        printf("transfers  %" PRIu32 " reclaimed, %" PRIu32 " stuck, %" PRIu32 " busy waits\n",
+               cable.reclaims, cable.reclaims_failed, cable.busy_retries);
         return 0;
     }
 

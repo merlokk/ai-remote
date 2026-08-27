@@ -357,6 +357,120 @@ unplugged** — a one-shot path at a device boundary, which is the same allowanc
 `config.cpp` takes for cJSON and states in the same words. It is not a per-exchange
 allocation and it must never become one.
 
+### Who owns a transfer, and the two bugs that came of not knowing
+
+**The Host Library's rules about a `usb_transfer_t` are all of the form "not while
+the driver has it"**, and this file used to track no such thing. A queued transfer
+may not be submitted again — `usb_host_transfer_submit` answers
+`ESP_ERR_NOT_FINISHED` — may not be read out of, and may not be freed:
+`usb_host_transfer_free`'s own header says so in one line, because the host
+controller writes into that buffer when the transfer finally completes.
+
+Two things followed, and both were real.
+
+**1. A read whose wait ran out abandoned its transfer.** `ReadPacket` submitted a
+fresh IN transfer on every call and simply returned when its wait expired, leaving
+the previous one queued. Every submit on that endpoint afterwards was refused, so
+the read loop had nothing left to block on — and a read loop that cannot block is a
+busy loop, spinning for whatever remained of the exchange's budget. This was
+already written down in the code as the reason the 300 ms read wait could not be
+shortened: tried at 10 ms, it became `the key could not be reached` sixty
+milliseconds into every exchange.
+
+**2. `CloseDevice` freed transfers the controller still owned** — and the path that
+reaches it most is the one this component exists to survive, a key pulled out of
+the port mid-read. It freed both buffers, then released the interface and closed
+the device without looking at either return value, though neither can succeed while
+a pipe still has URBs queued on it.
+
+**The fix is that a transfer is ended through its endpoint, not through itself.**
+`Reclaim` halts the pipe, flushes it — which cancels what is queued — and clears
+the halt; the cancellation then arrives as an ordinary completion with
+`USB_TRANSFER_STATUS_CANCELED`, and `Reclaim` waits for it before calling the
+transfer ours again. Two details are load-bearing:
+
+* **a flush can race a real completion**, so `Reclaim` reports only whether the
+  transfer is *safe to touch* and leaves the status to the caller. A key that
+  answered in the moment between the wait expiring and the halt going out has
+  handed us a genuine packet, and discarding it would lose a keepalive — or an
+  assertion somebody had just touched the key for;
+* **`CloseDevice` runs on the client task, which is the task that delivers
+  completion callbacks**, so it cannot wait on a semaphore for one: that is waiting
+  for itself. It pumps its own event queue instead, and a transfer that still does
+  not come back is **kept rather than freed** — the pointers stay and the next
+  device re-uses them, because handing a buffer back while the controller owns it
+  is the one outcome worse than holding on to it.
+
+A read now reports **three** outcomes rather than two, and the third is the point:
+"nothing arrived, ask again" and "this endpoint is unusable" used to be the same
+`false`. `Read::kBroken` ends the exchange instead of asking again immediately.
+
+Three counters in `key` say what is happening: `reclaimed` is the ordinary cost of
+waiting on a key that is thinking and climbs by about one per timed-out exchange;
+`stuck` has never been anything but zero and would mean an endpoint is finished
+until the key is unplugged; `busy waits` belongs to the section below.
+
+**300 ms is still the read wait, and the reason has changed.** It was a
+correctness floor and is now only a cost one: every expiry buys a halt, a flush, a
+clear and a task handoff on a pipe that was working. Whatever needs sampling faster
+than this is still sampled somewhere else, which is why `buttons` has a poller of
+its own.
+
+### `CHANNEL_BUSY`, and waiting out a key that is holding a dead transaction
+
+A key holds **one** transaction at a time, across every channel. Reset the board
+while a request is waiting for a fingertip and the key goes on waiting for a
+channel that died with the previous boot — and there is nothing left to send
+`CTAPHID_CANCEL` to, because the channel identifier that owned the transaction went
+with it. Everything after that answers `CTAPHID_ERROR 0x06`.
+
+**It cannot be reset from firmware.** `usb_host.h` at this version has neither a
+port reset nor a device reset, and VBUS on this board's OTG socket is not
+switchable (§10.1), so there is no way to take the key's power away either.
+
+**And it does not need to be**, because the stale transaction is a user-presence
+wait and it expires: measured on the key on this desk at **about 34 seconds from
+when the stale request started** — busy at 8.4 s into a run, free at 42.9 s. So
+`Exchange` waits it out, asking again every 500 ms, **inside the budget the caller
+already gave it and never beyond it** — the caller's budget is a request's
+deadline, and §10.10 rule 1 says silence is the safe end of one. The wait stays
+cancellable throughout: the caller's keep-alive hook is offered at roughly the
+keepalive cadence, so a tap on BOOT or a request that ran out on the bus still
+stops it.
+
+`CTAPHID_INIT` is inside the loop rather than in front of it, because a busy key
+refuses that too.
+
+**This loop was written once before and reverted**: it recovered correctly and
+rebooted the board about one run in two, roughly 1.3 s after the first `0x06`. The
+suspect named at the time was the transfer lifecycle above — every attempt
+re-submitted an IN transfer the controller still owned — and that is what
+`Reclaim` was for. With it in place the same repro has been run five times with no
+reboot at all: 21 to 50 retry rounds per run, `0 stuck`, `0 transfer` errors, and
+the key freeing itself on schedule.
+
+Three endings, and the third is the one worth being careful about: a stale
+transaction that expires hands the request straight on to the key, which then waits
+for a fingertip like any other. So an exchange that recovered and *then* timed out
+on the finger is **not** a key that was still busy, and the log says which — saying
+otherwise would send somebody to unplug a key that had already fixed itself.
+
+### The wedge this device was inflicting on itself
+
+Found by the retry loop, on the run that proved it. **An exchange that ran out of
+its own deadline walked away without telling the key to forget the request** — so
+the abandoned request went on holding the key's one transaction slot for the rest
+of its user-presence window, and everything after it answered `0x06`. The same
+wedge as a reset, except self-inflicted, and unlike the reset case entirely
+avoidable: the channel is still ours, so there is somewhere to send the cancel.
+
+`Transact` now cancels and drains on its deadline, the way it already did when the
+keep-alive hook gave up. The cost is up to `kDrainMs` past a deadline that has
+already failed; the alternative was a key that answered nothing for half a minute.
+On the board: a `key test` nobody touches is now followed by a `key info` that
+works, where before it was followed by a `key info` that spent its whole budget
+retrying against a key this device had wedged.
+
 ### Waiting
 
 **A request arriving with nothing in the OTG port is the ordinary case**, not an

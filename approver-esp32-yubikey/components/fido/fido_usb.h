@@ -35,6 +35,10 @@
 // when it is unplugged** — a one-shot path at a device boundary, which is the
 // same allowance `config.cpp` takes for cJSON and states in the same words. It
 // is not a per-exchange allocation and it must never become one.
+//
+// The one exception is a transfer the host controller still owns when the key
+// goes: that one is **kept rather than freed**, and the next key re-uses it. The
+// count stays at two either way, and `fido_usb.cpp` has the reason.
 
 #include <cstddef>
 #include <cstdint>
@@ -130,6 +134,19 @@ struct Stats {
     uint32_t protocol_errors = 0;
     uint32_t key_errors = 0;
     uint32_t transfer_errors = 0;
+
+    // **The transfer lifecycle, in three numbers** (§10.18.4). A `reclaim` is a
+    // queued transfer taken back off an endpoint because its wait ran out — and it
+    // is **rarer than it sounds**, which is worth recording because the opposite was
+    // assumed: a key waiting for a fingertip sends `CTAPHID_KEEPALIVE` every ~100 ms,
+    // so a 300 ms read almost never expires and this climbs by about one per
+    // exchange that timed out rather than once per read. `reclaims_failed` has never
+    // been anything but zero and would mean an endpoint is finished until the key is
+    // unplugged. `busy_retries` counts how often a `CHANNEL_BUSY` key was asked
+    // again rather than reported as unreachable.
+    uint32_t reclaims = 0;
+    uint32_t reclaims_failed = 0;
+    uint32_t busy_retries = 0;
 };
 
 Stats GetStats();
