@@ -147,6 +147,36 @@ To reset the board first, toggle RTS before reading:
 s.setDTR(False); s.setRTS(True); time.sleep(0.1); s.setRTS(False); time.sleep(0.3)
 ```
 
+**And to attach to a running board *without* resetting it, which needs saying
+because the obvious code does the opposite.** `serial.Serial("COM6", ...)` asserts
+DTR and RTS as it opens, and on this board those are the CH343P's reset and boot
+straps — so opening the port reboots the device. That is fine when the next thing
+you do is read the boot log, and it silently ruins any attempt to read a counter
+that was accumulated before you attached. Set them false on an unopened handle:
+
+```python
+s = serial.Serial(); s.port = "COM6"; s.baudrate = 115200; s.timeout = 0.2
+s.dtr = False; s.rts = False
+s.open()
+```
+
+**A blocking command's silence is not an answer.** `key test`, `key enrol` and any
+approval hold the console for the whole exchange — up to 30 s — and while one is
+running the prompt reads nothing, so a poll gets back an empty string. Treating
+that as data is how three consecutive test runs "passed": a script polling `key` to
+see whether a security key had been pulled read the empty reply as *absent*,
+declared success two seconds in, and `cable 0 detached` said no unplug had ever
+happened. When an event has to be detected during a blocking command, **watch the
+log stream** — `ind:` transitions and the transport's own lines arrive unprompted —
+rather than asking the console anything.
+
+**And a window that depends on a human is a window that closes first.** A key
+abandons its user-presence wait after about 30 s and answers `CTAP 27`, so
+"run `key test`, then go and do something to the hardware" only works if the
+something happens inside that half-minute. Re-arm in a loop instead: issue the
+command again each time it ends, watch the stream, and stop on the event. That
+turns a 30-second window into a continuous one.
+
 **Never send `term` or `term smart` from a script.** In that mode linenoise blocks
 on a cursor-position query before each prompt, and a script that does not answer
 leaves the console silent until the board is reset. If it happens: send

@@ -405,6 +405,26 @@ A read now reports **three** outcomes rather than two, and the third is the poin
 "nothing arrived, ask again" and "this endpoint is unusable" used to be the same
 `false`. `Read::kBroken` ends the exchange instead of asking again immediately.
 
+**And nothing halts an endpoint on a device that has already gone**, which is a
+separate rule from the ones above and was learned by pulling the key. The library
+has cancelled a gone device's transfers itself by then, so `halt`/`flush`/`clear`
+achieve nothing there — except that `usb_host.c` logs each refusal at `ESP_LOGE`,
+unconditionally, so a routine unplug printed four red lines that meant nothing. So
+`CloseDevice` takes a `device_gone` flag and skips the endpoints on that path
+(keeping only the pump, which is what actually collects the cancellations), and
+`Reclaim` refuses the same work as soon as `want_close` is set — the earliest signal
+there is, written by the client event callback the moment `DEV_GONE` arrives, well
+before `CloseDevice` runs. Four lines, then one, then none.
+
+**What pulling the key actually proved**, since the fix's whole point was a
+contract rather than a symptom: the blocked exchange returned `the key was
+unplugged`, and `usb_host_interface_release` and `usb_host_device_close` both
+answered `ESP_OK`. That pair is the assertion — neither can succeed while a pipe
+still has URBs queued on it, so the old code, which ignored both return values, was
+failing both of them silently and then freeing the buffers anyway. Around it:
+re-enumeration and a working exchange four seconds later, `0 transfer` errors, and
+36 bytes of heap movement across a full cycle with the low-water mark unmoved.
+
 Three counters in `key` say what is happening: `reclaimed` is the ordinary cost of
 waiting on a key that is thinking and climbs by about one per timed-out exchange;
 `stuck` has never been anything but zero and would mean an endpoint is finished

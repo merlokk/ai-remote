@@ -281,10 +281,20 @@ bool Reclaim(uint8_t endpoint, SemaphoreHandle_t done, volatile bool *in_flight)
     if (!*in_flight) {
         return true;
     }
-    if (runtime.device == nullptr) {
-        // Nothing to halt and nobody left to answer. The library cancels a gone
-        // device's transfers itself; what cannot be done from here is *prove* it,
-        // so the transfer stays marked and is never touched again.
+    // **Three ways the device can already be leaving, and none of them wants an
+    // endpoint command.** A gone handle is the obvious one; the other two are the
+    // race this printed on the board — the key goes while an exchange is inside its
+    // 300 ms read, so the read expires and comes here with `runtime.device` not yet
+    // cleared, halts an endpoint that no longer exists, and earns one
+    // `EP command error: ESP_ERR_INVALID_STATE` from inside `usb_host.c`.
+    //
+    // `want_close` is the earliest signal there is: the client event callback sets
+    // it the moment `USB_HOST_CLIENT_EVENT_DEV_GONE` arrives, well before
+    // `CloseDevice` runs. Either flag means the library is cancelling this transfer
+    // itself and `CloseDevice`'s pump will collect it, so the honest answer here is
+    // "not reclaimed" — the caller reports `kBroken`, the exchange ends as
+    // `kUnplugged`, and nothing touches the transfer again.
+    if (runtime.device == nullptr || !runtime.info.present || runtime.want_close) {
         return false;
     }
 
@@ -314,9 +324,20 @@ bool Reclaim(uint8_t endpoint, SemaphoreHandle_t done, volatile bool *in_flight)
 // callbacks**, so it cannot block on a semaphore waiting for one: that would be
 // waiting for itself. It pumps its own event queue instead, which is the same wait
 // spelled the only way it can be spelled from here.
-void CloseDevice() {
-    ResetEndpoint(runtime.ep_in.address);
-    ResetEndpoint(runtime.ep_out.address);
+//
+// `device_gone` is the difference between the two ways this is reached, and it
+// decides whether the endpoints are touched at all. **On a device that has already
+// gone, the library has cancelled its transfers itself** — the pump below is what
+// collects them — and halting an endpoint on it achieves nothing except three
+// `EP command error: ESP_ERR_INVALID_STATE` lines from inside `usb_host.c`, which
+// logs them at `ESP_LOGE` unconditionally and cannot be talked out of it. Measured
+// on the board: pulling the key mid-read printed four red lines that meant nothing,
+// in the component whose whole job is to make pulling the key routine.
+void CloseDevice(bool device_gone) {
+    if (!device_gone) {
+        ResetEndpoint(runtime.ep_in.address);
+        ResetEndpoint(runtime.ep_out.address);
+    }
     for (int round = 0;
          round < kCloseDrainRounds && (runtime.in_flight_in || runtime.in_flight_out); round++) {
         usb_host_client_handle_events(runtime.client, pdMS_TO_TICKS(10));
@@ -412,7 +433,9 @@ void OpenDevice(uint8_t address) {
         (runtime.transfer_out == nullptr &&
          usb_host_transfer_alloc(ctaphid::kPacketSize, 0, &runtime.transfer_out) != ESP_OK)) {
         ESP_LOGE(TAG, "no memory for the two 64-byte transfers");
-        CloseDevice();
+        // Not a device that went away: it is on the port and claimed, so the
+        // endpoints are real and worth resetting.
+        CloseDevice(false);
         return;
     }
 
@@ -487,7 +510,7 @@ void ClientTask(void *) {
         usb_host_client_handle_events(runtime.client, pdMS_TO_TICKS(100));
         if (runtime.want_close) {
             runtime.want_close = false;
-            CloseDevice();
+            CloseDevice(true);
         }
         if (runtime.want_open) {
             runtime.want_open = false;
@@ -563,6 +586,11 @@ Read ReadPacket(uint8_t *packet, uint32_t wait_ms) {
 
     xSemaphoreTake(runtime.in_done, 0);
     runtime.in_flight_in = true;
+    // **A submit that loses a race with an unplug logs `Enqueue URB error` from
+    // inside the library**, at `ESP_LOGE`, and that line is not a fault here: the
+    // key can go in the window between `info.present` still reading true and
+    // `CloseDevice` clearing it, and the answer is exactly what happens next.
+    // One red line per unplug is the library's, not ours.
     if (usb_host_transfer_submit(runtime.transfer_in) != ESP_OK) {
         runtime.in_flight_in = false;
         runtime.stats.transfer_errors++;
